@@ -1,4 +1,4 @@
-package me.go_gradually.omypic.domain.util;
+package me.go_gradually.omypic.domain.shared.util;
 
 import java.util.ArrayList;
 import java.util.List;
