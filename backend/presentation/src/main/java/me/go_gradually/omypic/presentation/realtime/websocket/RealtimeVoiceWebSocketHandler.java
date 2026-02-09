@@ -88,11 +88,15 @@ public class RealtimeVoiceWebSocketHandler extends TextWebSocketHandler {
         RealtimeStartCommand command = new RealtimeStartCommand();
         command.setSessionId(sessionId);
         command.setApiKey(apiKey);
+        command.setConversationModel(readQuery(session.getUri(), "conversationModel"));
+        command.setSttModel(readQuery(session.getUri(), "sttModel"));
         return command;
     }
 
     private RealtimeSessionUpdateCommand toUpdateCommand(JsonNode data) {
         RealtimeSessionUpdateCommand command = new RealtimeSessionUpdateCommand();
+        command.setConversationModel(readString(data, "conversationModel"));
+        command.setSttModel(readString(data, "sttModel"));
         command.setFeedbackProvider(readString(data, "feedbackProvider"));
         command.setFeedbackModel(readString(data, "feedbackModel"));
         command.setFeedbackApiKey(readString(data, "feedbackApiKey"));
