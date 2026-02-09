@@ -1,0 +1,36 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=Sora:wght@600;700&display=swap');
+
+:root {
+    --bg: #edf1f7;
+    --bg-accent: #e2e9f5;
+    --surface: #ffffff;
+    --surface-soft: #f6f9ff;
+    --text: #13233a;
+    --muted: #5f6f89;
+    --line: #d4deec;
+    --accent: #0f78e0;
+    --accent-strong: #005fbb;
+    --accent-soft: #e7f2ff;
+    --ok: #0f9d7a;
+    --danger: #d94848;
+    --shadow: 0 18px 42px rgba(16, 30, 55, 0.08);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    color: var(--text);
+    font-family: 'IBM Plex Sans KR', sans-serif;
+    background: radial-gradient(60vw 45vw at 18% -8%, #f9fcff 0%, rgba(249, 252, 255, 0) 100%),
+    radial-gradient(45vw 42vw at 110% 18%, #dde7f6 0%, rgba(221, 231, 246, 0) 100%),
+    linear-gradient(165deg, var(--bg) 0%, var(--bg-accent) 100%);
+}
+
+#root {
+    min-height: 100vh;
+}
+

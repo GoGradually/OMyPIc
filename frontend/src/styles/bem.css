@@ -1,0 +1,95 @@
+.app {
+    width: min(1240px, 100% - 36px);
+    margin: 18px auto 24px;
+    display: grid;
+    gap: 16px;
+}
+
+.app__header {
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    background: color-mix(in srgb, var(--surface) 87%, transparent);
+    box-shadow: var(--shadow);
+    padding: 18px;
+    display: flex;
+    justify-content: space-between;
+    gap: 18px;
+    align-items: flex-start;
+}
+
+.app__workspace {
+    display: grid;
+    grid-template-columns: minmax(0, 1.6fr) minmax(310px, 0.9fr);
+    gap: 16px;
+    align-items: start;
+}
+
+.app__practice-column,
+.app__info-column {
+    display: grid;
+    gap: 14px;
+}
+
+.app__status-bar {
+    border: 1px solid var(--line);
+    border-radius: 13px;
+    background: color-mix(in srgb, var(--surface) 92%, transparent);
+    box-shadow: var(--shadow);
+    padding: 10px 12px;
+}
+
+.app__status-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 13px;
+    color: var(--muted);
+}
+
+.app__status-details {
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: color-mix(in srgb, var(--surface) 92%, transparent);
+    box-shadow: var(--shadow);
+    padding: 9px 12px;
+}
+
+.app-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+}
+
+.realtime-panel__stage {
+    position: relative;
+}
+
+@media (max-width: 1120px) {
+    .app__workspace {
+        grid-template-columns: 1fr;
+    }
+
+    .app__header {
+        flex-direction: column;
+    }
+
+    .app__quick-actions {
+        justify-content: flex-start;
+    }
+}
+
+@media (max-width: 760px) {
+    .app {
+        width: calc(100% - 20px);
+        margin: 10px auto 16px;
+        gap: 12px;
+    }
+
+    .app__header,
+    .app__status-bar,
+    .app__status-details {
+        padding: 12px;
+        border-radius: 14px;
+    }
+}
