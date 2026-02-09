@@ -43,37 +43,6 @@
 
     - AC-02: 피드백 항목 누락률 0%(필수 4종 구성)
 
-### STT→LLM→TTS 체인으로 구현 (제어/디버깅/로그에 유리)
-
-OpenAI의 voice agents 가이드는 체인 아키텍처로 예시 모델 조합을 제시합니다:  
-**`gpt-4o-transcribe` → `gpt-4.1` → `gpt-4o-mini-tts`** ([OpenAI Platform](https://platform.openai.com/docs/guides/voice-agents "Voice agents | OpenAI API"))
-
-#### 1) STT (Speech-to-Text)
-- 엔드포인트: `audio/transcriptions`, `audio/translations` ([OpenAI Platform](https://platform.openai.com/docs/guides/speech-to-text "Speech to text | OpenAI API"))
-- 지원 모델: `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`, `gpt-4o-transcribe-diarize`, `whisper-1` 등 ([OpenAI Platform](https://platform.openai.com/docs/guides/speech-to-text "Speech to text | OpenAI API"))
-- 업로드 파일 제한: **25MB** ([OpenAI Platform](https://platform.openai.com/docs/guides/speech-to-text "Speech to text | OpenAI API"))
-- **스트리밍(SSE)** 지원(단, `whisper-1`은 스트리밍 미지원) ([OpenAI Platform](https://platform.openai.com/docs/api-reference/audio "Audio | OpenAI API Reference"))
-- 서버 VAD 파라미터(기본값): `prefix_padding_ms=300`, `silence_duration_ms=200`, `threshold=0.5` ([OpenAI Platform](https://platform.openai.com/docs/api-reference/audio "Audio | OpenAI API Reference"))
-
-#### 2) LLM (텍스트 응답 생성)
-- STT 결과(부분/완료 세그먼트)를 받아 **대화 상태**에 누적 후, LLM에 전달
-- 함수 호출(tool calling) / 시스템 프롬프트 / 정책 필터링을 이 구간에서 적용
-
-#### 3) TTS (Text-to-Speech)
-- 엔드포인트: `audio/speech`
-- 모델: `gpt-4o-mini-tts` ([OpenAI Platform](https://platform.openai.com/docs/guides/text-to-speech "Text to speech | OpenAI API"))
-- 스트리밍 출력 지원(생성 완료 전 재생 가능) ([OpenAI Platform](https://platform.openai.com/docs/guides/text-to-speech "Text to speech | OpenAI API"))
-- 내장 보이스 목록(예: `marin`, `cedar` 포함) ([OpenAI Platform](https://platform.openai.com/docs/guides/text-to-speech "Text to speech | OpenAI API"))
-
-- 세부 기능
-    - 녹음 시작/정지
-    - 녹음 최대 180초(질문 1개 기준)
-    - STT 실패 시 재시도(최대 2회)
-- AC
-    - STT 결과 반환 p95 ≤ 6초(오디오 업로드 완료 시점 기준)
-    - STT 실패율 ≤ 2%(일 기준, 전체 요청 대비)
-
-
     
 
 
@@ -153,17 +122,6 @@ OpenAI의 voice agents 가이드는 체인 아키텍처로 예시 모델 조합�
 
 ![img_7.png](img_7.png)
 
-
-## 한국어 피드백 or 영어 피드백
-![img_8.png](img_8.png)
-- 설명: 피드백을 한국어 또는 영어로 받는다.
-- 규칙
-    - 출력 언어만 변경(사용자 음성 입력 언어와 독립)
-    - 한국어 피드백: 설명/근거/교정 포인트 한국어
-    - 영어 피드백: 설명/근거/교정 포인트 영어
-- AC
-    - 언어 토글 후 다음 피드백부터 100% 적용
-    - 토글 동작 UI 반영 ≤ 200ms
 ## 모델 셀렉터 & API Key
 
 
