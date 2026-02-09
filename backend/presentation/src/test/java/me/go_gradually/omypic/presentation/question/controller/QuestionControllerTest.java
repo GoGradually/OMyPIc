@@ -108,6 +108,8 @@ class QuestionControllerTest {
         next.setText("What?");
         next.setGroup("B");
         next.setSkipped(false);
+        next.setMockExamCompleted(true);
+        next.setMockExamCompletionReason("QUESTION_EXHAUSTED");
         when(questionUseCase.nextQuestion("list-1", "s1")).thenReturn(next);
 
         mockMvc.perform(get("/api/questions/list-1/next").param("sessionId", "s1"))
@@ -115,7 +117,9 @@ class QuestionControllerTest {
                 .andExpect(jsonPath("$.questionId").value("q9"))
                 .andExpect(jsonPath("$.text").value("What?"))
                 .andExpect(jsonPath("$.group").value("B"))
-                .andExpect(jsonPath("$.skipped").value(false));
+                .andExpect(jsonPath("$.skipped").value(false))
+                .andExpect(jsonPath("$.mockExamCompleted").value(true))
+                .andExpect(jsonPath("$.mockExamCompletionReason").value("QUESTION_EXHAUSTED"));
     }
 
     @Test
