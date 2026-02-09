@@ -2,6 +2,7 @@ package me.go_gradually.omypic.application.wrongnote.usecase;
 
 import me.go_gradually.omypic.application.feedback.policy.FeedbackPolicy;
 import me.go_gradually.omypic.application.wrongnote.port.WrongNotePort;
+import me.go_gradually.omypic.application.wrongnote.port.WrongNoteRecentQueuePort;
 import me.go_gradually.omypic.domain.feedback.Feedback;
 import me.go_gradually.omypic.domain.wrongnote.WrongNote;
 import org.junit.jupiter.api.BeforeEach;
@@ -12,17 +13,22 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.*;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verify;
 
 @ExtendWith(MockitoExtension.class)
 class WrongNoteUseCaseTest {
 
     private final Map<String, WrongNote> storage = new LinkedHashMap<>();
+    private final List<String> queueStorage = new ArrayList<>();
     @Mock
     private WrongNotePort repository;
+    @Mock
+    private WrongNoteRecentQueuePort recentQueueStore;
     @Mock
     private FeedbackPolicy feedbackPolicy;
     private WrongNoteUseCase useCase;
@@ -41,8 +47,15 @@ class WrongNoteUseCaseTest {
             storage.entrySet().removeIf(entry -> entry.getValue().getId().equals(invocation.getArgument(0)));
             return null;
         }).when(repository).deleteById(any());
+        lenient().when(recentQueueStore.loadGlobalQueue()).thenAnswer(invocation -> List.copyOf(queueStorage));
+        lenient().doAnswer(invocation -> {
+            List<String> saved = invocation.getArgument(0);
+            queueStorage.clear();
+            queueStorage.addAll(saved);
+            return null;
+        }).when(recentQueueStore).saveGlobalQueue(any());
 
-        useCase = new WrongNoteUseCase(repository, feedbackPolicy);
+        useCase = new WrongNoteUseCase(repository, recentQueueStore, feedbackPolicy);
     }
 
     @Test
@@ -97,5 +110,12 @@ class WrongNoteUseCaseTest {
         assertEquals("A", notes.get(0).getPattern());
         assertEquals(3, notes.get(0).getCount());
         assertEquals(1, notes.get(1).getCount());
+    }
+
+    @Test
+    void addFeedback_savesQueueState() {
+        useCase.addFeedback(Feedback.of("summary", List.of("A"), "", List.of()));
+
+        verify(recentQueueStore).saveGlobalQueue(any());
     }
 }
