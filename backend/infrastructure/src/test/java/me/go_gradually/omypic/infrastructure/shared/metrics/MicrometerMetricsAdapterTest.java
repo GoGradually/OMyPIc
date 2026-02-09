@@ -22,6 +22,7 @@ class MicrometerMetricsAdapterTest {
         adapter.recordRealtimeTurnLatency(Duration.ofMillis(50));
         adapter.recordRulebookUploadLatency(Duration.ofMillis(60));
 
+        adapter.incrementSttRequest();
         adapter.incrementSttError();
         adapter.incrementFeedbackError();
         adapter.incrementTtsError();
@@ -34,6 +35,7 @@ class MicrometerMetricsAdapterTest {
         assertEquals(1, registry.find("realtime.turn.latency").timer().count());
         assertEquals(1, registry.find("rulebook.upload.latency").timer().count());
 
+        assertEquals(1.0, registry.find("stt.requests").counter().count());
         assertEquals(1.0, registry.find("stt.errors").counter().count());
         assertEquals(1.0, registry.find("feedback.errors").counter().count());
         assertEquals(1.0, registry.find("tts.errors").counter().count());

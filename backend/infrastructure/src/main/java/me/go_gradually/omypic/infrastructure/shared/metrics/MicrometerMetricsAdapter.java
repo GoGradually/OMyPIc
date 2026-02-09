@@ -46,6 +46,11 @@ public class MicrometerMetricsAdapter implements MetricsPort {
     }
 
     @Override
+    public void incrementSttRequest() {
+        meterRegistry.counter("stt.requests").increment();
+    }
+
+    @Override
     public void incrementSttError() {
         meterRegistry.counter("stt.errors").increment();
     }
