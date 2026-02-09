@@ -36,6 +36,16 @@ public class MicrometerMetricsAdapter implements MetricsPort {
     }
 
     @Override
+    public void recordRealtimeTurnLatency(Duration duration) {
+        record("realtime.turn.latency", duration);
+    }
+
+    @Override
+    public void recordRulebookUploadLatency(Duration duration) {
+        record("rulebook.upload.latency", duration);
+    }
+
+    @Override
     public void incrementSttError() {
         meterRegistry.counter("stt.errors").increment();
     }

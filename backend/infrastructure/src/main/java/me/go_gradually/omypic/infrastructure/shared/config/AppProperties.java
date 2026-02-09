@@ -1,6 +1,7 @@
 package me.go_gradually.omypic.infrastructure.shared.config;
 
 import me.go_gradually.omypic.application.feedback.policy.FeedbackPolicy;
+import me.go_gradually.omypic.application.realtime.policy.RealtimePolicy;
 import me.go_gradually.omypic.application.rulebook.policy.RagPolicy;
 import me.go_gradually.omypic.application.shared.policy.DataDirProvider;
 import me.go_gradually.omypic.application.stt.model.VadSettings;
@@ -8,11 +9,12 @@ import me.go_gradually.omypic.application.stt.policy.SttPolicy;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "omypic")
-public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, FeedbackPolicy {
+public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, FeedbackPolicy, RealtimePolicy {
     private String dataDir;
     private Stt stt = new Stt();
     private Rag rag = new Rag();
     private Feedback feedback = new Feedback();
+    private Realtime realtime = new Realtime();
     private Integrations integrations = new Integrations();
 
     public String getDataDir() {
@@ -45,6 +47,14 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
 
     public void setFeedback(Feedback feedback) {
         this.feedback = feedback;
+    }
+
+    public Realtime getRealtime() {
+        return realtime;
+    }
+
+    public void setRealtime(Realtime realtime) {
+        this.realtime = realtime;
     }
 
     public Integrations getIntegrations() {
@@ -95,6 +105,31 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
     @Override
     public int getWrongnoteSummaryMaxChars() {
         return feedback.getWrongnoteSummaryMaxChars();
+    }
+
+    @Override
+    public String realtimeSttModel() {
+        return realtime.getSttModel();
+    }
+
+    @Override
+    public String realtimeFeedbackProvider() {
+        return realtime.getFeedbackProvider();
+    }
+
+    @Override
+    public String realtimeFeedbackModel() {
+        return realtime.getFeedbackModel();
+    }
+
+    @Override
+    public String realtimeFeedbackLanguage() {
+        return realtime.getFeedbackLanguage();
+    }
+
+    @Override
+    public String realtimeTtsVoice() {
+        return realtime.getTtsVoice();
     }
 
     public static class Stt {
@@ -223,6 +258,63 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
 
         public void setWrongnoteSummaryMaxChars(int wrongnoteSummaryMaxChars) {
             this.wrongnoteSummaryMaxChars = wrongnoteSummaryMaxChars;
+        }
+    }
+
+    public static class Realtime {
+        private String sttModel = "gpt-4o-mini-transcribe";
+        private String feedbackProvider = "openai";
+        private String feedbackModel = "gpt-4o-mini";
+        private String feedbackLanguage = "ko";
+        private String ttsVoice = "alloy";
+        private boolean restDisabled = true;
+
+        public String getSttModel() {
+            return sttModel;
+        }
+
+        public void setSttModel(String sttModel) {
+            this.sttModel = sttModel;
+        }
+
+        public String getFeedbackProvider() {
+            return feedbackProvider;
+        }
+
+        public void setFeedbackProvider(String feedbackProvider) {
+            this.feedbackProvider = feedbackProvider;
+        }
+
+        public String getFeedbackModel() {
+            return feedbackModel;
+        }
+
+        public void setFeedbackModel(String feedbackModel) {
+            this.feedbackModel = feedbackModel;
+        }
+
+        public String getFeedbackLanguage() {
+            return feedbackLanguage;
+        }
+
+        public void setFeedbackLanguage(String feedbackLanguage) {
+            this.feedbackLanguage = feedbackLanguage;
+        }
+
+        public String getTtsVoice() {
+            return ttsVoice;
+        }
+
+        public void setTtsVoice(String ttsVoice) {
+            this.ttsVoice = ttsVoice;
+        }
+
+        public boolean isRestDisabled() {
+            return restDisabled;
+        }
+
+        public void setRestDisabled(boolean restDisabled) {
+            this.restDisabled = restDisabled;
         }
     }
 
