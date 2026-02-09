@@ -138,7 +138,7 @@ class QuestionUseCaseTest {
     }
 
     @Test
-    void nextQuestion_returnsSkipped_whenListIsEmpty() {
+    void nextQuestion_throwsWhenListIsEmpty() {
         QuestionListId listId = QuestionListId.of("empty");
         QuestionList list = QuestionList.rehydrate(
                 listId,
@@ -148,11 +148,8 @@ class QuestionUseCaseTest {
                 Instant.parse("2026-01-01T00:00:00Z")
         );
         when(repository.findById(listId)).thenReturn(Optional.of(list));
-        when(sessionStore.getOrCreate(SessionId.of("s1"))).thenReturn(new SessionState(SessionId.of("s1")));
 
-        NextQuestion next = useCase.nextQuestion("empty", "s1");
-
-        assertTrue(next.isSkipped());
+        assertThrows(IllegalStateException.class, () -> useCase.nextQuestion("empty", "s1"));
     }
 
     @Test

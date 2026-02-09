@@ -67,6 +67,9 @@ public class QuestionUseCase {
     public NextQuestion nextQuestion(String listId, String sessionId) {
         Instant start = Instant.now();
         QuestionList doc = repository.findById(QuestionListId.of(listId)).orElseThrow();
+        if (doc.getQuestions().isEmpty()) {
+            throw new IllegalStateException("Question list must contain at least 1 question");
+        }
         SessionState session = sessionStore.getOrCreate(SessionId.of(sessionId));
         Optional<QuestionItem> selected = session.nextQuestion(doc);
         NextQuestion response = selected.map(item -> {
