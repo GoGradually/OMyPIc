@@ -1,0 +1,41 @@
+import React from 'react'
+
+export function StatusBar({
+                              realtimeConnected,
+                              audioConnectionLabel,
+                              statusMessage,
+                              showStatusDetails,
+                              onToggleStatusDetails,
+                              statusDetails
+                          }) {
+    return (
+        <>
+            <div className="status-bar app__status-bar">
+                <div className="status-main app__status-main">
+                    <span className={`status-dot ${realtimeConnected ? 'is-on' : ''}`}/>
+                    <span>{realtimeConnected ? '실시간 연결됨' : '실시간 미연결'}</span>
+                    <span className="status-divider">·</span>
+                    <span>{audioConnectionLabel}</span>
+                    <span className="status-divider">·</span>
+                    <span>{statusMessage || '준비 완료'}</span>
+                </div>
+                <button className="status-toggle" onClick={onToggleStatusDetails}>
+                    {showStatusDetails ? '상세 숨기기' : '상세 보기'}
+                </button>
+            </div>
+
+            {showStatusDetails && (
+                <div className="status-details app__status-details">
+                    <span>세션 {statusDetails.sessionIdPrefix}</span>
+                    <span>공급자 {statusDetails.provider}</span>
+                    <span>마이크 권한 {statusDetails.audioPermissionLabel}</span>
+                    <span>입력 장치 {statusDetails.audioInputCount}개</span>
+                    <span>실시간 대화 모델 {statusDetails.realtimeConversationModel}</span>
+                    <span>실시간 STT 모델 {statusDetails.realtimeSttModel}</span>
+                    <span>실시간 피드백 모델 {statusDetails.feedbackModel}</span>
+                    <span>모의고사 모델 {statusDetails.mockFinalModel}</span>
+                </div>
+            )}
+        </>
+    )
+}
