@@ -34,32 +34,34 @@ public class QuestionController {
     }
 
     @PutMapping("/{id}")
-    public QuestionListResponse rename(@PathVariable String id, @RequestBody Map<String, String> body) {
+    public QuestionListResponse rename(@PathVariable("id") String id, @RequestBody Map<String, String> body) {
         return toResponse(service.updateName(id, body.getOrDefault("name", "Untitled")));
     }
 
     @DeleteMapping("/{id}")
-    public void delete(@PathVariable String id) {
+    public void delete(@PathVariable("id") String id) {
         service.delete(id);
     }
 
     @PostMapping("/{id}/items")
-    public QuestionListResponse addQuestion(@PathVariable String id, @RequestBody QuestionItemRequest item) {
+    public QuestionListResponse addQuestion(@PathVariable("id") String id, @RequestBody QuestionItemRequest item) {
         return toResponse(service.addQuestion(id, item.getText(), item.getGroup()));
     }
 
     @PutMapping("/{id}/items/{itemId}")
-    public QuestionListResponse updateQuestion(@PathVariable String id, @PathVariable String itemId, @RequestBody QuestionItemRequest item) {
+    public QuestionListResponse updateQuestion(@PathVariable("id") String id,
+                                               @PathVariable("itemId") String itemId,
+                                               @RequestBody QuestionItemRequest item) {
         return toResponse(service.updateQuestion(id, itemId, item.getText(), item.getGroup()));
     }
 
     @DeleteMapping("/{id}/items/{itemId}")
-    public QuestionListResponse deleteQuestion(@PathVariable String id, @PathVariable String itemId) {
+    public QuestionListResponse deleteQuestion(@PathVariable("id") String id, @PathVariable("itemId") String itemId) {
         return toResponse(service.deleteQuestion(id, itemId));
     }
 
     @GetMapping("/{id}/next")
-    public NextQuestionResponse nextQuestion(@PathVariable String id, @RequestParam("sessionId") String sessionId) {
+    public NextQuestionResponse nextQuestion(@PathVariable("id") String id, @RequestParam("sessionId") String sessionId) {
         return toResponse(service.nextQuestion(id, sessionId));
     }
 

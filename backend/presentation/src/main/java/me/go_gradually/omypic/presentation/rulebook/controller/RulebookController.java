@@ -32,12 +32,12 @@ public class RulebookController {
     }
 
     @PutMapping("/{id}/toggle")
-    public RulebookResponse toggle(@PathVariable String id, @RequestParam("enabled") boolean enabled) {
+    public RulebookResponse toggle(@PathVariable("id") String id, @RequestParam("enabled") boolean enabled) {
         return toResponse(service.toggle(id, enabled));
     }
 
     @DeleteMapping("/{id}")
-    public void delete(@PathVariable String id) {
+    public void delete(@PathVariable("id") String id) {
         service.delete(id);
     }
 
