@@ -38,7 +38,7 @@ public class RulebookUseCase {
         }
         StoredRulebookFile stored = fileStore.store(filename, bytes);
 
-        Rulebook doc = Rulebook.create(filename, stored.getPath(), Instant.now());
+        Rulebook doc = Rulebook.create(filename, stored.path(), Instant.now());
         Rulebook saved = repository.save(doc);
 
         String text = fileStore.readText(saved.getPath());
