@@ -36,7 +36,7 @@ public class OpenAiRealtimeGateway implements RealtimeAudioGateway {
 
     @Override
     public RealtimeAudioSession open(RealtimeAudioOpenCommand command, RealtimeAudioEventListener listener) {
-        URI realtimeUri = toRealtimeUri(properties.getIntegrations().getOpenai().getBaseUrl(), command.model());
+        URI realtimeUri = toRealtimeUri(properties.getIntegrations().getOpenai().getBaseUrl(), command.conversationModel());
         OpenAiWebSocketListener webSocketListener = new OpenAiWebSocketListener(listener, objectMapper);
         WebSocket webSocket;
         try {
@@ -45,7 +45,7 @@ public class OpenAiRealtimeGateway implements RealtimeAudioGateway {
                     .header("OpenAI-Beta", "realtime=v1")
                     .buildAsync(realtimeUri, webSocketListener)
                     .join();
-            sendSessionUpdate(webSocket, command.model());
+            sendSessionUpdate(webSocket, command.sttModel());
         } catch (Exception e) {
             throw new IllegalStateException("Failed to connect OpenAI realtime", e);
         }
