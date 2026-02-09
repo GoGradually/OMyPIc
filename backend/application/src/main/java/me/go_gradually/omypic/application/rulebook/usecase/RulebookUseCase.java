@@ -5,12 +5,14 @@ import me.go_gradually.omypic.application.rulebook.policy.RagPolicy;
 import me.go_gradually.omypic.application.rulebook.port.RulebookFileStore;
 import me.go_gradually.omypic.application.rulebook.port.RulebookIndexPort;
 import me.go_gradually.omypic.application.rulebook.port.RulebookPort;
+import me.go_gradually.omypic.application.shared.port.MetricsPort;
 import me.go_gradually.omypic.domain.rulebook.Rulebook;
 import me.go_gradually.omypic.domain.rulebook.RulebookContext;
 import me.go_gradually.omypic.domain.rulebook.RulebookId;
 import me.go_gradually.omypic.domain.shared.util.TextUtils;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
@@ -21,18 +23,22 @@ public class RulebookUseCase {
     private final RulebookIndexPort indexPort;
     private final RulebookFileStore fileStore;
     private final RagPolicy ragPolicy;
+    private final MetricsPort metrics;
 
     public RulebookUseCase(RulebookPort repository,
                            RulebookIndexPort indexPort,
                            RulebookFileStore fileStore,
-                           RagPolicy ragPolicy) {
+                           RagPolicy ragPolicy,
+                           MetricsPort metrics) {
         this.repository = repository;
         this.indexPort = indexPort;
         this.fileStore = fileStore;
         this.ragPolicy = ragPolicy;
+        this.metrics = metrics;
     }
 
     public Rulebook upload(String filename, byte[] bytes) throws IOException {
+        Instant start = Instant.now();
         if (filename == null || !filename.endsWith(".md")) {
             throw new IllegalArgumentException("Only .md files are supported");
         }
@@ -44,6 +50,7 @@ public class RulebookUseCase {
         String text = fileStore.readText(saved.getPath());
         List<String> chunks = TextUtils.splitChunks(text, 800);
         indexPort.indexRulebookChunks(saved.getId(), filename, chunks);
+        metrics.recordRulebookUploadLatency(Duration.between(start, Instant.now()));
         return saved;
     }
 

@@ -5,6 +5,7 @@ import me.go_gradually.omypic.application.rulebook.policy.RagPolicy;
 import me.go_gradually.omypic.application.rulebook.port.RulebookFileStore;
 import me.go_gradually.omypic.application.rulebook.port.RulebookIndexPort;
 import me.go_gradually.omypic.application.rulebook.port.RulebookPort;
+import me.go_gradually.omypic.application.shared.port.MetricsPort;
 import me.go_gradually.omypic.domain.rulebook.Rulebook;
 import me.go_gradually.omypic.domain.rulebook.RulebookContext;
 import me.go_gradually.omypic.domain.rulebook.RulebookId;
@@ -35,12 +36,14 @@ class RulebookUseCaseTest {
     private RulebookFileStore fileStore;
     @Mock
     private RagPolicy ragPolicy;
+    @Mock
+    private MetricsPort metrics;
 
     private RulebookUseCase useCase;
 
     @BeforeEach
     void setUp() {
-        useCase = new RulebookUseCase(repository, indexPort, fileStore, ragPolicy);
+        useCase = new RulebookUseCase(repository, indexPort, fileStore, ragPolicy, metrics);
     }
 
     @Test
@@ -68,6 +71,7 @@ class RulebookUseCaseTest {
         ArgumentCaptor<List<String>> chunksCaptor = ArgumentCaptor.forClass(List.class);
         verify(indexPort).indexRulebookChunks(eq(saved.getId()), eq("rulebook.md"), chunksCaptor.capture());
         assertTrue(chunksCaptor.getValue().size() >= 1);
+        verify(metrics).recordRulebookUploadLatency(any());
     }
 
     @Test
