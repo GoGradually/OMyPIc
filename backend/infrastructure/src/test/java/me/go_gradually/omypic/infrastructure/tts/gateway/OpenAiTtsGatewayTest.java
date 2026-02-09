@@ -41,7 +41,9 @@ class OpenAiTtsGatewayTest {
                 .setHeader("Content-Type", "application/octet-stream")
                 .setBody(new Buffer().write(responseBytes)));
 
-        OpenAiTtsGateway gateway = new OpenAiTtsGateway(WebClient.builder().build(), server.url("/v1/audio/speech").toString());
+        OpenAiTtsGateway gateway = new OpenAiTtsGateway(WebClient.builder()
+                .baseUrl(server.url("/").toString())
+                .build());
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         for (byte[] chunk : gateway.stream("api-key", new TtsCommand("hello", "alloy"))) {

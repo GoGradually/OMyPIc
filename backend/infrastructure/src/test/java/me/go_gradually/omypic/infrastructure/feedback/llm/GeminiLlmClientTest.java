@@ -32,7 +32,9 @@ class GeminiLlmClientTest {
 
     @Test
     void provider_returnsGemini() {
-        GeminiLlmClient client = new GeminiLlmClient(WebClient.builder().build(), template());
+        GeminiLlmClient client = new GeminiLlmClient(WebClient.builder()
+                .baseUrl(server.url("/").toString())
+                .build());
 
         assertEquals("gemini", client.provider());
     }
@@ -43,7 +45,9 @@ class GeminiLlmClientTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"result\"}]}}]}"));
 
-        GeminiLlmClient client = new GeminiLlmClient(WebClient.builder().build(), template());
+        GeminiLlmClient client = new GeminiLlmClient(WebClient.builder()
+                .baseUrl(server.url("/").toString())
+                .build());
         String result = client.generate("api-key", "gemini-1.5", "system prompt", "user prompt");
 
         assertEquals("result", result);
@@ -63,13 +67,11 @@ class GeminiLlmClientTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"candidates\":[]}"));
 
-        GeminiLlmClient client = new GeminiLlmClient(WebClient.builder().build(), template());
+        GeminiLlmClient client = new GeminiLlmClient(WebClient.builder()
+                .baseUrl(server.url("/").toString())
+                .build());
 
         assertThrows(IllegalStateException.class,
                 () -> client.generate("api-key", "gemini-1.5", "system", "user"));
-    }
-
-    private String template() {
-        return server.url("/v1beta/models/") + "%s:generateContent?key=%s";
     }
 }

@@ -32,7 +32,9 @@ class AnthropicLlmClientTest {
 
     @Test
     void provider_returnsAnthropic() {
-        AnthropicLlmClient client = new AnthropicLlmClient(WebClient.builder().build(), server.url("/v1/messages").toString());
+        AnthropicLlmClient client = new AnthropicLlmClient(WebClient.builder()
+                .baseUrl(server.url("/").toString())
+                .build());
 
         assertEquals("anthropic", client.provider());
     }
@@ -43,7 +45,9 @@ class AnthropicLlmClientTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"content\":[{\"text\":\"hello\"}]}"));
 
-        AnthropicLlmClient client = new AnthropicLlmClient(WebClient.builder().build(), server.url("/v1/messages").toString());
+        AnthropicLlmClient client = new AnthropicLlmClient(WebClient.builder()
+                .baseUrl(server.url("/").toString())
+                .build());
         String result = client.generate("api-key", "claude", "sys", "user");
 
         assertEquals("hello", result);
@@ -66,7 +70,9 @@ class AnthropicLlmClientTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"content\":[]}"));
 
-        AnthropicLlmClient client = new AnthropicLlmClient(WebClient.builder().build(), server.url("/v1/messages").toString());
+        AnthropicLlmClient client = new AnthropicLlmClient(WebClient.builder()
+                .baseUrl(server.url("/").toString())
+                .build());
 
         assertThrows(IllegalStateException.class,
                 () -> client.generate("api-key", "claude", "sys", "user"));

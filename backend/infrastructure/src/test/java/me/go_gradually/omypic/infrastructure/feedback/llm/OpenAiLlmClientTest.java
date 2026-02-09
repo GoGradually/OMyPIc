@@ -32,7 +32,9 @@ class OpenAiLlmClientTest {
 
     @Test
     void provider_returnsOpenAi() {
-        OpenAiLlmClient client = new OpenAiLlmClient(WebClient.builder().build(), server.url("/chat/completions").toString());
+        OpenAiLlmClient client = new OpenAiLlmClient(WebClient.builder()
+                .baseUrl(server.url("/").toString())
+                .build());
 
         assertEquals("openai", client.provider());
     }
@@ -43,14 +45,16 @@ class OpenAiLlmClientTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"choices\":[{\"message\":{\"content\":\"{\\\"summary\\\":\\\"ok\\\"}\"}}]}"));
 
-        OpenAiLlmClient client = new OpenAiLlmClient(WebClient.builder().build(), server.url("/chat/completions").toString());
+        OpenAiLlmClient client = new OpenAiLlmClient(WebClient.builder()
+                .baseUrl(server.url("/").toString())
+                .build());
         String result = client.generate("api-key", "gpt-4o-mini", "sys", "user");
 
         assertEquals("{\"summary\":\"ok\"}", result);
 
         RecordedRequest request = server.takeRequest();
         assertEquals("POST", request.getMethod());
-        assertEquals("/chat/completions", request.getPath());
+        assertEquals("/v1/chat/completions", request.getPath());
         assertEquals("Bearer api-key", request.getHeader("Authorization"));
 
         JsonNode payload = objectMapper.readTree(request.getBody().readUtf8());
@@ -65,7 +69,9 @@ class OpenAiLlmClientTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"choices\":[]}"));
 
-        OpenAiLlmClient client = new OpenAiLlmClient(WebClient.builder().build(), server.url("/chat/completions").toString());
+        OpenAiLlmClient client = new OpenAiLlmClient(WebClient.builder()
+                .baseUrl(server.url("/").toString())
+                .build());
 
         assertThrows(IllegalStateException.class,
                 () -> client.generate("api-key", "gpt-4o-mini", "sys", "user"));

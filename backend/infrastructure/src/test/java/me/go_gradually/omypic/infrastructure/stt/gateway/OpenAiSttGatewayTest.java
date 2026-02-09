@@ -33,11 +33,9 @@ class OpenAiSttGatewayTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"text\":\"hello\"}"));
 
-        OpenAiSttGateway gateway = new OpenAiSttGateway(
-                WebClient.builder().build(),
-                server.url("/v1/audio/translations").toString(),
-                server.url("/v1/audio/transcriptions").toString()
-        );
+        OpenAiSttGateway gateway = new OpenAiSttGateway(WebClient.builder()
+                .baseUrl(server.url("/").toString())
+                .build());
 
         String text = gateway.transcribe(new byte[]{1, 2, 3}, "whisper-1", "api-key", false, new VadSettings(111, 222, 0.7));
 
@@ -61,11 +59,9 @@ class OpenAiSttGatewayTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"text\":\"translated\"}"));
 
-        OpenAiSttGateway gateway = new OpenAiSttGateway(
-                WebClient.builder().build(),
-                server.url("/v1/audio/translations").toString(),
-                server.url("/v1/audio/transcriptions").toString()
-        );
+        OpenAiSttGateway gateway = new OpenAiSttGateway(WebClient.builder()
+                .baseUrl(server.url("/").toString())
+                .build());
 
         String text = gateway.transcribe(new byte[]{9}, "whisper-1", "api-key", true, new VadSettings(1, 2, 0.5));
 
@@ -79,11 +75,9 @@ class OpenAiSttGatewayTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody("{}"));
 
-        OpenAiSttGateway gateway = new OpenAiSttGateway(
-                WebClient.builder().build(),
-                server.url("/v1/audio/translations").toString(),
-                server.url("/v1/audio/transcriptions").toString()
-        );
+        OpenAiSttGateway gateway = new OpenAiSttGateway(WebClient.builder()
+                .baseUrl(server.url("/").toString())
+                .build());
 
         String text = gateway.transcribe(new byte[]{1}, "whisper-1", "api-key", false, new VadSettings(1, 2, 0.5));
 
