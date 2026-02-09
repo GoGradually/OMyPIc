@@ -4,8 +4,12 @@ import me.go_gradually.omypic.domain.rulebook.RulebookContext;
 import me.go_gradually.omypic.domain.shared.util.TextUtils;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 public final class Feedback {
@@ -35,41 +39,208 @@ public final class Feedback {
                                String userText,
                                FeedbackLanguage language,
                                List<RulebookContext> contexts) {
-        String normalizedSummary = TextUtils.trimToLength(summary, constraints.summaryMaxChars());
+        String normalizedSummary = normalizeSummary(language, constraints.summaryMaxChars());
+        List<String> points = normalizeCorrectionPoints(language);
+        String example = normalizeExampleAnswer(userText, language, constraints.exampleMinRatio(), constraints.exampleMaxRatio());
+        List<String> evidence = normalizeRulebookEvidence(contexts);
+        return Feedback.of(normalizedSummary, points, example, evidence);
+    }
 
-        List<String> points = new ArrayList<>(correctionPoints);
+    private String normalizeSummary(FeedbackLanguage language, int summaryMaxChars) {
+        String base = summary == null ? "" : summary.trim();
+        if (base.isEmpty()) {
+            base = defaultSummary(language);
+        }
+        List<String> sentences = Arrays.stream(base.split("(?<=[.!?])\\s+|\\n+"))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toList();
+        String selected;
+        if (sentences.isEmpty()) {
+            selected = defaultSummary(language);
+        } else if (sentences.size() == 1) {
+            selected = sentences.get(0);
+        } else {
+            selected = sentences.get(0) + " " + sentences.get(1);
+        }
+        String trimmed = TextUtils.trimToLength(selected, summaryMaxChars).trim();
+        if (!trimmed.isEmpty()) {
+            return trimmed;
+        }
+        return TextUtils.trimToLength(defaultSummary(language), summaryMaxChars).trim();
+    }
+
+    private List<String> normalizeCorrectionPoints(FeedbackLanguage language) {
+        List<String> points = correctionPoints.stream()
+                .filter(p -> p != null && !p.isBlank())
+                .map(String::trim)
+                .collect(Collectors.toCollection(ArrayList::new));
+        if (points.size() > 3) {
+            points = new ArrayList<>(points.subList(0, 3));
+        }
+
+        Set<String> categories = categoriesOf(points);
+        if (categories.size() < 2) {
+            for (String category : List.of("Grammar", "Expression", "Logic")) {
+                if (categories.contains(category)) {
+                    continue;
+                }
+                points.add(defaultPointForCategory(language, category));
+                categories.add(category);
+                if (categories.size() >= 2) {
+                    break;
+                }
+            }
+        }
+
         while (points.size() < 3) {
             points.add(defaultPoint(language, points.size()));
         }
         if (points.size() > 3) {
-            points = points.subList(0, 3);
+            points = new ArrayList<>(points.subList(0, 3));
         }
 
-        String example = exampleAnswer;
-        int userLength = userText == null ? 0 : userText.length();
-        double ratio = (double) example.length() / Math.max(1, userLength);
-        if (ratio > constraints.exampleMaxRatio()) {
-            int maxLen = (int) (userLength * constraints.exampleMaxRatio());
-            example = TextUtils.trimToLength(example, maxLen);
-        } else if (ratio < constraints.exampleMinRatio()) {
-            boolean english = language != null && language.isEnglish();
-            String filler = english
-                    ? " Also, consider adding one more detail."
-                    : " 또한 하나의 디테일을 더 추가해 보세요.";
-            example = example + filler;
+        categories = categoriesOf(points);
+        if (categories.size() < 2) {
+            for (String category : List.of("Grammar", "Expression", "Logic")) {
+                if (categories.contains(category)) {
+                    continue;
+                }
+                points.set(points.size() - 1, defaultPointForCategory(language, category));
+                categories = categoriesOf(points);
+                if (categories.size() >= 2) {
+                    break;
+                }
+            }
+        }
+        return points;
+    }
+
+    private Set<String> categoriesOf(List<String> points) {
+        Set<String> categories = new LinkedHashSet<>();
+        for (String point : points) {
+            String category = detectCategory(point);
+            if (category != null) {
+                categories.add(category);
+            }
+        }
+        return categories;
+    }
+
+    private String detectCategory(String point) {
+        if (point == null) {
+            return null;
+        }
+        String lowered = point.toLowerCase(Locale.ROOT);
+        if (lowered.contains("grammar") || lowered.contains("문법")) {
+            return "Grammar";
+        }
+        if (lowered.contains("expression") || lowered.contains("표현")) {
+            return "Expression";
+        }
+        if (lowered.contains("logic") || lowered.contains("논리")) {
+            return "Logic";
+        }
+        return null;
+    }
+
+    private String normalizeExampleAnswer(String userText,
+                                          FeedbackLanguage language,
+                                          double minRatio,
+                                          double maxRatio) {
+        String normalized = exampleAnswer == null ? "" : exampleAnswer.trim();
+        int userLength = userText == null ? 0 : userText.trim().length();
+        if (userLength <= 0) {
+            if (!normalized.isEmpty()) {
+                return normalized;
+            }
+            return defaultExampleSeed(language, userText);
         }
 
-        List<String> evidence = rulebookEvidence;
+        int minLength = Math.max(1, (int) Math.ceil(userLength * minRatio));
+        int maxLength = Math.max(minLength, (int) Math.floor(userLength * maxRatio));
+        if (normalized.isEmpty()) {
+            normalized = defaultExampleSeed(language, userText);
+        }
+        if (normalized.length() > maxLength) {
+            normalized = normalized.substring(0, maxLength).trim();
+        }
+        String filler = language != null && language.isEnglish()
+                ? " Add one concrete detail."
+                : " 구체적인 디테일을 한 문장 더 추가하세요.";
+        while (normalized.length() < minLength) {
+            normalized = (normalized + filler).trim();
+            if (normalized.length() > maxLength) {
+                normalized = normalized.substring(0, maxLength).trim();
+                break;
+            }
+        }
+        if (normalized.length() < minLength) {
+            String fallback = userText == null ? "" : userText.trim();
+            if (!fallback.isEmpty()) {
+                normalized = fallback;
+            }
+            if (normalized.length() > maxLength) {
+                normalized = normalized.substring(0, maxLength).trim();
+            }
+            while (normalized.length() < minLength) {
+                normalized = normalized + (language != null && language.isEnglish() ? " detail" : " 디테일");
+                if (normalized.length() > maxLength) {
+                    normalized = normalized.substring(0, maxLength).trim();
+                    break;
+                }
+            }
+        }
+        return normalized;
+    }
+
+    private List<String> normalizeRulebookEvidence(List<RulebookContext> contexts) {
         if (contexts == null || contexts.isEmpty()) {
-            evidence = List.of();
-        } else if (rulebookEvidence.isEmpty()) {
-            evidence = contexts.stream()
-                    .limit(1)
-                    .map(ctx -> "[" + ctx.filename() + "] " + TextUtils.trimToLength(ctx.text(), 200))
-                    .collect(Collectors.toList());
+            return List.of();
         }
+        List<String> cleaned = rulebookEvidence.stream()
+                .filter(e -> e != null && !e.isBlank())
+                .map(String::trim)
+                .toList();
+        if (!cleaned.isEmpty()) {
+            return cleaned;
+        }
+        return contexts.stream()
+                .limit(1)
+                .map(ctx -> "[" + ctx.filename() + "] " + TextUtils.trimToLength(ctx.text(), 200))
+                .collect(Collectors.toList());
+    }
 
-        return Feedback.of(normalizedSummary, points, example, evidence);
+    private String defaultSummary(FeedbackLanguage language) {
+        if (language != null && language.isEnglish()) {
+            return "Your answer is understandable and can be improved with clearer structure.";
+        }
+        return "답변의 핵심은 전달되었습니다. 구조를 더 선명하게 다듬으면 더 좋아집니다.";
+    }
+
+    private String defaultExampleSeed(FeedbackLanguage language, String userText) {
+        String base = userText == null ? "" : userText.trim();
+        if (!base.isEmpty()) {
+            return base;
+        }
+        if (language != null && language.isEnglish()) {
+            return "I can explain my idea clearly with one concrete example.";
+        }
+        return "저는 핵심 의견을 한 가지 예시와 함께 분명하게 설명할 수 있습니다.";
+    }
+
+    private String defaultPointForCategory(FeedbackLanguage language, String category) {
+        return switch (category) {
+            case "Grammar" -> language != null && language.isEnglish()
+                    ? "Grammar: Check verb tense consistency."
+                    : "Grammar: 시제 일관성을 점검하세요.";
+            case "Expression" -> language != null && language.isEnglish()
+                    ? "Expression: Use more specific vocabulary."
+                    : "Expression: 더 구체적인 어휘를 사용하세요.";
+            default -> language != null && language.isEnglish()
+                    ? "Logic: Add a clear reason or example."
+                    : "Logic: 이유나 예시를 추가하세요.";
+        };
     }
 
     private String defaultPoint(FeedbackLanguage language, int index) {

@@ -51,7 +51,32 @@ class FeedbackTest {
 
         Feedback normalized = feedback.normalized(constraints, "충분히 긴 사용자 답변 텍스트", FeedbackLanguage.of("ko"), List.of());
 
-        assertTrue(normalized.getExampleAnswer().contains("또한 하나의 디테일을 더 추가해 보세요."));
+        assertTrue(normalized.getExampleAnswer().length() >= 13);
+        assertTrue(normalized.getExampleAnswer().length() <= 19);
+    }
+
+    @Test
+    void normalized_limitsSummaryToTwoSentences() {
+        Feedback feedback = Feedback.of("One. Two. Three.", List.of("Grammar", "Expression", "Logic"), "example answer", List.of());
+        FeedbackConstraints constraints = new FeedbackConstraints(255, 0.8, 1.2);
+
+        Feedback normalized = feedback.normalized(constraints, "user answer", FeedbackLanguage.of("en"), List.of());
+
+        assertEquals("One. Two.", normalized.getSummary());
+    }
+
+    @Test
+    void normalized_enforcesAtLeastTwoPointCategories() {
+        Feedback feedback = Feedback.of("summary", List.of("Logic: weak", "Logic: vague", "Logic: thin"), "example answer", List.of());
+        FeedbackConstraints constraints = new FeedbackConstraints(255, 0.8, 1.2);
+
+        Feedback normalized = feedback.normalized(constraints, "user answer long enough", FeedbackLanguage.of("en"), List.of());
+
+        assertEquals(3, normalized.getCorrectionPoints().size());
+        boolean hasGrammar = normalized.getCorrectionPoints().stream().anyMatch(p -> p.contains("Grammar"));
+        boolean hasExpression = normalized.getCorrectionPoints().stream().anyMatch(p -> p.contains("Expression"));
+        boolean hasLogic = normalized.getCorrectionPoints().stream().anyMatch(p -> p.contains("Logic"));
+        assertTrue((hasGrammar && hasLogic) || (hasExpression && hasLogic) || (hasGrammar && hasExpression));
     }
 
     @Test
