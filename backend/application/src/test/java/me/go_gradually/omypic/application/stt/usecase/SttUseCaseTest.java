@@ -42,7 +42,7 @@ class SttUseCaseTest {
     void setUp() {
         vadSettings = new VadSettings(300, 500, 0.6);
         lenient().when(sttPolicy.getMaxFileBytes()).thenReturn(100L);
-        lenient().when(sttPolicy.getRetryMax()).thenReturn(2);
+        lenient().when(sttPolicy.retryMax()).thenReturn(2);
         lenient().when(sttPolicy.getVadSettings()).thenReturn(vadSettings);
         useCase = new SttUseCase(sttGateway, sttPolicy, metrics);
     }
@@ -103,7 +103,7 @@ class SttUseCaseTest {
 
     @Test
     void transcribe_withRetryMaxZero_attemptsOnlyOnce() throws Exception {
-        when(sttPolicy.getRetryMax()).thenReturn(0);
+        when(sttPolicy.retryMax()).thenReturn(0);
         when(sttGateway.transcribe(any(), anyString(), anyString(), anyBoolean(), eq(vadSettings)))
                 .thenThrow(new RuntimeException("fail-fast"));
 
