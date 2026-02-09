@@ -1,0 +1,42 @@
+server:
+  port: 4317
+  shutdown: graceful
+
+spring:
+  application:
+    name: omypic-backend
+  data:
+    mongodb:
+      uri: ${OMYPIC_MONGODB_URI:mongodb://localhost:27017/omypic}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  metrics:
+    distribution:
+      percentiles-histogram:
+        stt.latency: true
+        feedback.latency: true
+        tts.latency: true
+        question.next.latency: true
+
+omypic:
+  data-dir: ${OMYPIC_DATA_DIR:${user.home}/OMyPIc}
+  stt:
+    max-file-bytes: 26214400
+    max-duration-seconds: 180
+    retry-max: 2
+    vad:
+      prefix-padding-ms: 300
+      silence-duration-ms: 200
+      threshold: 0.5
+  rag:
+    embedding-dim: 384
+    max-context-chunks: 4
+  feedback:
+    summary-max-chars: 400
+    example-min-ratio: 0.8
+    example-max-ratio: 1.2
+    wrongnote-summary-max-chars: 255
