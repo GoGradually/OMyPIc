@@ -40,3 +40,10 @@ omypic:
     example-min-ratio: 0.8
     example-max-ratio: 1.2
     wrongnote-summary-max-chars: 255
+  integrations:
+    openai:
+      base-url: ${OMYPIC_OPENAI_BASE_URL:https://api.openai.com}
+    gemini:
+      base-url: ${OMYPIC_GEMINI_BASE_URL:https://generativelanguage.googleapis.com}
+    anthropic:
+      base-url: ${OMYPIC_ANTHROPIC_BASE_URL:https://api.anthropic.com}
