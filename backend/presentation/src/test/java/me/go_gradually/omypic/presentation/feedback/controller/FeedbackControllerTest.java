@@ -1,7 +1,9 @@
 package me.go_gradually.omypic.presentation.feedback.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import me.go_gradually.omypic.application.feedback.model.FeedbackResult;
 import me.go_gradually.omypic.application.feedback.usecase.FeedbackUseCase;
+import me.go_gradually.omypic.domain.feedback.Feedback;
 import me.go_gradually.omypic.presentation.TestBootApplication;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -11,8 +13,13 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.List;
+
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest(classes = {TestBootApplication.class, FeedbackController.class})
@@ -68,10 +75,46 @@ class FeedbackControllerTest {
                 .andExpect(status().isBadRequest());
     }
 
+    @Test
+    void mockFinalFeedback_returnsGeneratedPayload() throws Exception {
+        Feedback feedback = Feedback.of("summary", List.of("Grammar", "Expression", "Logic"), "example", List.of("evidence"));
+        when(feedbackUseCase.generateMockExamFinalFeedback(any(), any()))
+                .thenReturn(FeedbackResult.generated(feedback));
+
+        mockMvc.perform(post("/api/feedback/mock-final")
+                        .header("X-API-Key", "api-key")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validMockFinalRequest())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.generated").value(true))
+                .andExpect(jsonPath("$.feedback.summary").value("summary"));
+    }
+
+    @Test
+    void mockFinalFeedback_returnsBadRequest_whenValidationFails() throws Exception {
+        var invalid = validMockFinalRequest();
+        invalid.put("model", "");
+
+        mockMvc.perform(post("/api/feedback/mock-final")
+                        .header("X-API-Key", "api-key")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(invalid)))
+                .andExpect(status().isBadRequest());
+    }
+
     private java.util.Map<String, String> validRequest() {
         java.util.Map<String, String> map = new java.util.HashMap<>();
         map.put("sessionId", "s1");
         map.put("text", "text");
+        map.put("provider", "openai");
+        map.put("model", "gpt-4o-mini");
+        map.put("feedbackLanguage", "ko");
+        return map;
+    }
+
+    private java.util.Map<String, String> validMockFinalRequest() {
+        java.util.Map<String, String> map = new java.util.HashMap<>();
+        map.put("sessionId", "s1");
         map.put("provider", "openai");
         map.put("model", "gpt-4o-mini");
         map.put("feedbackLanguage", "ko");
