@@ -5,6 +5,8 @@ public class NextQuestion {
     private String text;
     private String group;
     private boolean skipped;
+    private boolean mockExamCompleted;
+    private String mockExamCompletionReason;
 
     public static NextQuestion skipped() {
         NextQuestion response = new NextQuestion();
@@ -42,5 +44,21 @@ public class NextQuestion {
 
     public void setSkipped(boolean skipped) {
         this.skipped = skipped;
+    }
+
+    public boolean isMockExamCompleted() {
+        return mockExamCompleted;
+    }
+
+    public void setMockExamCompleted(boolean mockExamCompleted) {
+        this.mockExamCompleted = mockExamCompleted;
+    }
+
+    public String getMockExamCompletionReason() {
+        return mockExamCompletionReason;
+    }
+
+    public void setMockExamCompletionReason(String mockExamCompletionReason) {
+        this.mockExamCompletionReason = mockExamCompletionReason;
     }
 }
