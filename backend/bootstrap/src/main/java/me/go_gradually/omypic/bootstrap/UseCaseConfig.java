@@ -1,10 +1,15 @@
 package me.go_gradually.omypic.bootstrap;
 
+import me.go_gradually.omypic.application.apikey.port.ApiKeyProbePort;
+import me.go_gradually.omypic.application.apikey.usecase.ApiKeyVerifyUseCase;
 import me.go_gradually.omypic.application.feedback.policy.FeedbackPolicy;
 import me.go_gradually.omypic.application.feedback.port.LlmClient;
 import me.go_gradually.omypic.application.feedback.usecase.FeedbackUseCase;
 import me.go_gradually.omypic.application.question.port.QuestionListPort;
 import me.go_gradually.omypic.application.question.usecase.QuestionUseCase;
+import me.go_gradually.omypic.application.realtime.policy.RealtimePolicy;
+import me.go_gradually.omypic.application.realtime.port.RealtimeAudioGateway;
+import me.go_gradually.omypic.application.realtime.usecase.RealtimeVoiceUseCase;
 import me.go_gradually.omypic.application.rulebook.policy.RagPolicy;
 import me.go_gradually.omypic.application.rulebook.port.RulebookFileStore;
 import me.go_gradually.omypic.application.rulebook.port.RulebookIndexPort;
@@ -22,6 +27,7 @@ import me.go_gradually.omypic.application.stt.usecase.SttUseCase;
 import me.go_gradually.omypic.application.tts.port.TtsGateway;
 import me.go_gradually.omypic.application.tts.usecase.TtsUseCase;
 import me.go_gradually.omypic.application.wrongnote.port.WrongNotePort;
+import me.go_gradually.omypic.application.wrongnote.port.WrongNoteRecentQueuePort;
 import me.go_gradually.omypic.application.wrongnote.usecase.WrongNoteUseCase;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -59,14 +65,16 @@ public class UseCaseConfig {
     public RulebookUseCase rulebookUseCase(RulebookPort rulebookPort,
                                            RulebookIndexPort rulebookIndexPort,
                                            RulebookFileStore rulebookFileStore,
-                                           RagPolicy ragPolicy) {
-        return new RulebookUseCase(rulebookPort, rulebookIndexPort, rulebookFileStore, ragPolicy);
+                                           RagPolicy ragPolicy,
+                                           MetricsPort metricsPort) {
+        return new RulebookUseCase(rulebookPort, rulebookIndexPort, rulebookFileStore, ragPolicy, metricsPort);
     }
 
     @Bean
     public WrongNoteUseCase wrongNoteUseCase(WrongNotePort wrongNotePort,
+                                             WrongNoteRecentQueuePort wrongNoteRecentQueuePort,
                                              FeedbackPolicy feedbackPolicy) {
-        return new WrongNoteUseCase(wrongNotePort, feedbackPolicy);
+        return new WrongNoteUseCase(wrongNotePort, wrongNoteRecentQueuePort, feedbackPolicy);
     }
 
     @Bean
@@ -98,5 +106,29 @@ public class UseCaseConfig {
     public TtsUseCase ttsUseCase(TtsGateway ttsGateway,
                                  MetricsPort metricsPort) {
         return new TtsUseCase(ttsGateway, metricsPort);
+    }
+
+    @Bean
+    public RealtimeVoiceUseCase realtimeVoiceUseCase(RealtimeAudioGateway realtimeAudioGateway,
+                                                     FeedbackUseCase feedbackUseCase,
+                                                     TtsUseCase ttsUseCase,
+                                                     SessionUseCase sessionUseCase,
+                                                     AsyncExecutor asyncExecutor,
+                                                     RealtimePolicy realtimePolicy,
+                                                     MetricsPort metricsPort) {
+        return new RealtimeVoiceUseCase(
+                realtimeAudioGateway,
+                feedbackUseCase,
+                ttsUseCase,
+                sessionUseCase,
+                asyncExecutor,
+                realtimePolicy,
+                metricsPort
+        );
+    }
+
+    @Bean
+    public ApiKeyVerifyUseCase apiKeyVerifyUseCase(ApiKeyProbePort probePort) {
+        return new ApiKeyVerifyUseCase(probePort);
     }
 }

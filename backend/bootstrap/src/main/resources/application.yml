@@ -21,6 +21,8 @@ management:
         feedback.latency: true
         tts.latency: true
         question.next.latency: true
+        realtime.turn.latency: true
+        rulebook.upload.latency: true
 
 omypic:
   data-dir: ${OMYPIC_DATA_DIR:${user.home}/OMyPIc}
@@ -40,6 +42,13 @@ omypic:
     example-min-ratio: 0.8
     example-max-ratio: 1.2
     wrongnote-summary-max-chars: 255
+  realtime:
+    stt-model: gpt-4o-mini-transcribe
+    feedback-provider: openai
+    feedback-model: gpt-4o-mini
+    feedback-language: ko
+    tts-voice: alloy
+    rest-disabled: true
   integrations:
     openai:
       base-url: ${OMYPIC_OPENAI_BASE_URL:https://api.openai.com}
