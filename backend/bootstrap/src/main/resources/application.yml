@@ -43,9 +43,10 @@ omypic:
     example-max-ratio: 1.2
     wrongnote-summary-max-chars: 255
   realtime:
+    conversation-model: gpt-realtime-mini
     stt-model: gpt-4o-mini-transcribe
     feedback-provider: openai
-    feedback-model: gpt-4o-mini
+    feedback-model: gpt-realtime-mini
     feedback-language: ko
     tts-voice: alloy
     rest-disabled: true
