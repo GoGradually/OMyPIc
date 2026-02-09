@@ -1,0 +1,40 @@
+package me.go_gradually.omypic.infrastructure.wrongnote.persistence.mongo;
+
+import me.go_gradually.omypic.application.wrongnote.port.WrongNoteRecentQueuePort;
+import org.springframework.stereotype.Component;
+
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+
+@Component
+public class WrongNoteRecentQueueMongoAdapter implements WrongNoteRecentQueuePort {
+    private static final String GLOBAL_ID = "global";
+    private final WrongNoteRecentQueueRepository repository;
+
+    public WrongNoteRecentQueueMongoAdapter(WrongNoteRecentQueueRepository repository) {
+        this.repository = repository;
+    }
+
+    @Override
+    public List<String> loadGlobalQueue() {
+        return repository.findById(GLOBAL_ID)
+                .map(doc -> List.copyOf(doc.getPatterns()))
+                .orElse(List.of());
+    }
+
+    @Override
+    public void saveGlobalQueue(List<String> patterns) {
+        WrongNoteRecentQueueDocument doc = repository.findById(GLOBAL_ID).orElseGet(() -> {
+            WrongNoteRecentQueueDocument created = new WrongNoteRecentQueueDocument();
+            created.setId(GLOBAL_ID);
+            return created;
+        });
+
+        List<String> input = patterns == null ? List.of() : patterns;
+        int fromIndex = Math.max(0, input.size() - 30);
+        doc.setPatterns(new ArrayList<>(input.subList(fromIndex, input.size())));
+        doc.setUpdatedAt(Instant.now());
+        repository.save(doc);
+    }
+}
