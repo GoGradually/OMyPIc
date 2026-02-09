@@ -57,9 +57,10 @@ class RealtimeVoiceUseCaseTest {
 
     @BeforeEach
     void setUp() {
+        when(realtimePolicy.realtimeConversationModel()).thenReturn("gpt-realtime-mini");
         when(realtimePolicy.realtimeSttModel()).thenReturn("gpt-4o-mini-transcribe");
         when(realtimePolicy.realtimeFeedbackProvider()).thenReturn("openai");
-        when(realtimePolicy.realtimeFeedbackModel()).thenReturn("gpt-4o-mini");
+        when(realtimePolicy.realtimeFeedbackModel()).thenReturn("gpt-realtime-mini");
         when(realtimePolicy.realtimeFeedbackLanguage()).thenReturn("ko");
         when(realtimePolicy.realtimeTtsVoice()).thenReturn("alloy");
 
@@ -67,12 +68,6 @@ class RealtimeVoiceUseCaseTest {
             listener = invocation.getArgument(1);
             return realtimeAudioSession;
         });
-
-        doAnswer(invocation -> {
-            Runnable runnable = invocation.getArgument(0);
-            runnable.run();
-            return null;
-        }).when(asyncExecutor).execute(any(Runnable.class));
 
         useCase = new RealtimeVoiceUseCase(
                 realtimeAudioGateway,
@@ -87,6 +82,7 @@ class RealtimeVoiceUseCaseTest {
 
     @Test
     void finalTranscript_runsFeedbackAndTtsPipeline() throws Exception {
+        stubAsyncExecutorRunsInline();
         Feedback feedback = Feedback.of("summary", List.of("p1", "p2", "p3"), "example", List.of("[rule] evidence"));
         when(feedbackUseCase.generateFeedback(anyString(), any())).thenReturn(FeedbackResult.generated(feedback));
         doAnswer(invocation -> {
@@ -116,13 +112,19 @@ class RealtimeVoiceUseCaseTest {
         ArgumentCaptor<FeedbackCommand> captor = ArgumentCaptor.forClass(FeedbackCommand.class);
         verify(feedbackUseCase).generateFeedback(eq("api-key"), captor.capture());
         assertEquals("openai", captor.getValue().getProvider());
-        assertEquals("gpt-4o-mini", captor.getValue().getModel());
+        assertEquals("gpt-realtime-mini", captor.getValue().getModel());
         assertEquals("ko", captor.getValue().getFeedbackLanguage());
+
+        ArgumentCaptor<RealtimeAudioOpenCommand> openCaptor = ArgumentCaptor.forClass(RealtimeAudioOpenCommand.class);
+        verify(realtimeAudioGateway).open(openCaptor.capture(), any());
+        assertEquals("gpt-realtime-mini", openCaptor.getValue().conversationModel());
+        assertEquals("gpt-4o-mini-transcribe", openCaptor.getValue().sttModel());
         session.close();
     }
 
     @Test
     void sessionUpdate_overridesFeedbackAndVoiceDefaults() throws Exception {
+        stubAsyncExecutorRunsInline();
         Feedback feedback = Feedback.of("summary", List.of("p1", "p2", "p3"), "example", List.of());
         when(feedbackUseCase.generateFeedback(anyString(), any())).thenReturn(FeedbackResult.generated(feedback));
         doAnswer(invocation -> {
@@ -138,6 +140,8 @@ class RealtimeVoiceUseCaseTest {
         });
 
         RealtimeSessionUpdateCommand update = new RealtimeSessionUpdateCommand();
+        update.setConversationModel("gpt-realtime");
+        update.setSttModel("gpt-4o-transcribe");
         update.setFeedbackProvider("gemini");
         update.setFeedbackModel("gemini-2.0-flash");
         update.setFeedbackApiKey("gemini-key");
@@ -161,7 +165,23 @@ class RealtimeVoiceUseCaseTest {
     }
 
     @Test
+    void open_usesRealtimeModelsFromStartCommandWhenProvided() {
+        RealtimeStartCommand command = startCommand();
+        command.setConversationModel("gpt-realtime");
+        command.setSttModel("gpt-4o-transcribe");
+
+        RealtimeVoiceSession session = useCase.open(command, (event, payload) -> true);
+
+        ArgumentCaptor<RealtimeAudioOpenCommand> openCaptor = ArgumentCaptor.forClass(RealtimeAudioOpenCommand.class);
+        verify(realtimeAudioGateway).open(openCaptor.capture(), any());
+        assertEquals("gpt-realtime", openCaptor.getValue().conversationModel());
+        assertEquals("gpt-4o-transcribe", openCaptor.getValue().sttModel());
+        session.close();
+    }
+
+    @Test
     void appendAudio_triggersBargeInCancel() {
+        stubAsyncExecutorRunsInline();
         when(feedbackUseCase.generateFeedback(anyString(), any())).thenReturn(FeedbackResult.skipped());
         List<String> eventTypes = new CopyOnWriteArrayList<>();
         RealtimeVoiceSession session = useCase.open(startCommand(), (event, payload) -> {
@@ -183,5 +203,13 @@ class RealtimeVoiceUseCaseTest {
         command.setSessionId("s1");
         command.setApiKey("api-key");
         return command;
+    }
+
+    private void stubAsyncExecutorRunsInline() {
+        doAnswer(invocation -> {
+            Runnable runnable = invocation.getArgument(0);
+            runnable.run();
+            return null;
+        }).when(asyncExecutor).execute(any(Runnable.class));
     }
 }
