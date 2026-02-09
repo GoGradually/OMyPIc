@@ -2,27 +2,28 @@ package me.go_gradually.omypic.application.stt.usecase.integration;
 
 import me.go_gradually.omypic.application.feedback.model.FeedbackCommand;
 import me.go_gradually.omypic.application.feedback.model.FeedbackResult;
+import me.go_gradually.omypic.application.feedback.policy.FeedbackPolicy;
+import me.go_gradually.omypic.application.feedback.port.LlmClient;
+import me.go_gradually.omypic.application.feedback.usecase.FeedbackUseCase;
+import me.go_gradually.omypic.application.rulebook.usecase.RulebookUseCase;
+import me.go_gradually.omypic.application.session.port.SessionStorePort;
+import me.go_gradually.omypic.application.shared.port.AsyncExecutor;
+import me.go_gradually.omypic.application.shared.port.MetricsPort;
 import me.go_gradually.omypic.application.stt.model.SttCommand;
 import me.go_gradually.omypic.application.stt.model.SttEventSink;
 import me.go_gradually.omypic.application.stt.model.SttJob;
 import me.go_gradually.omypic.application.stt.model.VadSettings;
-import me.go_gradually.omypic.application.feedback.policy.FeedbackPolicy;
 import me.go_gradually.omypic.application.stt.policy.SttPolicy;
-import me.go_gradually.omypic.application.shared.port.AsyncExecutor;
-import me.go_gradually.omypic.application.feedback.port.LlmClient;
-import me.go_gradually.omypic.application.shared.port.MetricsPort;
-import me.go_gradually.omypic.application.session.port.SessionStorePort;
 import me.go_gradually.omypic.application.stt.port.SttGateway;
 import me.go_gradually.omypic.application.stt.port.SttJobStorePort;
-import me.go_gradually.omypic.application.wrongnote.port.WrongNotePort;
-import me.go_gradually.omypic.application.feedback.usecase.FeedbackUseCase;
-import me.go_gradually.omypic.application.rulebook.usecase.RulebookUseCase;
 import me.go_gradually.omypic.application.stt.usecase.SttJobUseCase;
 import me.go_gradually.omypic.application.stt.usecase.SttUseCase;
+import me.go_gradually.omypic.application.wrongnote.port.WrongNotePort;
+import me.go_gradually.omypic.application.wrongnote.port.WrongNoteRecentQueuePort;
 import me.go_gradually.omypic.application.wrongnote.usecase.WrongNoteUseCase;
-import me.go_gradually.omypic.domain.session.ModeType;
 import me.go_gradually.omypic.domain.rulebook.RulebookContext;
 import me.go_gradually.omypic.domain.rulebook.RulebookId;
+import me.go_gradually.omypic.domain.session.ModeType;
 import me.go_gradually.omypic.domain.session.SessionId;
 import me.go_gradually.omypic.domain.session.SessionState;
 import me.go_gradually.omypic.domain.wrongnote.WrongNote;
@@ -33,23 +34,12 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Duration;
-import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class VoiceChainIntegrationTest {
@@ -87,7 +77,11 @@ class VoiceChainIntegrationTest {
         InMemorySessionStore sessionStore = new InMemorySessionStore();
         InMemorySttJobStore jobStore = new InMemorySttJobStore();
         ControlledExecutor executor = new ControlledExecutor();
-        WrongNoteUseCase wrongNoteUseCase = new WrongNoteUseCase(new InMemoryWrongNotePort(), new FixedFeedbackPolicy());
+        WrongNoteUseCase wrongNoteUseCase = new WrongNoteUseCase(
+                new InMemoryWrongNotePort(),
+                new InMemoryWrongNoteRecentQueuePort(),
+                new FixedFeedbackPolicy()
+        );
 
         when(sttGateway.transcribe(any(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyBoolean(), any()))
                 .thenReturn("This is my answer.");
@@ -179,7 +173,11 @@ class VoiceChainIntegrationTest {
     void feedback_skipsInMockExamMode_withoutCallingLlm() throws Exception {
         TestMetrics metrics = new TestMetrics();
         InMemorySessionStore sessionStore = new InMemorySessionStore();
-        WrongNoteUseCase wrongNoteUseCase = new WrongNoteUseCase(new InMemoryWrongNotePort(), new FixedFeedbackPolicy());
+        WrongNoteUseCase wrongNoteUseCase = new WrongNoteUseCase(
+                new InMemoryWrongNotePort(),
+                new InMemoryWrongNoteRecentQueuePort(),
+                new FixedFeedbackPolicy()
+        );
 
         when(llmClient.provider()).thenReturn("openai");
 
@@ -269,6 +267,14 @@ class VoiceChainIntegrationTest {
         @Override
         public void incrementTtsError() {
         }
+
+        @Override
+        public void recordRealtimeTurnLatency(Duration duration) {
+        }
+
+        @Override
+        public void recordRulebookUploadLatency(Duration duration) {
+        }
     }
 
     private static class InMemorySessionStore implements SessionStorePort {
@@ -302,6 +308,21 @@ class VoiceChainIntegrationTest {
         @Override
         public void deleteById(WrongNoteId id) {
             byPattern.entrySet().removeIf(entry -> entry.getValue().getId().equals(id));
+        }
+    }
+
+    private static class InMemoryWrongNoteRecentQueuePort implements WrongNoteRecentQueuePort {
+        private final List<String> queue = new ArrayList<>();
+
+        @Override
+        public List<String> loadGlobalQueue() {
+            return List.copyOf(queue);
+        }
+
+        @Override
+        public void saveGlobalQueue(List<String> patterns) {
+            queue.clear();
+            queue.addAll(patterns);
         }
     }
 
