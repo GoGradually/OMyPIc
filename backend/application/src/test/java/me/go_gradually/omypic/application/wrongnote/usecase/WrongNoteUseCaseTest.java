@@ -17,7 +17,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 
 @ExtendWith(MockitoExtension.class)
@@ -35,31 +36,12 @@ class WrongNoteUseCaseTest {
 
     @BeforeEach
     void setUp() {
-        lenient().when(feedbackPolicy.getWrongnoteSummaryMaxChars()).thenReturn(255);
-        lenient().when(repository.findByPattern(anyString())).thenAnswer(invocation -> Optional.ofNullable(storage.get(invocation.getArgument(0))));
-        lenient().when(repository.findAll()).thenAnswer(invocation -> new ArrayList<>(storage.values()));
-        lenient().when(repository.save(any(WrongNote.class))).thenAnswer(invocation -> {
-            WrongNote note = invocation.getArgument(0);
-            storage.put(note.getPattern(), note);
-            return note;
-        });
-        lenient().doAnswer(invocation -> {
-            storage.entrySet().removeIf(entry -> entry.getValue().getId().equals(invocation.getArgument(0)));
-            return null;
-        }).when(repository).deleteById(any());
-        lenient().when(recentQueueStore.loadGlobalQueue()).thenAnswer(invocation -> List.copyOf(queueStorage));
-        lenient().doAnswer(invocation -> {
-            List<String> saved = invocation.getArgument(0);
-            queueStorage.clear();
-            queueStorage.addAll(saved);
-            return null;
-        }).when(recentQueueStore).saveGlobalQueue(any());
-
         useCase = new WrongNoteUseCase(repository, recentQueueStore, feedbackPolicy);
     }
 
     @Test
     void addFeedback_incrementsDuplicatePatternCount() {
+        stubAddFeedbackDependencies();
         useCase.addFeedback(Feedback.of("summary", List.of("Grammar: tense", "Grammar: tense"), "", List.of()));
 
         WrongNote note = storage.get("Grammar: tense");
@@ -68,6 +50,7 @@ class WrongNoteUseCaseTest {
 
     @Test
     void addFeedback_trimsPatternTo120Chars() {
+        stubAddFeedbackDependencies();
         String longPoint = "x".repeat(150);
 
         useCase.addFeedback(Feedback.of("summary", List.of(longPoint), "", List.of()));
@@ -78,6 +61,8 @@ class WrongNoteUseCaseTest {
 
     @Test
     void addFeedback_keepsRecentQueueAt30_andDeletesZeroCountNotes() {
+        stubAddFeedbackDependencies();
+        stubDeleteByIdFromStorage();
         for (int i = 0; i < 31; i++) {
             useCase.addFeedback(Feedback.of("summary", List.of("pattern-" + i), "", List.of()));
         }
@@ -88,6 +73,7 @@ class WrongNoteUseCaseTest {
 
     @Test
     void addFeedback_decrementsExistingCountWhenEvictedFromQueue() {
+        stubAddFeedbackDependencies();
         useCase.addFeedback(Feedback.of("summary", List.of("A"), "", List.of()));
         useCase.addFeedback(Feedback.of("summary", List.of("A"), "", List.of()));
         for (int i = 0; i < 29; i++) {
@@ -100,6 +86,8 @@ class WrongNoteUseCaseTest {
 
     @Test
     void list_returnsDescendingByCount() {
+        stubAddFeedbackDependencies();
+        stubFindAllFromStorage();
         useCase.addFeedback(Feedback.of("summary", List.of("A"), "", List.of()));
         useCase.addFeedback(Feedback.of("summary", List.of("A"), "", List.of()));
         useCase.addFeedback(Feedback.of("summary", List.of("A"), "", List.of()));
@@ -114,8 +102,37 @@ class WrongNoteUseCaseTest {
 
     @Test
     void addFeedback_savesQueueState() {
+        stubAddFeedbackDependencies();
         useCase.addFeedback(Feedback.of("summary", List.of("A"), "", List.of()));
 
         verify(recentQueueStore).saveGlobalQueue(any());
+    }
+
+    private void stubAddFeedbackDependencies() {
+        when(feedbackPolicy.getWrongnoteSummaryMaxChars()).thenReturn(255);
+        when(repository.findByPattern(anyString())).thenAnswer(invocation -> Optional.ofNullable(storage.get(invocation.getArgument(0))));
+        when(repository.save(any(WrongNote.class))).thenAnswer(invocation -> {
+            WrongNote note = invocation.getArgument(0);
+            storage.put(note.getPattern(), note);
+            return note;
+        });
+        when(recentQueueStore.loadGlobalQueue()).thenAnswer(invocation -> List.copyOf(queueStorage));
+        doAnswer(invocation -> {
+            List<String> saved = invocation.getArgument(0);
+            queueStorage.clear();
+            queueStorage.addAll(saved);
+            return null;
+        }).when(recentQueueStore).saveGlobalQueue(any());
+    }
+
+    private void stubDeleteByIdFromStorage() {
+        doAnswer(invocation -> {
+            storage.entrySet().removeIf(entry -> entry.getValue().getId().equals(invocation.getArgument(0)));
+            return null;
+        }).when(repository).deleteById(any());
+    }
+
+    private void stubFindAllFromStorage() {
+        when(repository.findAll()).thenAnswer(invocation -> new ArrayList<>(storage.values()));
     }
 }

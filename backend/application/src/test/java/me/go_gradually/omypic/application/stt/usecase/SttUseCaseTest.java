@@ -41,14 +41,12 @@ class SttUseCaseTest {
     @BeforeEach
     void setUp() {
         vadSettings = new VadSettings(300, 500, 0.6);
-        lenient().when(sttPolicy.getMaxFileBytes()).thenReturn(100L);
-        lenient().when(sttPolicy.retryMax()).thenReturn(2);
-        lenient().when(sttPolicy.getVadSettings()).thenReturn(vadSettings);
         useCase = new SttUseCase(sttGateway, sttPolicy, metrics);
     }
 
     @Test
     void transcribe_retriesAndSucceedsWithinRetryLimit() throws Exception {
+        stubPolicy(100L, 2);
         when(sttGateway.transcribe(any(), anyString(), anyString(), anyBoolean(), eq(vadSettings)))
                 .thenThrow(new RuntimeException("temporary-1"))
                 .thenThrow(new RuntimeException("temporary-2"))
@@ -65,6 +63,7 @@ class SttUseCaseTest {
 
     @Test
     void transcribe_throwsAndIncrementsError_whenRetriesExhausted() throws Exception {
+        stubPolicy(100L, 2);
         when(sttGateway.transcribe(any(), anyString(), anyString(), anyBoolean(), eq(vadSettings)))
                 .thenThrow(new RuntimeException("always-fail"));
 
@@ -78,6 +77,7 @@ class SttUseCaseTest {
 
     @Test
     void transcribe_rejectsNullOrTooLargeFiles() throws Exception {
+        when(sttPolicy.getMaxFileBytes()).thenReturn(100L);
         SttCommand nullFile = commandWithBytes(1);
         nullFile.setFileBytes(null);
 
@@ -92,6 +92,7 @@ class SttUseCaseTest {
 
     @Test
     void transcribe_passesModelApiKeyTranslateAndVadToGateway() throws Exception {
+        stubPolicy(100L, 2);
         SttCommand command = commandWithBytes(5);
         command.setModel("whisper-1");
         command.setApiKey("secret");
@@ -107,7 +108,7 @@ class SttUseCaseTest {
 
     @Test
     void transcribe_withRetryMaxZero_attemptsOnlyOnce() throws Exception {
-        when(sttPolicy.retryMax()).thenReturn(0);
+        stubPolicy(100L, 0);
         when(sttGateway.transcribe(any(), anyString(), anyString(), anyBoolean(), eq(vadSettings)))
                 .thenThrow(new RuntimeException("fail-fast"));
 
@@ -116,5 +117,11 @@ class SttUseCaseTest {
         verify(sttGateway, times(1)).transcribe(any(), anyString(), anyString(), anyBoolean(), eq(vadSettings));
         verify(metrics).incrementSttRequest();
         verify(metrics).incrementSttError();
+    }
+
+    private void stubPolicy(long maxFileBytes, int retryMax) {
+        when(sttPolicy.getMaxFileBytes()).thenReturn(maxFileBytes);
+        when(sttPolicy.retryMax()).thenReturn(retryMax);
+        when(sttPolicy.getVadSettings()).thenReturn(vadSettings);
     }
 }
