@@ -1,0 +1,33 @@
+import React from 'react'
+
+export function QuestionPanel({currentQuestionLabel, modeSummary, activeListId, onNextQuestion, onOpenQuestionsPanel}) {
+    return (
+        <section className="panel question-panel">
+            <div className="panel-head question-panel__head">
+                <h3>현재 질문</h3>
+                <button
+                    className="control-button secondary"
+                    onClick={onNextQuestion}
+                    disabled={!activeListId}
+                >
+                    다음 질문
+                </button>
+            </div>
+
+            <div className="current-question-box question-panel__current">{currentQuestionLabel}</div>
+
+            <div className="mode-summary question-panel__mode-summary">
+                <div>
+                    <p className="mode-label">학습 모드</p>
+                    <strong>{modeSummary}</strong>
+                </div>
+                <button
+                    className="control-button secondary"
+                    onClick={onOpenQuestionsPanel}
+                >
+                    모드/질문 관리
+                </button>
+            </div>
+        </section>
+    )
+}
