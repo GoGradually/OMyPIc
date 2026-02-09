@@ -96,6 +96,21 @@ class QuestionListTest {
     }
 
     @Test
+    void removeQuestion_throwsWhenRemovingLastQuestion() {
+        QuestionItem item = QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", "A");
+        QuestionList list = QuestionList.rehydrate(
+                QuestionListId.of("list-1"),
+                "list",
+                List.of(item),
+                Instant.parse("2026-01-01T00:00:00Z"),
+                Instant.parse("2026-01-01T00:00:00Z")
+        );
+
+        assertThrows(IllegalStateException.class,
+                () -> list.removeQuestion(QuestionItemId.of("q1"), Instant.parse("2026-01-01T03:00:00Z")));
+    }
+
+    @Test
     void groupQuestionIdsByGroup_excludesNullGroups() {
         QuestionList list = QuestionList.rehydrate(
                 QuestionListId.of("list-1"),

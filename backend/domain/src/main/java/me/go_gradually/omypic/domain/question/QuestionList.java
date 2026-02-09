@@ -11,7 +11,7 @@ public class QuestionList {
     private final QuestionListId id;
     private String name;
     private final List<QuestionItem> questions;
-    private Instant createdAt;
+    private final Instant createdAt;
     private Instant updatedAt;
 
     private QuestionList(QuestionListId id, String name, List<QuestionItem> questions, Instant createdAt, Instant updatedAt) {
@@ -63,6 +63,9 @@ public class QuestionList {
     }
 
     public void removeQuestion(QuestionItemId itemId, Instant now) {
+        if (itemId != null && questions.size() <= 1 && questions.stream().anyMatch(q -> itemId.equals(q.getId()))) {
+            throw new IllegalStateException("Question list must contain at least 1 question");
+        }
         if (itemId != null) {
             questions.removeIf(q -> itemId.equals(q.getId()));
         }
