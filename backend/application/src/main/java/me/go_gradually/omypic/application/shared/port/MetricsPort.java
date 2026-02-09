@@ -15,6 +15,8 @@ public interface MetricsPort {
 
     void recordRulebookUploadLatency(Duration duration);
 
+    void incrementSttRequest();
+
     void incrementSttError();
 
     void incrementFeedbackError();
