@@ -62,10 +62,7 @@ class FeedbackUseCaseTest {
 
     @BeforeEach
     void setUp() {
-        lenient().when(openAiClient.provider()).thenReturn("openai");
-        lenient().when(feedbackPolicy.getSummaryMaxChars()).thenReturn(255);
-        lenient().when(feedbackPolicy.getExampleMinRatio()).thenReturn(0.8);
-        lenient().when(feedbackPolicy.getExampleMaxRatio()).thenReturn(1.2);
+        when(openAiClient.provider()).thenReturn("openai");
         useCase = new FeedbackUseCase(
                 List.of(openAiClient),
                 rulebookUseCase,
@@ -91,6 +88,7 @@ class FeedbackUseCaseTest {
 
     @Test
     void generateFeedback_normalizesRequiredFields_andRecordsMetrics() throws Exception {
+        stubDefaultFeedbackPolicy();
         SessionState state = new SessionState(SessionId.of("s2"));
         when(sessionStore.getOrCreate(SessionId.of("s2"))).thenReturn(state);
         when(rulebookUseCase.searchContexts("This is my answer."))
@@ -115,6 +113,7 @@ class FeedbackUseCaseTest {
 
     @Test
     void generateFeedback_inContinuousMode_usesMostRecentBatchText() throws Exception {
+        stubDefaultFeedbackPolicy();
         SessionState state = new SessionState(SessionId.of("s-batch"));
         state.applyModeUpdate(ModeType.CONTINUOUS, 3);
         when(sessionStore.getOrCreate(SessionId.of("s-batch"))).thenReturn(state);
@@ -137,6 +136,7 @@ class FeedbackUseCaseTest {
 
     @Test
     void generateFeedback_usesDefaultKoreanLanguage_whenCommandLanguageIsNull() throws Exception {
+        stubDefaultFeedbackPolicy();
         SessionState state = new SessionState(SessionId.of("s3"));
         when(sessionStore.getOrCreate(SessionId.of("s3"))).thenReturn(state);
         when(rulebookUseCase.searchContexts(anyString())).thenReturn(List.of());
@@ -152,6 +152,7 @@ class FeedbackUseCaseTest {
 
     @Test
     void generateFeedback_clearsEvidenceWhenNoRulebookContext() throws Exception {
+        stubDefaultFeedbackPolicy();
         SessionState state = new SessionState(SessionId.of("s4"));
         when(sessionStore.getOrCreate(SessionId.of("s4"))).thenReturn(state);
         when(rulebookUseCase.searchContexts(anyString())).thenReturn(List.of());
@@ -191,6 +192,7 @@ class FeedbackUseCaseTest {
 
     @Test
     void generateMockExamFinalFeedback_generatesOnceAfterCompletion() throws Exception {
+        stubDefaultFeedbackPolicy();
         SessionState state = new SessionState(SessionId.of("mock-1"));
         state.applyModeUpdate(ModeType.MOCK_EXAM, null);
         QuestionList list = QuestionList.rehydrate(
@@ -220,5 +222,11 @@ class FeedbackUseCaseTest {
         IllegalStateException exception = assertThrows(IllegalStateException.class,
                 () -> useCase.generateMockExamFinalFeedback("key", command("mock-1", "openai", "ko", "ignored")));
         assertTrue(exception.getMessage().contains("already generated"));
+    }
+
+    private void stubDefaultFeedbackPolicy() {
+        when(feedbackPolicy.getSummaryMaxChars()).thenReturn(255);
+        when(feedbackPolicy.getExampleMinRatio()).thenReturn(0.8);
+        when(feedbackPolicy.getExampleMaxRatio()).thenReturn(1.2);
     }
 }
