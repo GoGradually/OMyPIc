@@ -7,31 +7,62 @@
   "scripts": {
     "dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "build": "vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "preview": "vite preview",
-    "electron:build": "npm run build && electron-builder"
+    "electron:prep": "node scripts/prepare-resources.mjs",
+    "electron:build": "npm run build && npm run electron:prep && electron-builder",
+    "electron:build:win": "npm run build && npm run electron:prep && electron-builder --win nsis",
+    "electron:build:mac": "npm run build && npm run electron:prep && electron-builder --mac dmg"
   },
   "dependencies": {
-    "ws": "^8.18.0",
+    "keytar": "^7.9.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "keytar": "^7.9.0"
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
     "concurrently": "^8.2.2",
     "electron": "^30.0.9",
     "electron-builder": "^24.13.3",
+    "extract-zip": "^2.0.1",
+    "tar": "^7.4.3",
     "vite": "^5.4.3",
+    "vitest": "^4.0.18",
     "wait-on": "^7.2.0"
   },
   "build": {
     "appId": "com.omypic.app",
+    "productName": "OMyPIc",
     "files": [
       "dist/**",
-      "electron/**"
+      "electron/main.cjs",
+      "electron/preload.cjs"
+    ],
+    "extraResources": [
+      {
+        "from": "electron/resources",
+        "to": ".",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "directories": {
       "buildResources": "electron"
+    },
+    "artifactName": "OMyPIc-${version}-${os}-${arch}.${ext}",
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.education"
     }
   }
 }
