@@ -20,7 +20,7 @@
 
 ## 2) STT (Speech-to-Text)
 - [x] `audio/transcriptions`/`audio/translations` 연동
-- [ ] 모델 선택: `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`, `gpt-4o-transcribe-diarize`, `whisper-1` 등
+- [ ] 모델 선택(비실시간 업로드 STT): `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`, `gpt-4o-transcribe-diarize`, `whisper-1` 등
 - [x] 업로드 파일 제한 25MB 처리(사전 검증)
 - [x] 서버 VAD 파라미터 기본값 적용
 - [x] STT 스트리밍(SSE) 지원 여부 반영(whisper-1 제외)
@@ -88,6 +88,8 @@
 
 ## 10) 모델 셀렉터 & API Key
 - [x] 모델 선택 UI(최소 3개 옵션: GPT/Claude/Gemini)
+- [x] 실시간 음성(OpenAI) 모델 기본값: `gpt-realtime-mini` (옵션: `gpt-realtime`)
+- [x] 모의고사 최종 피드백 모델 선택 분리(예: OpenAI `gpt-4o-mini`)
 - [x] 모델 등급 선택(예: gpt-o3-mini 등)
 - [ ] API Key 등록/검증
   - [ ] 형식 검증
