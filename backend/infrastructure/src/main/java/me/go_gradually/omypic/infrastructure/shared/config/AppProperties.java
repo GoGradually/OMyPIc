@@ -13,6 +13,7 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
     private Stt stt = new Stt();
     private Rag rag = new Rag();
     private Feedback feedback = new Feedback();
+    private Integrations integrations = new Integrations();
 
     public String getDataDir() {
         return dataDir;
@@ -44,6 +45,14 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
 
     public void setFeedback(Feedback feedback) {
         this.feedback = feedback;
+    }
+
+    public Integrations getIntegrations() {
+        return integrations;
+    }
+
+    public void setIntegrations(Integrations integrations) {
+        this.integrations = integrations;
     }
 
     @Override
@@ -214,6 +223,72 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
 
         public void setWrongnoteSummaryMaxChars(int wrongnoteSummaryMaxChars) {
             this.wrongnoteSummaryMaxChars = wrongnoteSummaryMaxChars;
+        }
+    }
+
+    public static class Integrations {
+        private OpenAi openai = new OpenAi();
+        private Gemini gemini = new Gemini();
+        private Anthropic anthropic = new Anthropic();
+
+        public OpenAi getOpenai() {
+            return openai;
+        }
+
+        public void setOpenai(OpenAi openai) {
+            this.openai = openai;
+        }
+
+        public Gemini getGemini() {
+            return gemini;
+        }
+
+        public void setGemini(Gemini gemini) {
+            this.gemini = gemini;
+        }
+
+        public Anthropic getAnthropic() {
+            return anthropic;
+        }
+
+        public void setAnthropic(Anthropic anthropic) {
+            this.anthropic = anthropic;
+        }
+    }
+
+    public static class OpenAi {
+        private String baseUrl = "https://api.openai.com";
+
+        public String getBaseUrl() {
+            return baseUrl;
+        }
+
+        public void setBaseUrl(String baseUrl) {
+            this.baseUrl = baseUrl;
+        }
+    }
+
+    public static class Gemini {
+        private String baseUrl = "https://generativelanguage.googleapis.com";
+
+        public String getBaseUrl() {
+            return baseUrl;
+        }
+
+        public void setBaseUrl(String baseUrl) {
+            this.baseUrl = baseUrl;
+        }
+    }
+
+    public static class Anthropic {
+        private String baseUrl = "https://api.anthropic.com";
+
+        public String getBaseUrl() {
+            return baseUrl;
+        }
+
+        public void setBaseUrl(String baseUrl) {
+            this.baseUrl = baseUrl;
         }
     }
 }

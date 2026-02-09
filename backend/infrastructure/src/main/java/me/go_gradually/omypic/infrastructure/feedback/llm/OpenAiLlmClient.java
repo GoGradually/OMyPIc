@@ -3,6 +3,7 @@ package me.go_gradually.omypic.infrastructure.feedback.llm;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import me.go_gradually.omypic.application.feedback.port.LlmClient;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 
@@ -12,19 +13,11 @@ import java.util.Map;
 
 @Component
 public class OpenAiLlmClient implements LlmClient {
-    private static final String DEFAULT_ENDPOINT = "https://api.openai.com/v1/chat/completions";
-
     private final WebClient webClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private final String endpoint;
 
-    public OpenAiLlmClient(WebClient webClient) {
-        this(webClient, DEFAULT_ENDPOINT);
-    }
-
-    OpenAiLlmClient(WebClient webClient, String endpoint) {
+    public OpenAiLlmClient(@Qualifier("openAiWebClient") WebClient webClient) {
         this.webClient = webClient;
-        this.endpoint = endpoint;
     }
 
     @Override
@@ -44,7 +37,7 @@ public class OpenAiLlmClient implements LlmClient {
         ));
 
         String response = webClient.post()
-                .uri(endpoint)
+                .uri("/v1/chat/completions")
                 .header("Authorization", "Bearer " + apiKey)
                 .bodyValue(payload)
                 .retrieve()

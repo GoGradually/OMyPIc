@@ -3,6 +3,7 @@ package me.go_gradually.omypic.infrastructure.feedback.llm;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import me.go_gradually.omypic.application.feedback.port.LlmClient;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 
@@ -12,20 +13,11 @@ import java.util.Map;
 
 @Component
 public class GeminiLlmClient implements LlmClient {
-    private static final String DEFAULT_ENDPOINT_TEMPLATE =
-            "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s";
-
     private final WebClient webClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private final String endpointTemplate;
 
-    public GeminiLlmClient(WebClient webClient) {
-        this(webClient, DEFAULT_ENDPOINT_TEMPLATE);
-    }
-
-    GeminiLlmClient(WebClient webClient, String endpointTemplate) {
+    public GeminiLlmClient(@Qualifier("geminiWebClient") WebClient webClient) {
         this.webClient = webClient;
-        this.endpointTemplate = endpointTemplate;
     }
 
     @Override
@@ -44,7 +36,7 @@ public class GeminiLlmClient implements LlmClient {
         payload.put("generationConfig", Map.of("temperature", 0.2));
 
         String response = webClient.post()
-                .uri(String.format(endpointTemplate, model, apiKey))
+                .uri("/v1beta/models/" + model + ":generateContent?key=" + apiKey)
                 .bodyValue(payload)
                 .retrieve()
                 .bodyToMono(String.class)

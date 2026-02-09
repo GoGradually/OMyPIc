@@ -12,8 +12,22 @@ import java.time.Duration;
 
 @Configuration
 public class WebClientConfig {
-    @Bean
-    public WebClient webClient() {
+    @Bean("openAiWebClient")
+    public WebClient openAiWebClient(AppProperties properties) {
+        return createWebClient(properties.getIntegrations().getOpenai().getBaseUrl());
+    }
+
+    @Bean("geminiWebClient")
+    public WebClient geminiWebClient(AppProperties properties) {
+        return createWebClient(properties.getIntegrations().getGemini().getBaseUrl());
+    }
+
+    @Bean("anthropicWebClient")
+    public WebClient anthropicWebClient(AppProperties properties) {
+        return createWebClient(properties.getIntegrations().getAnthropic().getBaseUrl());
+    }
+
+    private WebClient createWebClient(String baseUrl) {
         ConnectionProvider provider = ConnectionProvider.builder("omypic-http")
                 .maxConnections(50)
                 .pendingAcquireTimeout(Duration.ofSeconds(30))
@@ -27,6 +41,7 @@ public class WebClientConfig {
                 .build();
 
         return WebClient.builder()
+                .baseUrl(baseUrl)
                 .clientConnector(new ReactorClientHttpConnector(httpClient))
                 .exchangeStrategies(strategies)
                 .build();
