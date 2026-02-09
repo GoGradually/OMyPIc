@@ -26,7 +26,7 @@ public class SttUseCase {
         int attempt = 0;
         Exception last = null;
         Instant start = Instant.now();
-        while (attempt <= sttPolicy.getRetryMax()) {
+        while (attempt <= sttPolicy.retryMax()) {
             try {
                 String text = sttGateway.transcribe(command.getFileBytes(), command.getModel(),
                         command.getApiKey(), command.isTranslate(), sttPolicy.getVadSettings());

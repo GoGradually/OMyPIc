@@ -5,7 +5,7 @@ import me.go_gradually.omypic.application.stt.model.VadSettings;
 public interface SttPolicy {
     long getMaxFileBytes();
 
-    int getRetryMax();
+    int retryMax();
 
     VadSettings getVadSettings();
 }
