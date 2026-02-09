@@ -1,0 +1,15 @@
+plugins {
+    id 'java'
+    id 'io.spring.dependency-management'
+}
+
+dependencyManagement {
+    imports {
+        mavenBom "org.springframework.boot:spring-boot-dependencies:3.3.2"
+    }
+}
+
+dependencies {
+    implementation project(':domain')
+    implementation 'com.fasterxml.jackson.core:jackson-databind'
+}
