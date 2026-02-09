@@ -1,6 +1,8 @@
 .idea
 frontend/node_modules
 frontend/dist
+frontend/.cache
+frontend/electron/resources
 backend/build
 backend/.gradle
 backend/out
