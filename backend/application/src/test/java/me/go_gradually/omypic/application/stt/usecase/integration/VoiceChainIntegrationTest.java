@@ -256,6 +256,10 @@ class VoiceChainIntegrationTest {
         }
 
         @Override
+        public void incrementSttRequest() {
+        }
+
+        @Override
         public void incrementSttError() {
             sttErrorCount += 1;
         }

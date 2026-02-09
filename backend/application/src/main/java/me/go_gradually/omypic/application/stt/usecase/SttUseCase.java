@@ -23,6 +23,7 @@ public class SttUseCase {
         if (command.getFileBytes() == null || command.getFileBytes().length > sttPolicy.getMaxFileBytes()) {
             throw new IllegalArgumentException("File too large");
         }
+        metrics.incrementSttRequest();
         int attempt = 0;
         Exception last = null;
         Instant start = Instant.now();

@@ -58,6 +58,7 @@ class SttUseCaseTest {
 
         assertEquals("final-text", result);
         verify(sttGateway, times(3)).transcribe(any(), eq("gpt-4o-mini-transcribe"), eq("key"), eq(false), eq(vadSettings));
+        verify(metrics).incrementSttRequest();
         verify(metrics).recordSttLatency(any());
         verify(metrics, never()).incrementSttError();
     }
@@ -70,6 +71,7 @@ class SttUseCaseTest {
         assertThrows(IllegalStateException.class, () -> useCase.transcribe(commandWithBytes(10)));
 
         verify(sttGateway, times(3)).transcribe(any(), anyString(), anyString(), anyBoolean(), eq(vadSettings));
+        verify(metrics).incrementSttRequest();
         verify(metrics, never()).recordSttLatency(any());
         verify(metrics).incrementSttError();
     }
@@ -85,6 +87,7 @@ class SttUseCaseTest {
         assertThrows(IllegalArgumentException.class, () -> useCase.transcribe(tooLarge));
 
         verify(sttGateway, never()).transcribe(any(), anyString(), anyString(), anyBoolean(), any());
+        verify(metrics, never()).incrementSttRequest();
     }
 
     @Test
@@ -98,6 +101,7 @@ class SttUseCaseTest {
         String result = useCase.transcribe(command);
 
         assertEquals("ok", result);
+        verify(metrics).incrementSttRequest();
         verify(sttGateway).transcribe(command.getFileBytes(), "whisper-1", "secret", true, vadSettings);
     }
 
@@ -110,6 +114,7 @@ class SttUseCaseTest {
         assertThrows(IllegalStateException.class, () -> useCase.transcribe(commandWithBytes(5)));
 
         verify(sttGateway, times(1)).transcribe(any(), anyString(), anyString(), anyBoolean(), eq(vadSettings));
+        verify(metrics).incrementSttRequest();
         verify(metrics).incrementSttError();
     }
 }
