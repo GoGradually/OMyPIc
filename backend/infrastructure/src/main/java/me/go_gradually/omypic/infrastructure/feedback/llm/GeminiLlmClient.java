@@ -12,11 +12,20 @@ import java.util.Map;
 
 @Component
 public class GeminiLlmClient implements LlmClient {
+    private static final String DEFAULT_ENDPOINT_TEMPLATE =
+            "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s";
+
     private final WebClient webClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final String endpointTemplate;
 
     public GeminiLlmClient(WebClient webClient) {
+        this(webClient, DEFAULT_ENDPOINT_TEMPLATE);
+    }
+
+    GeminiLlmClient(WebClient webClient, String endpointTemplate) {
         this.webClient = webClient;
+        this.endpointTemplate = endpointTemplate;
     }
 
     @Override
@@ -35,7 +44,7 @@ public class GeminiLlmClient implements LlmClient {
         payload.put("generationConfig", Map.of("temperature", 0.2));
 
         String response = webClient.post()
-                .uri("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + apiKey)
+                .uri(String.format(endpointTemplate, model, apiKey))
                 .bodyValue(payload)
                 .retrieve()
                 .bodyToMono(String.class)

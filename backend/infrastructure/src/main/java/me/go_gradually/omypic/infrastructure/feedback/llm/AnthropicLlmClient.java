@@ -12,11 +12,19 @@ import java.util.Map;
 
 @Component
 public class AnthropicLlmClient implements LlmClient {
+    private static final String DEFAULT_ENDPOINT = "https://api.anthropic.com/v1/messages";
+
     private final WebClient webClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final String endpoint;
 
     public AnthropicLlmClient(WebClient webClient) {
+        this(webClient, DEFAULT_ENDPOINT);
+    }
+
+    AnthropicLlmClient(WebClient webClient, String endpoint) {
         this.webClient = webClient;
+        this.endpoint = endpoint;
     }
 
     @Override
@@ -33,7 +41,7 @@ public class AnthropicLlmClient implements LlmClient {
         payload.put("messages", List.of(Map.of("role", "user", "content", userPrompt)));
 
         String response = webClient.post()
-                .uri("https://api.anthropic.com/v1/messages")
+                .uri(endpoint)
                 .header("x-api-key", apiKey)
                 .header("anthropic-version", "2023-06-01")
                 .bodyValue(payload)

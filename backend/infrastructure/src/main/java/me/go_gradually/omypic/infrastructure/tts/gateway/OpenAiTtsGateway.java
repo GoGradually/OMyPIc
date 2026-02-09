@@ -13,10 +13,18 @@ import java.util.Map;
 
 @Component
 public class OpenAiTtsGateway implements TtsGateway {
+    private static final String DEFAULT_ENDPOINT = "https://api.openai.com/v1/audio/speech";
+
     private final WebClient webClient;
+    private final String endpoint;
 
     public OpenAiTtsGateway(WebClient webClient) {
+        this(webClient, DEFAULT_ENDPOINT);
+    }
+
+    OpenAiTtsGateway(WebClient webClient, String endpoint) {
         this.webClient = webClient;
+        this.endpoint = endpoint;
     }
 
     @Override
@@ -30,7 +38,7 @@ public class OpenAiTtsGateway implements TtsGateway {
         );
 
         Flux<DataBuffer> data = webClient.post()
-                .uri("https://api.openai.com/v1/audio/speech")
+                .uri(endpoint)
                 .header("Authorization", "Bearer " + apiKey)
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.APPLICATION_OCTET_STREAM)
