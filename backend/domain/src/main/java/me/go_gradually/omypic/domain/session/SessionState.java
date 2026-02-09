@@ -19,6 +19,9 @@ public class SessionState {
     private int answeredSinceLastFeedback = 0;
     private FeedbackLanguage feedbackLanguage = FeedbackLanguage.of("ko");
     private MockExamState mockExamState;
+    private boolean mockExamCompleted = false;
+    private boolean mockFinalFeedbackGenerated = false;
+    private int mockExamStartSegmentIndex = 0;
 
     public SessionState(SessionId sessionId) {
         if (sessionId == null) {
@@ -44,11 +47,20 @@ public class SessionState {
     }
 
     public void applyModeUpdate(ModeType mode, Integer continuousBatchSize) {
+        ModeType previous = this.mode;
         if (mode != null) {
             this.mode = mode;
         }
         if (continuousBatchSize != null) {
             this.continuousBatchSize = Math.min(10, Math.max(1, continuousBatchSize));
+        }
+        if (previous != this.mode) {
+            this.answeredSinceLastFeedback = 0;
+            if (this.mode != ModeType.MOCK_EXAM) {
+                this.mockExamCompleted = false;
+                this.mockFinalFeedbackGenerated = false;
+                this.mockExamStartSegmentIndex = sttSegments.size();
+            }
         }
     }
 
@@ -67,11 +79,26 @@ public class SessionState {
         return true;
     }
 
+    public String resolveFeedbackInputText(String fallbackText) {
+        if (mode != ModeType.CONTINUOUS) {
+            return fallbackText == null ? "" : fallbackText;
+        }
+        List<String> list = new ArrayList<>(sttSegments);
+        if (list.isEmpty()) {
+            return fallbackText == null ? "" : fallbackText;
+        }
+        int from = Math.max(0, list.size() - continuousBatchSize);
+        return String.join("\n", list.subList(from, list.size()));
+    }
+
     public List<String> getSttSegments() {
         return List.copyOf(sttSegments);
     }
 
     public void appendSegment(String text) {
+        if (text == null || text.isBlank()) {
+            return;
+        }
         sttSegments.add(text);
     }
 
@@ -87,11 +114,22 @@ public class SessionState {
         return mockExamState;
     }
 
+    public boolean isMockExamCompleted() {
+        return mockExamCompleted;
+    }
+
+    public boolean isMockFinalFeedbackGenerated() {
+        return mockFinalFeedbackGenerated;
+    }
+
     public void configureMockExam(QuestionList list,
                                   List<String> groupOrder,
                                   Map<String, Integer> groupCounts) {
         if (list == null) {
             this.mockExamState = null;
+            this.mockExamCompleted = false;
+            this.mockFinalFeedbackGenerated = false;
+            this.mockExamStartSegmentIndex = sttSegments.size();
             return;
         }
         List<String> order = groupOrder == null ? List.of() : groupOrder;
@@ -107,6 +145,9 @@ public class SessionState {
             remaining.put(entry.getKey(), shuffled);
         }
         this.mockExamState = new MockExamState(order, counts, remaining);
+        this.mockExamCompleted = false;
+        this.mockFinalFeedbackGenerated = false;
+        this.mockExamStartSegmentIndex = sttSegments.size();
     }
 
     public Optional<QuestionItem> nextQuestion(QuestionList list) {
@@ -114,9 +155,34 @@ public class SessionState {
             return Optional.empty();
         }
         if (mode == ModeType.MOCK_EXAM) {
-            return nextMockExam(list);
+            Optional<QuestionItem> next = nextMockExam(list);
+            mockExamCompleted = next.isEmpty();
+            return next;
         }
         return nextSequential(list);
+    }
+
+    public String buildMockFinalFeedbackInput() {
+        if (!mockExamCompleted) {
+            throw new IllegalStateException("Mock exam is not completed");
+        }
+        List<String> all = new ArrayList<>(sttSegments);
+        int from = Math.max(0, Math.min(mockExamStartSegmentIndex, all.size()));
+        List<String> mockAnswers = all.subList(from, all.size());
+        if (mockAnswers.isEmpty()) {
+            throw new IllegalStateException("No answers available for mock final feedback");
+        }
+        return String.join("\n", mockAnswers);
+    }
+
+    public void markMockFinalFeedbackGenerated() {
+        if (!mockExamCompleted) {
+            throw new IllegalStateException("Mock exam is not completed");
+        }
+        if (mockFinalFeedbackGenerated) {
+            throw new IllegalStateException("Mock final feedback already generated");
+        }
+        mockFinalFeedbackGenerated = true;
     }
 
     private Optional<QuestionItem> nextSequential(QuestionList list) {

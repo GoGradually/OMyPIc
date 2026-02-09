@@ -29,6 +29,19 @@ class SessionStateTest {
     }
 
     @Test
+    void resolveFeedbackInputText_inContinuousMode_usesMostRecentNAnswers() {
+        SessionState state = new SessionState(SessionId.of("session-batch"));
+        state.applyModeUpdate(ModeType.CONTINUOUS, 2);
+        state.appendSegment("one");
+        state.appendSegment("two");
+        state.appendSegment("three");
+
+        String input = state.resolveFeedbackInputText("fallback");
+
+        assertEquals("two\nthree", input);
+    }
+
+    @Test
     void applyModeUpdate_clampsBatchSizeAndKeepsModeWhenNull() {
         SessionState state = new SessionState(SessionId.of("session-2"));
 
@@ -71,12 +84,59 @@ class SessionStateTest {
         assertEquals("A", first.orElseThrow().getGroup());
         assertEquals("A", second.orElseThrow().getGroup());
         assertEquals("B", third.orElseThrow().getGroup());
+        assertTrue(state.isMockExamCompleted());
 
         Set<QuestionItemId> uniqueIds = new HashSet<>();
         uniqueIds.add(first.orElseThrow().getId());
         uniqueIds.add(second.orElseThrow().getId());
         uniqueIds.add(third.orElseThrow().getId());
         assertEquals(3, uniqueIds.size());
+    }
+
+    @Test
+    void mockFinalFeedbackLifecycle_requiresCompletion_andAllowsSingleGeneration() {
+        QuestionList list = QuestionList.rehydrate(
+                QuestionListId.of("list-mock"),
+                "mock",
+                List.of(QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", "A")),
+                Instant.parse("2026-01-01T00:00:00Z"),
+                Instant.parse("2026-01-01T00:00:00Z")
+        );
+        SessionState state = new SessionState(SessionId.of("session-mock"));
+        state.applyModeUpdate(ModeType.MOCK_EXAM, null);
+        state.configureMockExam(list, List.of("A"), Map.of("A", 1));
+        state.appendSegment("answer one");
+
+        assertThrows(IllegalStateException.class, state::buildMockFinalFeedbackInput);
+
+        assertTrue(state.nextQuestion(list).isPresent());
+        assertTrue(state.nextQuestion(list).isEmpty());
+        assertTrue(state.isMockExamCompleted());
+
+        assertEquals("answer one", state.buildMockFinalFeedbackInput());
+        state.markMockFinalFeedbackGenerated();
+        assertTrue(state.isMockFinalFeedbackGenerated());
+        assertThrows(IllegalStateException.class, state::markMockFinalFeedbackGenerated);
+    }
+
+    @Test
+    void buildMockFinalFeedbackInput_usesOnlyAnswersAfterMockExamConfigured() {
+        QuestionList list = QuestionList.rehydrate(
+                QuestionListId.of("list-mock-2"),
+                "mock",
+                List.of(QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", "A")),
+                Instant.parse("2026-01-01T00:00:00Z"),
+                Instant.parse("2026-01-01T00:00:00Z")
+        );
+        SessionState state = new SessionState(SessionId.of("session-mock-2"));
+        state.appendSegment("old-answer");
+        state.applyModeUpdate(ModeType.MOCK_EXAM, null);
+        state.configureMockExam(list, List.of("A"), Map.of("A", 1));
+        state.appendSegment("mock-answer");
+        state.nextQuestion(list);
+        state.nextQuestion(list);
+
+        assertEquals("mock-answer", state.buildMockFinalFeedbackInput());
     }
 
     @Test
