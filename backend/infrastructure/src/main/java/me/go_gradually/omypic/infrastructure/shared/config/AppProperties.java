@@ -108,6 +108,11 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
     }
 
     @Override
+    public String realtimeConversationModel() {
+        return realtime.getConversationModel();
+    }
+
+    @Override
     public String realtimeSttModel() {
         return realtime.getSttModel();
     }
@@ -262,12 +267,21 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
     }
 
     public static class Realtime {
+        private String conversationModel = "gpt-realtime-mini";
         private String sttModel = "gpt-4o-mini-transcribe";
         private String feedbackProvider = "openai";
-        private String feedbackModel = "gpt-4o-mini";
+        private String feedbackModel = "gpt-realtime-mini";
         private String feedbackLanguage = "ko";
         private String ttsVoice = "alloy";
         private boolean restDisabled = true;
+
+        public String getConversationModel() {
+            return conversationModel;
+        }
+
+        public void setConversationModel(String conversationModel) {
+            this.conversationModel = conversationModel;
+        }
 
         public String getSttModel() {
             return sttModel;

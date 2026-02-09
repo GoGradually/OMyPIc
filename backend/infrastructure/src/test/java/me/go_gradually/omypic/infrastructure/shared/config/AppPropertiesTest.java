@@ -29,6 +29,7 @@ class AppPropertiesTest {
         properties.getIntegrations().getOpenai().setBaseUrl("http://openai.local");
         properties.getIntegrations().getGemini().setBaseUrl("http://gemini.local");
         properties.getIntegrations().getAnthropic().setBaseUrl("http://anthropic.local");
+        properties.getRealtime().setConversationModel("gpt-realtime");
         properties.getRealtime().setSttModel("gpt-4o-transcribe");
         properties.getRealtime().setFeedbackProvider("gemini");
         properties.getRealtime().setFeedbackModel("gemini-2.0-flash");
@@ -52,6 +53,7 @@ class AppPropertiesTest {
         assertEquals("http://openai.local", properties.getIntegrations().getOpenai().getBaseUrl());
         assertEquals("http://gemini.local", properties.getIntegrations().getGemini().getBaseUrl());
         assertEquals("http://anthropic.local", properties.getIntegrations().getAnthropic().getBaseUrl());
+        assertEquals("gpt-realtime", properties.realtimeConversationModel());
         assertEquals("gpt-4o-transcribe", properties.realtimeSttModel());
         assertEquals("gemini", properties.realtimeFeedbackProvider());
         assertEquals("gemini-2.0-flash", properties.realtimeFeedbackModel());
