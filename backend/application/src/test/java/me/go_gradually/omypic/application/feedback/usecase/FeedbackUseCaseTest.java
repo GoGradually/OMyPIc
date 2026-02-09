@@ -1,0 +1,163 @@
+package me.go_gradually.omypic.application.feedback.usecase;
+
+import me.go_gradually.omypic.application.feedback.model.FeedbackCommand;
+import me.go_gradually.omypic.application.feedback.model.FeedbackResult;
+import me.go_gradually.omypic.application.feedback.policy.FeedbackPolicy;
+import me.go_gradually.omypic.application.feedback.port.LlmClient;
+import me.go_gradually.omypic.application.rulebook.usecase.RulebookUseCase;
+import me.go_gradually.omypic.application.session.port.SessionStorePort;
+import me.go_gradually.omypic.application.shared.port.MetricsPort;
+import me.go_gradually.omypic.application.wrongnote.usecase.WrongNoteUseCase;
+import me.go_gradually.omypic.domain.feedback.Feedback;
+import me.go_gradually.omypic.domain.rulebook.RulebookContext;
+import me.go_gradually.omypic.domain.rulebook.RulebookId;
+import me.go_gradually.omypic.domain.session.ModeType;
+import me.go_gradually.omypic.domain.session.SessionId;
+import me.go_gradually.omypic.domain.session.SessionState;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class FeedbackUseCaseTest {
+
+    @Mock
+    private LlmClient openAiClient;
+    @Mock
+    private RulebookUseCase rulebookUseCase;
+    @Mock
+    private FeedbackPolicy feedbackPolicy;
+    @Mock
+    private MetricsPort metrics;
+    @Mock
+    private SessionStorePort sessionStore;
+    @Mock
+    private WrongNoteUseCase wrongNoteUseCase;
+
+    private FeedbackUseCase useCase;
+
+    private static FeedbackCommand command(String sessionId, String provider, String language, String text) {
+        FeedbackCommand command = new FeedbackCommand();
+        command.setSessionId(sessionId);
+        command.setProvider(provider);
+        command.setModel("model");
+        command.setFeedbackLanguage(language);
+        command.setText(text);
+        return command;
+    }
+
+    @BeforeEach
+    void setUp() {
+        lenient().when(openAiClient.provider()).thenReturn("openai");
+        lenient().when(feedbackPolicy.getSummaryMaxChars()).thenReturn(255);
+        lenient().when(feedbackPolicy.getExampleMinRatio()).thenReturn(0.8);
+        lenient().when(feedbackPolicy.getExampleMaxRatio()).thenReturn(1.2);
+        useCase = new FeedbackUseCase(
+                List.of(openAiClient),
+                rulebookUseCase,
+                feedbackPolicy,
+                metrics,
+                sessionStore,
+                wrongNoteUseCase
+        );
+    }
+
+    @Test
+    void generateFeedback_skipsInMockExamMode_withoutCallingLlm() throws Exception {
+        SessionState state = new SessionState(SessionId.of("s1"));
+        state.applyModeUpdate(ModeType.MOCK_EXAM, null);
+        when(sessionStore.getOrCreate(SessionId.of("s1"))).thenReturn(state);
+
+        FeedbackResult result = useCase.generateFeedback("key", command("s1", "openai", "en", "hello"));
+
+        assertFalse(result.isGenerated());
+        verify(openAiClient, never()).generate(anyString(), anyString(), anyString(), anyString());
+        verify(wrongNoteUseCase, never()).addFeedback(any());
+    }
+
+    @Test
+    void generateFeedback_normalizesRequiredFields_andRecordsMetrics() throws Exception {
+        SessionState state = new SessionState(SessionId.of("s2"));
+        when(sessionStore.getOrCreate(SessionId.of("s2"))).thenReturn(state);
+        when(rulebookUseCase.searchContexts("This is my answer."))
+                .thenReturn(List.of(RulebookContext.of(RulebookId.of("r1"), "rulebook.md", "always include evidence")));
+        when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn("```json\n{\"summary\":\"summary\",\"correctionPoints\":[\"Grammar: tense\"],\"exampleAnswer\":\"tiny\",\"rulebookEvidence\":[]}\n```");
+
+        FeedbackResult result = useCase.generateFeedback("key", command("s2", "OpenAI", "en", "This is my answer."));
+
+        assertTrue(result.isGenerated());
+        Feedback feedback = result.getFeedback();
+        assertEquals(3, feedback.getCorrectionPoints().size());
+        assertEquals(1, feedback.getRulebookEvidence().size());
+        assertTrue(feedback.getRulebookEvidence().get(0).startsWith("[rulebook.md]"));
+        assertTrue(feedback.getExampleAnswer().contains("Also, consider adding one more detail."));
+        assertEquals("en", state.getFeedbackLanguage().value());
+        verify(metrics).recordFeedbackLatency(any());
+        verify(metrics, never()).incrementFeedbackError();
+        verify(wrongNoteUseCase).addFeedback(any(Feedback.class));
+    }
+
+    @Test
+    void generateFeedback_usesDefaultKoreanLanguage_whenCommandLanguageIsNull() throws Exception {
+        SessionState state = new SessionState(SessionId.of("s3"));
+        when(sessionStore.getOrCreate(SessionId.of("s3"))).thenReturn(state);
+        when(rulebookUseCase.searchContexts(anyString())).thenReturn(List.of());
+        when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn("{\"summary\":\"요약\",\"correctionPoints\":[\"Grammar\",\"Expression\",\"Logic\"],\"exampleAnswer\":\"예시 답변입니다\",\"rulebookEvidence\":[]}");
+
+        FeedbackCommand command = command("s3", "openai", null, "짧은 답변");
+        FeedbackResult result = useCase.generateFeedback("key", command);
+
+        assertTrue(result.isGenerated());
+        assertEquals("ko", state.getFeedbackLanguage().value());
+    }
+
+    @Test
+    void generateFeedback_clearsEvidenceWhenNoRulebookContext() throws Exception {
+        SessionState state = new SessionState(SessionId.of("s4"));
+        when(sessionStore.getOrCreate(SessionId.of("s4"))).thenReturn(state);
+        when(rulebookUseCase.searchContexts(anyString())).thenReturn(List.of());
+        when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn("{\"summary\":\"s\",\"correctionPoints\":[\"Grammar\",\"Expression\",\"Logic\"],\"exampleAnswer\":\"123456789\",\"rulebookEvidence\":[\"should be removed\"]}");
+
+        FeedbackResult result = useCase.generateFeedback("key", command("s4", "openai", "ko", "123456789"));
+
+        assertTrue(result.getFeedback().getRulebookEvidence().isEmpty());
+    }
+
+    @Test
+    void generateFeedback_throwsAndIncrementsError_whenJsonIsMalformed() throws Exception {
+        SessionState state = new SessionState(SessionId.of("s5"));
+        when(sessionStore.getOrCreate(SessionId.of("s5"))).thenReturn(state);
+        when(rulebookUseCase.searchContexts(anyString())).thenReturn(List.of());
+        when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn("not-json");
+
+        assertThrows(IllegalStateException.class,
+                () -> useCase.generateFeedback("key", command("s5", "openai", "ko", "답변")));
+
+        verify(metrics).incrementFeedbackError();
+        verify(wrongNoteUseCase, never()).addFeedback(any());
+    }
+
+    @Test
+    void generateFeedback_throwsForUnknownProvider_withoutIncrementingErrorMetric() {
+        SessionState state = new SessionState(SessionId.of("s6"));
+        when(sessionStore.getOrCreate(SessionId.of("s6"))).thenReturn(state);
+
+        assertThrows(IllegalArgumentException.class,
+                () -> useCase.generateFeedback("key", command("s6", "claude", "ko", "답변")));
+
+        verify(metrics, never()).incrementFeedbackError();
+    }
+}
