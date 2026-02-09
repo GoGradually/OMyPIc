@@ -52,13 +52,38 @@ public class FeedbackUseCase {
         if (!state.shouldGenerateFeedback()) {
             return FeedbackResult.skipped();
         }
+        String inputText = state.resolveFeedbackInputText(command.getText());
+        return generateFeedbackInternal(apiKey, command, language, inputText);
+    }
 
+    public FeedbackResult generateMockExamFinalFeedback(String apiKey, FeedbackCommand command) {
+        SessionState state = sessionStore.getOrCreate(SessionId.of(command.getSessionId()));
+        FeedbackLanguage language = FeedbackLanguage.of(command.getFeedbackLanguage());
+        state.setFeedbackLanguage(language);
+        if (!state.isMockExamCompleted()) {
+            throw new IllegalStateException("Mock exam is not completed");
+        }
+        if (state.isMockFinalFeedbackGenerated()) {
+            throw new IllegalStateException("Mock final feedback already generated");
+        }
+        String inputText = state.buildMockFinalFeedbackInput();
+        FeedbackResult result = generateFeedbackInternal(apiKey, command, language, inputText);
+        state.markMockFinalFeedbackGenerated();
+        return result;
+    }
+
+    private FeedbackResult generateFeedbackInternal(String apiKey,
+                                                    FeedbackCommand command,
+                                                    FeedbackLanguage language,
+                                                    String inputText) {
+        String text = inputText == null ? "" : inputText;
         Instant start = Instant.now();
-        List<RulebookContext> contexts = rulebookUseCase.searchContexts(command.getText());
+        List<RulebookContext> contexts = rulebookUseCase.searchContexts(text);
         String systemPrompt = buildSystemPrompt(language.value(), contexts);
-        String userPrompt = buildUserPrompt(command.getText(), language.value());
+        String userPrompt = buildUserPrompt(text, language.value());
 
-        LlmClient client = Optional.ofNullable(clients.get(command.getProvider().toLowerCase(Locale.ROOT)))
+        String provider = command.getProvider() == null ? "" : command.getProvider().toLowerCase(Locale.ROOT);
+        LlmClient client = Optional.ofNullable(clients.get(provider))
                 .orElseThrow(() -> new IllegalArgumentException("Unknown provider"));
 
         try {
@@ -69,7 +94,7 @@ public class FeedbackUseCase {
                     feedbackPolicy.getExampleMinRatio(),
                     feedbackPolicy.getExampleMaxRatio()
             );
-            feedback = feedback.normalized(constraints, command.getText(), language, contexts);
+            feedback = feedback.normalized(constraints, text, language, contexts);
             metrics.recordFeedbackLatency(Duration.between(start, Instant.now()));
             wrongNoteUseCase.addFeedback(feedback);
             return FeedbackResult.generated(feedback);

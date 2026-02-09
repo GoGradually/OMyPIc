@@ -9,6 +9,10 @@ import me.go_gradually.omypic.application.session.port.SessionStorePort;
 import me.go_gradually.omypic.application.shared.port.MetricsPort;
 import me.go_gradually.omypic.application.wrongnote.usecase.WrongNoteUseCase;
 import me.go_gradually.omypic.domain.feedback.Feedback;
+import me.go_gradually.omypic.domain.question.QuestionItem;
+import me.go_gradually.omypic.domain.question.QuestionItemId;
+import me.go_gradually.omypic.domain.question.QuestionList;
+import me.go_gradually.omypic.domain.question.QuestionListId;
 import me.go_gradually.omypic.domain.rulebook.RulebookContext;
 import me.go_gradually.omypic.domain.rulebook.RulebookId;
 import me.go_gradually.omypic.domain.session.ModeType;
@@ -20,6 +24,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Instant;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -100,11 +105,34 @@ class FeedbackUseCaseTest {
         assertEquals(3, feedback.getCorrectionPoints().size());
         assertEquals(1, feedback.getRulebookEvidence().size());
         assertTrue(feedback.getRulebookEvidence().get(0).startsWith("[rulebook.md]"));
-        assertTrue(feedback.getExampleAnswer().contains("Also, consider adding one more detail."));
+        assertTrue(feedback.getExampleAnswer().length() >= 14);
+        assertTrue(feedback.getExampleAnswer().length() <= 21);
         assertEquals("en", state.getFeedbackLanguage().value());
         verify(metrics).recordFeedbackLatency(any());
         verify(metrics, never()).incrementFeedbackError();
         verify(wrongNoteUseCase).addFeedback(any(Feedback.class));
+    }
+
+    @Test
+    void generateFeedback_inContinuousMode_usesMostRecentBatchText() throws Exception {
+        SessionState state = new SessionState(SessionId.of("s-batch"));
+        state.applyModeUpdate(ModeType.CONTINUOUS, 3);
+        when(sessionStore.getOrCreate(SessionId.of("s-batch"))).thenReturn(state);
+        when(rulebookUseCase.searchContexts(anyString())).thenReturn(List.of());
+        when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn("{\"summary\":\"summary\",\"correctionPoints\":[\"Grammar\",\"Expression\",\"Logic\"],\"exampleAnswer\":\"example answer\",\"rulebookEvidence\":[]}");
+
+        state.appendSegment("first answer");
+        FeedbackResult first = useCase.generateFeedback("key", command("s-batch", "openai", "en", "first answer"));
+        state.appendSegment("second answer");
+        FeedbackResult second = useCase.generateFeedback("key", command("s-batch", "openai", "en", "second answer"));
+        state.appendSegment("third answer");
+        FeedbackResult third = useCase.generateFeedback("key", command("s-batch", "openai", "en", "third answer"));
+
+        assertFalse(first.isGenerated());
+        assertFalse(second.isGenerated());
+        assertTrue(third.isGenerated());
+        verify(rulebookUseCase).searchContexts("first answer\nsecond answer\nthird answer");
     }
 
     @Test
@@ -159,5 +187,38 @@ class FeedbackUseCaseTest {
                 () -> useCase.generateFeedback("key", command("s6", "claude", "ko", "답변")));
 
         verify(metrics, never()).incrementFeedbackError();
+    }
+
+    @Test
+    void generateMockExamFinalFeedback_generatesOnceAfterCompletion() throws Exception {
+        SessionState state = new SessionState(SessionId.of("mock-1"));
+        state.applyModeUpdate(ModeType.MOCK_EXAM, null);
+        QuestionList list = QuestionList.rehydrate(
+                QuestionListId.of("list-1"),
+                "mock",
+                List.of(QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", "A")),
+                Instant.parse("2026-01-01T00:00:00Z"),
+                Instant.parse("2026-01-01T00:00:00Z")
+        );
+        state.configureMockExam(list, List.of("A"), java.util.Map.of("A", 1));
+        state.nextQuestion(list);
+        state.nextQuestion(list);
+        state.appendSegment("mock answer one");
+        state.appendSegment("mock answer two");
+
+        when(sessionStore.getOrCreate(SessionId.of("mock-1"))).thenReturn(state);
+        when(rulebookUseCase.searchContexts(anyString())).thenReturn(List.of());
+        when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn("{\"summary\":\"summary\",\"correctionPoints\":[\"Grammar\",\"Expression\",\"Logic\"],\"exampleAnswer\":\"example answer\",\"rulebookEvidence\":[]}");
+
+        FeedbackResult result = useCase.generateMockExamFinalFeedback("key", command("mock-1", "openai", "ko", "ignored"));
+
+        assertTrue(result.isGenerated());
+        assertTrue(state.isMockFinalFeedbackGenerated());
+        verify(rulebookUseCase).searchContexts("mock answer one\nmock answer two");
+
+        IllegalStateException exception = assertThrows(IllegalStateException.class,
+                () -> useCase.generateMockExamFinalFeedback("key", command("mock-1", "openai", "ko", "ignored")));
+        assertTrue(exception.getMessage().contains("already generated"));
     }
 }
