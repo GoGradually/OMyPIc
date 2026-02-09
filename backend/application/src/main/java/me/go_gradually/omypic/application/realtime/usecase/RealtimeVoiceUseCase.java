@@ -60,11 +60,15 @@ public class RealtimeVoiceUseCase {
         }
 
         sessionUseCase.getOrCreate(command.getSessionId());
-        RuntimeSettings settings = RuntimeSettings.defaults(realtimePolicy);
+        RuntimeSettings defaults = RuntimeSettings.defaults(realtimePolicy);
+        RuntimeSettings settings = defaults.withRealtimeModels(
+                firstNonBlank(command.getConversationModel(), defaults.conversationModel()),
+                firstNonBlank(command.getSttModel(), defaults.sttModel())
+        );
         RuntimeContext context = new RuntimeContext(command.getSessionId(), command.getApiKey(), sink, settings);
 
         RealtimeAudioSession realtimeAudioSession = realtimeAudioGateway.open(
-                new RealtimeAudioOpenCommand(command.getApiKey(), realtimePolicy.realtimeSttModel()),
+                new RealtimeAudioOpenCommand(command.getApiKey(), settings.conversationModel(), settings.sttModel()),
                 new RealtimeAudioEventListener() {
                     @Override
                     public void onPartialTranscript(String delta) {
@@ -192,29 +196,46 @@ public class RealtimeVoiceUseCase {
         return isBlank(message) ? "Unknown realtime error" : message;
     }
 
-    private record RuntimeSettings(String feedbackProvider, String feedbackModel, String feedbackApiKey,
+    private record RuntimeSettings(String conversationModel, String sttModel,
+                                   String feedbackProvider, String feedbackModel, String feedbackApiKey,
                                    String feedbackLanguage, String ttsVoice) {
 
         private static RuntimeSettings defaults(RealtimePolicy policy) {
-                return new RuntimeSettings(
-                        policy.realtimeFeedbackProvider(),
-                        policy.realtimeFeedbackModel(),
-                        null,
-                        policy.realtimeFeedbackLanguage(),
-                        policy.realtimeTtsVoice()
-                );
-            }
-
-            private RuntimeSettings apply(RealtimeSessionUpdateCommand command) {
-                return new RuntimeSettings(
-                        firstNonBlank(command.getFeedbackProvider(), feedbackProvider),
-                        firstNonBlank(command.getFeedbackModel(), feedbackModel),
-                        firstNonBlank(command.getFeedbackApiKey(), feedbackApiKey),
-                        firstNonBlank(command.getFeedbackLanguage(), feedbackLanguage),
-                        firstNonBlank(command.getTtsVoice(), ttsVoice)
-                );
-            }
+            return new RuntimeSettings(
+                    policy.realtimeConversationModel(),
+                    policy.realtimeSttModel(),
+                    policy.realtimeFeedbackProvider(),
+                    policy.realtimeFeedbackModel(),
+                    null,
+                    policy.realtimeFeedbackLanguage(),
+                    policy.realtimeTtsVoice()
+            );
         }
+
+        private RuntimeSettings apply(RealtimeSessionUpdateCommand command) {
+            return new RuntimeSettings(
+                    firstNonBlank(command.getConversationModel(), conversationModel),
+                    firstNonBlank(command.getSttModel(), sttModel),
+                    firstNonBlank(command.getFeedbackProvider(), feedbackProvider),
+                    firstNonBlank(command.getFeedbackModel(), feedbackModel),
+                    firstNonBlank(command.getFeedbackApiKey(), feedbackApiKey),
+                    firstNonBlank(command.getFeedbackLanguage(), feedbackLanguage),
+                    firstNonBlank(command.getTtsVoice(), ttsVoice)
+            );
+        }
+
+        private RuntimeSettings withRealtimeModels(String conversationModel, String sttModel) {
+            return new RuntimeSettings(
+                    conversationModel,
+                    sttModel,
+                    feedbackProvider,
+                    feedbackModel,
+                    feedbackApiKey,
+                    feedbackLanguage,
+                    ttsVoice
+            );
+        }
+    }
 
     private static final class RuntimeContext implements RealtimeVoiceSession {
         private final String sessionId;
@@ -275,6 +296,8 @@ public class RealtimeVoiceUseCase {
             settings = settings.apply(command);
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("sessionId", sessionId);
+            payload.put("conversationModel", settings.conversationModel);
+            payload.put("sttModel", settings.sttModel);
             payload.put("feedbackProvider", settings.feedbackProvider);
             payload.put("feedbackModel", settings.feedbackModel);
             payload.put("feedbackLanguage", settings.feedbackLanguage);
