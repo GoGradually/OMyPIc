@@ -24,8 +24,6 @@ import me.go_gradually.omypic.application.stt.port.SttGateway;
 import me.go_gradually.omypic.application.stt.port.SttJobStorePort;
 import me.go_gradually.omypic.application.stt.usecase.SttJobUseCase;
 import me.go_gradually.omypic.application.stt.usecase.SttUseCase;
-import me.go_gradually.omypic.application.tts.port.TtsGateway;
-import me.go_gradually.omypic.application.tts.usecase.TtsUseCase;
 import me.go_gradually.omypic.application.wrongnote.port.WrongNotePort;
 import me.go_gradually.omypic.application.wrongnote.port.WrongNoteRecentQueuePort;
 import me.go_gradually.omypic.application.wrongnote.usecase.WrongNoteUseCase;
@@ -103,24 +101,18 @@ public class UseCaseConfig {
     }
 
     @Bean
-    public TtsUseCase ttsUseCase(TtsGateway ttsGateway,
-                                 MetricsPort metricsPort) {
-        return new TtsUseCase(ttsGateway, metricsPort);
-    }
-
-    @Bean
     public RealtimeVoiceUseCase realtimeVoiceUseCase(RealtimeAudioGateway realtimeAudioGateway,
                                                      FeedbackUseCase feedbackUseCase,
-                                                     TtsUseCase ttsUseCase,
                                                      SessionUseCase sessionUseCase,
+                                                     QuestionUseCase questionUseCase,
                                                      AsyncExecutor asyncExecutor,
                                                      RealtimePolicy realtimePolicy,
                                                      MetricsPort metricsPort) {
         return new RealtimeVoiceUseCase(
                 realtimeAudioGateway,
                 feedbackUseCase,
-                ttsUseCase,
                 sessionUseCase,
+                questionUseCase,
                 asyncExecutor,
                 realtimePolicy,
                 metricsPort
