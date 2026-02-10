@@ -175,6 +175,14 @@ public class SessionState {
         return nextSequential(list);
     }
 
+    public void resetQuestionProgress(String listId) {
+        if (listId == null || listId.isBlank()) {
+            return;
+        }
+        listIndices.put(QuestionListId.of(listId), 0);
+        answeredSinceLastFeedback = 0;
+    }
+
     public String buildMockFinalFeedbackInput() {
         if (!mockExamCompleted) {
             throw new IllegalStateException("Mock exam is not completed");
@@ -205,7 +213,7 @@ public class SessionState {
         }
         int index = listIndices.getOrDefault(list.getId(), 0);
         if (index >= questions.size()) {
-            index = 0;
+            return Optional.empty();
         }
         QuestionItem item = questions.get(index);
         listIndices.put(list.getId(), index + 1);
