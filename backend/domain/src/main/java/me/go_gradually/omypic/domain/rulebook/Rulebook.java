@@ -6,29 +6,47 @@ public class Rulebook {
     private final RulebookId id;
     private final String filename;
     private final String path;
+    private final RulebookScope scope;
+    private final String questionGroup;
     private boolean enabled;
     private final Instant createdAt;
     private Instant updatedAt;
 
-    private Rulebook(RulebookId id, String filename, String path, boolean enabled, Instant createdAt, Instant updatedAt) {
+    private Rulebook(RulebookId id,
+                     String filename,
+                     String path,
+                     RulebookScope scope,
+                     String questionGroup,
+                     boolean enabled,
+                     Instant createdAt,
+                     Instant updatedAt) {
         if (id == null) {
             throw new IllegalArgumentException("Rulebook id is required");
         }
         this.id = id;
         this.filename = filename == null ? "" : filename;
         this.path = path == null ? "" : path;
+        this.scope = scope == null ? RulebookScope.MAIN : scope;
+        this.questionGroup = questionGroup == null ? "" : questionGroup.trim();
         this.enabled = enabled;
         this.createdAt = createdAt == null ? Instant.now() : createdAt;
         this.updatedAt = updatedAt == null ? this.createdAt : updatedAt;
     }
 
-    public static Rulebook create(String filename, String path, Instant now) {
+    public static Rulebook create(String filename, String path, RulebookScope scope, String questionGroup, Instant now) {
         Instant timestamp = now == null ? Instant.now() : now;
-        return new Rulebook(RulebookId.newId(), filename, path, true, timestamp, timestamp);
+        return new Rulebook(RulebookId.newId(), filename, path, scope, questionGroup, true, timestamp, timestamp);
     }
 
-    public static Rulebook rehydrate(RulebookId id, String filename, String path, boolean enabled, Instant createdAt, Instant updatedAt) {
-        return new Rulebook(id, filename, path, enabled, createdAt, updatedAt);
+    public static Rulebook rehydrate(RulebookId id,
+                                     String filename,
+                                     String path,
+                                     RulebookScope scope,
+                                     String questionGroup,
+                                     boolean enabled,
+                                     Instant createdAt,
+                                     Instant updatedAt) {
+        return new Rulebook(id, filename, path, scope, questionGroup, enabled, createdAt, updatedAt);
     }
 
     public void toggle(boolean enabled, Instant now) {
@@ -50,6 +68,14 @@ public class Rulebook {
 
     public String getPath() {
         return path;
+    }
+
+    public RulebookScope getScope() {
+        return scope;
+    }
+
+    public String getQuestionGroup() {
+        return questionGroup;
     }
 
     public boolean isEnabled() {
