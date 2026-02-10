@@ -14,6 +14,7 @@ public class SessionState {
     private final SessionId sessionId;
     private final Deque<String> sttSegments = new ArrayDeque<>();
     private final Map<QuestionListId, Integer> listIndices = new ConcurrentHashMap<>();
+    private QuestionListId activeQuestionListId;
     private ModeType mode = ModeType.IMMEDIATE;
     private int continuousBatchSize = 3;
     private int answeredSinceLastFeedback = 0;
@@ -44,6 +45,18 @@ public class SessionState {
 
     public int getAnsweredSinceLastFeedback() {
         return answeredSinceLastFeedback;
+    }
+
+    public String getActiveQuestionListId() {
+        return activeQuestionListId == null ? null : activeQuestionListId.value();
+    }
+
+    public void setActiveQuestionListId(String listId) {
+        if (listId == null || listId.isBlank()) {
+            this.activeQuestionListId = null;
+            return;
+        }
+        this.activeQuestionListId = QuestionListId.of(listId);
     }
 
     public void applyModeUpdate(ModeType mode, Integer continuousBatchSize) {
