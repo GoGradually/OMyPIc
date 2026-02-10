@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest'
-import {float32ToInt16, fromBase64, mergeAudioChunks, toBase64} from './audioCodec.js'
+import {float32ToInt16, fromBase64, mergeAudioChunks, pcm16ToWav, toBase64} from './audioCodec.js'
 
 describe('audioCodec', () => {
     it('converts float32 PCM to int16 with clamping', () => {
@@ -24,5 +24,15 @@ describe('audioCodec', () => {
         const merged = mergeAudioChunks([toBase64(chunkA), toBase64(chunkB)])
 
         expect(Array.from(merged)).toEqual([1, 2, 3, 4, 5])
+    })
+
+    it('wraps pcm16 bytes as wav', () => {
+        const pcm = new Uint8Array([0x01, 0x00, 0x02, 0x00])
+        const wav = pcm16ToWav(pcm, 24000, 1)
+
+        expect(wav.length).toBe(48)
+        expect(Array.from(wav.slice(0, 4))).toEqual([0x52, 0x49, 0x46, 0x46])
+        expect(Array.from(wav.slice(8, 12))).toEqual([0x57, 0x41, 0x56, 0x45])
+        expect(Array.from(wav.slice(44))).toEqual(Array.from(pcm))
     })
 })

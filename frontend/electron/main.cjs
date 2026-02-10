@@ -311,10 +311,12 @@ ipcMain.handle('realtime-connect', async (event, payload) => {
         })
 
         socket.on('close', (code, reason) => {
-            sendEvent('close', {code, reason: reason?.toString() || ''})
+            const closeReason = reason?.toString() || ''
+            sendEvent('close', {code, reason: closeReason})
             realtimeSockets.delete(socketId)
             if (!resolved) {
-                reject(new Error(`Socket closed before open: ${code}`))
+                const suffix = closeReason ? ` (${closeReason})` : ''
+                reject(new Error(`Socket closed before open: ${code}${suffix}`))
             }
         })
     })
@@ -325,7 +327,7 @@ ipcMain.handle('realtime-send', async (event, payload) => {
     const message = payload?.message
     const socket = realtimeSockets.get(socketId)
     if (!socket || socket.readyState !== WebSocket.OPEN) {
-        throw new Error('Realtime socket is not open')
+        return false
     }
     socket.send(message)
     return true

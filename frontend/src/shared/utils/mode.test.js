@@ -31,7 +31,7 @@ describe('mode utils', () => {
     })
 
     it('builds default question label for empty question', () => {
-        expect(getCurrentQuestionLabel(null)).toBe('아직 선택된 질문이 없습니다. “다음 질문”을 눌러 시작하세요.')
+        expect(getCurrentQuestionLabel(null)).toBe('세션 시작을 누르면 첫 질문이 자동으로 제시됩니다.')
     })
 
     it('returns completion question label in mock exam', () => {

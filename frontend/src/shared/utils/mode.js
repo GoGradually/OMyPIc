@@ -19,7 +19,7 @@ export function buildModePayload({sessionId, listId, mode, batchSize, mockOrder,
 
 export function getCurrentQuestionLabel(currentQuestion) {
     if (!currentQuestion) {
-        return '아직 선택된 질문이 없습니다. “다음 질문”을 눌러 시작하세요.'
+        return '세션 시작을 누르면 첫 질문이 자동으로 제시됩니다.'
     }
     if (currentQuestion.mockExamCompleted) {
         return '모든 모의고사 질문을 완료했습니다.'

@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useRef, useState} from 'react'
 import {closeRealtime, connectRealtime, getApiKey, sendRealtime, subscribeRealtime} from '../../../shared/api/http.js'
-import {float32ToInt16, mergeAudioChunks, toBase64} from '../../../shared/utils/audioCodec.js'
+import {float32ToInt16, mergeAudioChunks, pcm16ToWav, toBase64} from '../../../shared/utils/audioCodec.js'
 import {buildFeedbackFromRealtime, parseRealtimeEnvelope} from '../utils/realtimeEvent.js'
 
 const INITIAL_AUDIO_DEVICE_STATUS = {
@@ -10,6 +10,7 @@ const INITIAL_AUDIO_DEVICE_STATUS = {
     liveInput: false,
     lastCheckedAt: ''
 }
+const AUDIO_PROCESS_BUFFER_SIZE = 2048
 
 function getCurrentTimeLabel() {
     return new Date().toLocaleTimeString('ko-KR', {hour12: false})
@@ -25,9 +26,11 @@ export function useRealtimeSession({
                                        voice,
                                        onStatus,
                                        onFeedback,
-                                       refreshWrongNotes
+                                       refreshWrongNotes,
+                                       onQuestionPrompt
                                    }) {
-    const [recording, setRecording] = useState(false)
+    const [sessionActive, setSessionActive] = useState(false)
+    const [sessionPhase, setSessionPhase] = useState('IDLE')
     const [realtimeConnected, setRealtimeConnected] = useState(false)
     const [partialTranscript, setPartialTranscript] = useState('')
     const [transcript, setTranscript] = useState('')
@@ -38,6 +41,7 @@ export function useRealtimeSession({
     const statusRef = useRef(onStatus)
     const feedbackRef = useRef(onFeedback)
     const refreshWrongNotesRef = useRef(refreshWrongNotes)
+    const questionPromptRef = useRef(onQuestionPrompt)
 
     const settingsRef = useRef({
         provider,
@@ -52,12 +56,15 @@ export function useRealtimeSession({
     const connectedRealtimeModelsRef = useRef({conversationModel: '', sttModel: ''})
     const ttsChunksRef = useRef(new Map())
 
-    const recordingRef = useRef(false)
+    const sessionActiveRef = useRef(false)
+    const ignoreIncomingRef = useRef(false)
+    const localStopRef = useRef(false)
+    const sessionPhaseRef = useRef('IDLE')
+
     const streamRef = useRef(null)
     const audioContextRef = useRef(null)
     const sourceNodeRef = useRef(null)
     const processorRef = useRef(null)
-    const recordingTimeoutRef = useRef(null)
 
     useEffect(() => {
         statusRef.current = onStatus
@@ -72,6 +79,10 @@ export function useRealtimeSession({
     }, [refreshWrongNotes])
 
     useEffect(() => {
+        questionPromptRef.current = onQuestionPrompt
+    }, [onQuestionPrompt])
+
+    useEffect(() => {
         settingsRef.current = {
             provider,
             feedbackModel,
@@ -81,6 +92,10 @@ export function useRealtimeSession({
             voice
         }
     }, [provider, feedbackModel, realtimeConversationModel, realtimeSttModel, feedbackLang, voice])
+
+    useEffect(() => {
+        sessionPhaseRef.current = sessionPhase
+    }, [sessionPhase])
 
     const setStatus = useCallback((message) => {
         if (statusRef.current) {
@@ -95,8 +110,12 @@ export function useRealtimeSession({
         }
         ttsChunksRef.current.delete(turnId)
 
-        const merged = mergeAudioChunks(chunks)
-        const audioBlob = new Blob([merged], {type: 'audio/mpeg'})
+        const mergedPcm = mergeAudioChunks(chunks)
+        if (!mergedPcm.length) {
+            return
+        }
+        const wavBytes = pcm16ToWav(mergedPcm, 24000, 1)
+        const audioBlob = new Blob([wavBytes], {type: 'audio/wav'})
         const url = URL.createObjectURL(audioBlob)
         const audio = new Audio(url)
         audio.play().catch(() => {
@@ -110,12 +129,21 @@ export function useRealtimeSession({
         const desiredConversationModel = settingsRef.current.realtimeConversationModel
         const desiredSttModel = settingsRef.current.realtimeSttModel
 
-        if (
-            existingSocketId &&
-            connectedModels.conversationModel === desiredConversationModel &&
-            connectedModels.sttModel === desiredSttModel
-        ) {
-            return existingSocketId
+        if (existingSocketId) {
+            const noModelBoundYet = !connectedModels.conversationModel && !connectedModels.sttModel
+            if (noModelBoundYet) {
+                connectedRealtimeModelsRef.current = {
+                    conversationModel: desiredConversationModel,
+                    sttModel: desiredSttModel
+                }
+                return existingSocketId
+            }
+            if (
+                connectedModels.conversationModel === desiredConversationModel &&
+                connectedModels.sttModel === desiredSttModel
+            ) {
+                return existingSocketId
+            }
         }
 
         if (existingSocketId) {
@@ -178,7 +206,7 @@ export function useRealtimeSession({
             return
         }
 
-        if (requestPermission && !recordingRef.current) {
+        if (requestPermission && !sessionActiveRef.current) {
             try {
                 const permissionStream = await navigator.mediaDevices.getUserMedia({audio: true})
                 permissionStream.getTracks().forEach((track) => track.stop())
@@ -219,19 +247,7 @@ export function useRealtimeSession({
         }
     }, [setStatus])
 
-    const stopRecording = useCallback(() => {
-        if (!recordingRef.current && !processorRef.current && !streamRef.current) {
-            return
-        }
-
-        setRecording(false)
-        recordingRef.current = false
-
-        if (recordingTimeoutRef.current) {
-            clearTimeout(recordingTimeoutRef.current)
-            recordingTimeoutRef.current = null
-        }
-
+    const stopCapture = useCallback((statusMessage = '') => {
         if (processorRef.current) {
             processorRef.current.disconnect()
             processorRef.current.onaudioprocess = null
@@ -254,19 +270,15 @@ export function useRealtimeSession({
             streamRef.current = null
         }
 
-        const socketId = realtimeSocketIdRef.current
-        if (socketId) {
-            sendRealtime(socketId, {type: 'audio.commit'}).catch(() => {
-            })
+        if (statusMessage) {
+            setStatus(statusMessage)
         }
-
-        setStatus('녹음이 종료되어 피드백을 생성 중입니다.')
         refreshAudioDeviceStatus().catch(() => {
         })
     }, [refreshAudioDeviceStatus, setStatus])
 
-    const startRecording = useCallback(async () => {
-        if (recordingRef.current) {
+    const startSession = useCallback(async () => {
+        if (sessionActiveRef.current) {
             return
         }
 
@@ -277,6 +289,10 @@ export function useRealtimeSession({
         }
 
         try {
+            setSessionPhase('STARTING')
+            ignoreIncomingRef.current = false
+            localStopRef.current = false
+
             const socketId = await ensureRealtimeConnected()
             await syncRealtimeSettings()
 
@@ -284,10 +300,10 @@ export function useRealtimeSession({
             const AudioContextClass = window.AudioContext || window.webkitAudioContext
             const audioContext = new AudioContextClass({sampleRate: 16000})
             const sourceNode = audioContext.createMediaStreamSource(stream)
-            const processor = audioContext.createScriptProcessor(4096, 1, 1)
+            const processor = audioContext.createScriptProcessor(AUDIO_PROCESS_BUFFER_SIZE, 1, 1)
 
             processor.onaudioprocess = (event) => {
-                if (!recordingRef.current) {
+                if (!sessionActiveRef.current || realtimeSocketIdRef.current !== socketId) {
                     return
                 }
                 const channel = event.inputBuffer.getChannelData(0)
@@ -309,29 +325,70 @@ export function useRealtimeSession({
             sourceNodeRef.current = sourceNode
             processorRef.current = processor
 
-            setRecording(true)
-            recordingRef.current = true
+            setSessionActive(true)
+            sessionActiveRef.current = true
+            setSessionPhase('ACTIVE')
             setAudioPermission('granted')
-            setStatus('녹음을 시작했습니다.')
+            setStatus('세션을 시작했습니다. 모델이 첫 질문을 준비 중입니다.')
             refreshAudioDeviceStatus().catch(() => {
             })
-
-            recordingTimeoutRef.current = setTimeout(() => {
-                stopRecording()
-            }, 180000)
         } catch (error) {
+            setSessionPhase('IDLE')
             if (error?.name === 'NotAllowedError' || error?.name === 'SecurityError') {
                 setAudioPermission('denied')
                 setStatus('마이크 권한이 거부되었습니다. 아래에서 권한 요청을 다시 실행해 주세요.')
             } else if (error?.name === 'NotFoundError') {
                 setStatus('사용 가능한 마이크 장치를 찾지 못했습니다.')
             } else {
-                setStatus(error?.message || '녹음을 시작하지 못했습니다.')
+                setStatus(error?.message || '세션을 시작하지 못했습니다.')
             }
             refreshAudioDeviceStatus().catch(() => {
             })
         }
-    }, [ensureRealtimeConnected, syncRealtimeSettings, refreshAudioDeviceStatus, stopRecording, setStatus])
+    }, [ensureRealtimeConnected, syncRealtimeSettings, refreshAudioDeviceStatus, setStatus])
+
+    const stopSession = useCallback(async ({
+                                               forced = true,
+                                               reason = 'user_stop',
+                                               statusMessage = '세션을 종료했습니다.'
+                                           } = {}) => {
+        if (!sessionActiveRef.current && !processorRef.current && !streamRef.current && !realtimeSocketIdRef.current) {
+            return
+        }
+
+        localStopRef.current = true
+        ignoreIncomingRef.current = forced
+        setSessionPhase('STOPPING')
+
+        setSessionActive(false)
+        sessionActiveRef.current = false
+        stopCapture('')
+
+        const socketId = realtimeSocketIdRef.current
+        if (socketId) {
+            if (forced) {
+                await sendRealtime(socketId, {
+                    type: 'session.stop',
+                    data: {
+                        forced: true,
+                        reason
+                    }
+                }).catch(() => {
+                })
+            }
+            await closeRealtime(socketId).catch(() => {
+            })
+        }
+
+        realtimeSocketIdRef.current = null
+        connectedRealtimeModelsRef.current = {conversationModel: '', sttModel: ''}
+        setRealtimeConnected(false)
+        setSessionPhase('IDLE')
+
+        if (statusMessage) {
+            setStatus(statusMessage)
+        }
+    }, [setStatus, stopCapture])
 
     const handleAudioQuickAction = useCallback(async () => {
         if (audioPermission === 'unsupported') {
@@ -346,12 +403,21 @@ export function useRealtimeSession({
     }, [audioPermission, refreshAudioDeviceStatus, setStatus])
 
     useEffect(() => {
-        recordingRef.current = recording
-    }, [recording])
+        sessionActiveRef.current = sessionActive
+    }, [sessionActive])
 
     useEffect(() => {
         const unsubscribe = subscribeRealtime((event) => {
-            if (!event || event.socketId !== realtimeSocketIdRef.current) {
+            if (!event) {
+                return
+            }
+
+            if (!realtimeSocketIdRef.current && sessionPhaseRef.current === 'STARTING' && event.socketId) {
+                // OpenAI websocket can emit first events before connect promise resolves.
+                realtimeSocketIdRef.current = event.socketId
+            }
+
+            if (event.socketId !== realtimeSocketIdRef.current) {
                 return
             }
 
@@ -363,9 +429,20 @@ export function useRealtimeSession({
             }
 
             if (event.type === 'close') {
+                const reason = event.data?.reason ? ` (${event.data.reason})` : ''
+
+                stopCapture('')
+                setSessionActive(false)
+                sessionActiveRef.current = false
                 setRealtimeConnected(false)
+                setSessionPhase('IDLE')
                 realtimeSocketIdRef.current = null
                 connectedRealtimeModelsRef.current = {conversationModel: '', sttModel: ''}
+
+                if (!localStopRef.current) {
+                    setStatus(`실시간 연결이 종료되어 세션을 중단했습니다.${reason}`)
+                }
+                localStopRef.current = false
                 return
             }
 
@@ -374,7 +451,7 @@ export function useRealtimeSession({
                 return
             }
 
-            if (event.type !== 'message') {
+            if (event.type !== 'message' || ignoreIncomingRef.current) {
                 return
             }
 
@@ -393,6 +470,16 @@ export function useRealtimeSession({
                     return
                 }
 
+                if (type === 'question.prompt') {
+                    if (questionPromptRef.current) {
+                        questionPromptRef.current(data)
+                    }
+                    if (data?.text) {
+                        setStatus('질문이 도착했습니다. 답변을 시작해 주세요.')
+                    }
+                    return
+                }
+
                 if (type === 'feedback.final') {
                     if (feedbackRef.current) {
                         feedbackRef.current(buildFeedbackFromRealtime(data))
@@ -401,6 +488,17 @@ export function useRealtimeSession({
                         refreshWrongNotesRef.current().catch(() => {
                         })
                     }
+                    return
+                }
+
+                if (type === 'session.stopped') {
+                    setStatus('세션이 서버에서 종료되었습니다.')
+                    return
+                }
+
+                if (type === 'tts.error') {
+                    const msg = typeof data === 'string' ? data : data.message
+                    setStatus(`음성 출력 오류: ${msg || '알 수 없는 오류'}`)
                     return
                 }
 
@@ -431,18 +529,14 @@ export function useRealtimeSession({
                 unsubscribe()
             }
         }
-    }, [playTurnAudio, setStatus, syncRealtimeSettings])
+    }, [playTurnAudio, setStatus, stopCapture, syncRealtimeSettings])
 
     useEffect(() => {
         return () => {
-            stopRecording()
-            const socketId = realtimeSocketIdRef.current
-            if (socketId) {
-                closeRealtime(socketId).catch(() => {
-                })
-            }
+            stopSession({forced: false, statusMessage: ''}).catch(() => {
+            })
         }
-    }, [stopRecording])
+    }, [stopSession])
 
     useEffect(() => {
         if (!realtimeConnected) {
@@ -519,7 +613,9 @@ export function useRealtimeSession({
     }, [refreshAudioDeviceStatus])
 
     return {
-        recording,
+        recording: sessionActive,
+        sessionActive,
+        sessionPhase,
         realtimeConnected,
         partialTranscript,
         transcript,
@@ -527,8 +623,10 @@ export function useRealtimeSession({
         setUserText,
         audioPermission,
         audioDeviceStatus,
-        startRecording,
-        stopRecording,
+        startSession,
+        stopSession,
+        startRecording: startSession,
+        stopRecording: stopSession,
         syncRealtimeSettings,
         refreshAudioDeviceStatus,
         handleAudioQuickAction

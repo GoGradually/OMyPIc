@@ -2,10 +2,10 @@ import React from 'react'
 
 export function VoicePanel({
                                realtimeConnected,
-                               recording,
+                               sessionActive,
                                partialTranscript,
-                               startRecording,
-                               stopRecording,
+                               startSession,
+                               stopSession,
                                audioConnectionReady,
                                audioConnectionLabel,
                                audioPermissionLabel,
@@ -26,7 +26,7 @@ export function VoicePanel({
             <div className={`voice-stage realtime-panel__stage ${realtimeConnected ? 'is-connected' : ''}`}>
                 <div className="voice-orb realtime-panel__orb"/>
                 <p className="stage-caption realtime-panel__caption">
-                    {recording ? '음성을 수집하는 중입니다.' : '녹음 시작을 누르고 답변을 말해보세요.'}
+                    {sessionActive ? '세션 진행 중입니다. 질문에 답변해 주세요.' : '세션 시작을 누르면 첫 질문이 자동으로 제시됩니다.'}
                 </p>
                 {partialTranscript &&
                     <div className="partial-transcript realtime-panel__partial">{partialTranscript}</div>}
@@ -35,17 +35,17 @@ export function VoicePanel({
             <div className="player-row realtime-panel__actions">
                 <button
                     className="action-button primary"
-                    onClick={startRecording}
-                    disabled={recording}
+                    onClick={startSession}
+                    disabled={sessionActive}
                 >
-                    녹음 시작
+                    세션 시작
                 </button>
                 <button
                     className="action-button danger"
-                    onClick={stopRecording}
-                    disabled={!recording}
+                    onClick={stopSession}
+                    disabled={!sessionActive}
                 >
-                    녹음 중지
+                    세션 종료
                 </button>
             </div>
 
@@ -59,7 +59,7 @@ export function VoicePanel({
                 <button
                     className="audio-quick-button"
                     onClick={handleAudioQuickAction}
-                    disabled={recording || audioPermission === 'unsupported'}
+                    disabled={sessionActive || audioPermission === 'unsupported'}
                 >
                     {audioPermission === 'granted' ? '상태 확인' : '권한 요청'}
                 </button>

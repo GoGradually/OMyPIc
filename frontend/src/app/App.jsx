@@ -99,7 +99,8 @@ export default function App() {
         saveEditedQuestion,
         removeQuestion,
         nextQuestion,
-        updateMode
+        updateMode,
+        setCurrentQuestion
     } = useQuestionLists({
         sessionId,
         provider,
@@ -111,15 +112,15 @@ export default function App() {
     })
 
     const {
-        recording,
+        sessionActive,
         realtimeConnected,
         partialTranscript,
         transcript,
         userText,
         audioPermission,
         audioDeviceStatus,
-        startRecording,
-        stopRecording,
+        startSession,
+        stopSession,
         syncRealtimeSettings,
         handleAudioQuickAction
     } = useRealtimeSession({
@@ -132,7 +133,8 @@ export default function App() {
         voice,
         onStatus: setStatusMessage,
         onFeedback: setFeedback,
-        refreshWrongNotes
+        refreshWrongNotes,
+        onQuestionPrompt: setCurrentQuestion
     })
 
     useEffect(() => {
@@ -181,6 +183,23 @@ export default function App() {
         setActivePanel((prev) => (prev === panelName ? '' : panelName))
     }, [])
 
+    const handleStartSession = useCallback(async () => {
+        if (!activeListId) {
+            setStatusMessage('질문 리스트를 선택하고 학습 모드를 먼저 적용해 주세요.')
+            return
+        }
+        try {
+            await updateMode()
+            await startSession()
+        } catch (error) {
+            setStatusMessage(error?.message || '세션 시작에 실패했습니다.')
+        }
+    }, [activeListId, updateMode, startSession])
+
+    const handleStopSession = useCallback(async () => {
+        await stopSession({forced: true, reason: 'user_stop', statusMessage: '세션을 종료했습니다.'})
+    }, [stopSession])
+
     const currentQuestionLabel = getCurrentQuestionLabel(currentQuestion)
     const modeSummary = getModeSummary(mode, batchSize)
     const {
@@ -191,7 +210,7 @@ export default function App() {
     } = getAudioUiState({
         audioPermission,
         audioDeviceStatus,
-        recording
+        recording: sessionActive
     })
 
     const statusDetails = {
@@ -298,10 +317,10 @@ export default function App() {
                 <main className="practice-column app__practice-column">
                     <VoicePanel
                         realtimeConnected={realtimeConnected}
-                        recording={recording}
+                        sessionActive={sessionActive}
                         partialTranscript={partialTranscript}
-                        startRecording={startRecording}
-                        stopRecording={stopRecording}
+                        startSession={handleStartSession}
+                        stopSession={handleStopSession}
                         audioConnectionReady={audioConnectionReady}
                         audioConnectionLabel={audioConnectionLabel}
                         audioPermissionLabel={audioPermissionLabel}
@@ -314,8 +333,6 @@ export default function App() {
                     <QuestionPanel
                         currentQuestionLabel={currentQuestionLabel}
                         modeSummary={modeSummary}
-                        activeListId={activeListId}
-                        onNextQuestion={nextQuestion}
                         onOpenQuestionsPanel={() => setActivePanel('questions')}
                     />
 
