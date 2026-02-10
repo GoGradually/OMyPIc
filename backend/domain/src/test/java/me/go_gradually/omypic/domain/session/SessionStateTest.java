@@ -54,6 +54,28 @@ class SessionStateTest {
     }
 
     @Test
+    void nextQuestion_inSequentialMode_stopsWhenQuestionsAreExhausted() {
+        QuestionList list = QuestionList.rehydrate(
+                QuestionListId.of("seq-1"),
+                "seq-list",
+                List.of(
+                        QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", "A"),
+                        QuestionItem.rehydrate(QuestionItemId.of("q2"), "Q2", "B")
+                ),
+                Instant.parse("2026-01-01T00:00:00Z"),
+                Instant.parse("2026-01-01T00:00:00Z")
+        );
+        SessionState state = new SessionState(SessionId.of("seq-session"));
+
+        assertTrue(state.nextQuestion(list).isPresent());
+        assertTrue(state.nextQuestion(list).isPresent());
+        assertTrue(state.nextQuestion(list).isEmpty());
+
+        state.resetQuestionProgress("seq-1");
+        assertTrue(state.nextQuestion(list).isPresent());
+    }
+
+    @Test
     void nextQuestion_inMockExamMode_usesConfiguredOrder_withoutDuplicates_andSkipsExhaustedGroups() {
         QuestionList list = QuestionList.rehydrate(
                 QuestionListId.of("list-1"),
@@ -157,9 +179,11 @@ class SessionStateTest {
 
         Optional<QuestionItem> first = state.nextQuestion(list);
         Optional<QuestionItem> second = state.nextQuestion(list);
+        Optional<QuestionItem> third = state.nextQuestion(list);
 
         assertTrue(first.isPresent());
         assertTrue(second.isPresent());
+        assertTrue(third.isEmpty());
         assertEquals("q1", first.orElseThrow().getId().value());
         assertEquals("q2", second.orElseThrow().getId().value());
     }
