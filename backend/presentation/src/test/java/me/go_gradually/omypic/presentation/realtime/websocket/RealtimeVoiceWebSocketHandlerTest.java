@@ -94,10 +94,12 @@ class RealtimeVoiceWebSocketHandlerTest {
         handler.handleTextMessage(webSocketSession, new TextMessage("{\"type\":\"audio.commit\"}"));
         handler.handleTextMessage(webSocketSession, new TextMessage("{\"type\":\"response.cancel\"}"));
         handler.handleTextMessage(webSocketSession, new TextMessage("{\"type\":\"session.update\",\"data\":{\"conversationModel\":\"gpt-realtime\",\"sttModel\":\"gpt-4o-mini-transcribe\",\"feedbackLanguage\":\"en\"}}"));
+        handler.handleTextMessage(webSocketSession, new TextMessage("{\"type\":\"session.stop\",\"data\":{\"forced\":true,\"reason\":\"user_stop\"}}"));
 
         verify(realtimeVoiceSession).appendAudio("abc");
         verify(realtimeVoiceSession).commitAudio();
         verify(realtimeVoiceSession).cancelResponse();
+        verify(realtimeVoiceSession).stopSession(true, "user_stop");
         ArgumentCaptor<RealtimeSessionUpdateCommand> captor = ArgumentCaptor.forClass(RealtimeSessionUpdateCommand.class);
         verify(realtimeVoiceSession).update(captor.capture());
         assertEquals("gpt-realtime", captor.getValue().getConversationModel());

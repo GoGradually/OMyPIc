@@ -30,6 +30,7 @@ public class RealtimeVoiceWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     public void afterConnectionEstablished(WebSocketSession rawSession) throws Exception {
+        rawSession.setTextMessageSizeLimit(1_048_576);
         WebSocketSession session = new ConcurrentWebSocketSessionDecorator(rawSession, 10_000, 1_048_576);
         RealtimeStartCommand command = buildStartCommand(session);
         if (command == null) {
@@ -37,8 +38,14 @@ public class RealtimeVoiceWebSocketHandler extends TextWebSocketHandler {
             return;
         }
 
-        RealtimeVoiceSession voiceSession = realtimeVoiceUseCase.open(command, (event, payload) -> sendEvent(session, event, payload));
-        sessionBySocketId.put(session.getId(), voiceSession);
+        try {
+            RealtimeVoiceSession voiceSession = realtimeVoiceUseCase.open(command, (event, payload) -> sendEvent(session, event, payload));
+            sessionBySocketId.put(session.getId(), voiceSession);
+        } catch (Exception e) {
+            String message = defaultMessage(e.getMessage());
+            sendEvent(session, "error", Map.of("message", message));
+            session.close(CloseStatus.SERVER_ERROR.withReason(toCloseReason(message)));
+        }
     }
 
     @Override
@@ -58,6 +65,7 @@ public class RealtimeVoiceWebSocketHandler extends TextWebSocketHandler {
             case "audio.commit" -> realtimeSession.commitAudio();
             case "response.cancel" -> realtimeSession.cancelResponse();
             case "session.update" -> realtimeSession.update(toUpdateCommand(data));
+            case "session.stop" -> realtimeSession.stopSession(readBoolean(data, "forced", true), readString(data, "reason"));
             default -> sendEvent(session, "error", Map.of("message", "Unsupported event type: " + type));
         }
     }
@@ -125,6 +133,14 @@ public class RealtimeVoiceWebSocketHandler extends TextWebSocketHandler {
         return value.isTextual() ? value.asText() : null;
     }
 
+    private boolean readBoolean(JsonNode node, String field, boolean defaultValue) {
+        JsonNode value = node.path(field);
+        if (!value.isMissingNode() && !value.isNull()) {
+            return value.asBoolean(defaultValue);
+        }
+        return defaultValue;
+    }
+
     private String readHeader(WebSocketSession session, String headerName) {
         return session.getHandshakeHeaders().getFirst(headerName);
     }
@@ -152,5 +168,17 @@ public class RealtimeVoiceWebSocketHandler extends TextWebSocketHandler {
 
     private boolean isBlank(String value) {
         return value == null || value.isBlank();
+    }
+
+    private String defaultMessage(String message) {
+        return isBlank(message) ? "Realtime initialization failed" : message;
+    }
+
+    private String toCloseReason(String message) {
+        String normalized = message == null ? "" : message.replace('\r', ' ').replace('\n', ' ').trim();
+        if (normalized.isBlank()) {
+            return "Realtime initialization failed";
+        }
+        return normalized.length() > 120 ? normalized.substring(0, 120) : normalized;
     }
 }
