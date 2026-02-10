@@ -33,6 +33,7 @@ public class SessionUseCase {
             return state;
         }
         QuestionList list = questionListPort.findById(QuestionListId.of(command.getListId())).orElseThrow();
+        state.setActiveQuestionListId(command.getListId());
         if (state.getMode() == ModeType.MOCK_EXAM) {
             List<String> order = Optional.ofNullable(command.getMockGroupOrder()).orElse(List.of());
             Map<String, Integer> counts = Optional.ofNullable(command.getMockGroupCounts()).orElse(Map.of());
