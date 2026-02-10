@@ -9,5 +9,7 @@ public interface RealtimeVoiceSession {
 
     void update(RealtimeSessionUpdateCommand command);
 
+    void stopSession(boolean forced, String reason);
+
     void close();
 }

@@ -7,5 +7,7 @@ public interface RealtimeAudioSession {
 
     void cancelResponse();
 
+    void speakText(long turnId, String text, String voice);
+
     void close();
 }

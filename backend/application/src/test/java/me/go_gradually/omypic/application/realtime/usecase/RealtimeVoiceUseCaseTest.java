@@ -3,16 +3,16 @@ package me.go_gradually.omypic.application.realtime.usecase;
 import me.go_gradually.omypic.application.feedback.model.FeedbackCommand;
 import me.go_gradually.omypic.application.feedback.model.FeedbackResult;
 import me.go_gradually.omypic.application.feedback.usecase.FeedbackUseCase;
+import me.go_gradually.omypic.application.question.usecase.QuestionUseCase;
 import me.go_gradually.omypic.application.realtime.model.*;
 import me.go_gradually.omypic.application.realtime.policy.RealtimePolicy;
 import me.go_gradually.omypic.application.realtime.port.RealtimeAudioGateway;
 import me.go_gradually.omypic.application.session.usecase.SessionUseCase;
 import me.go_gradually.omypic.application.shared.port.AsyncExecutor;
 import me.go_gradually.omypic.application.shared.port.MetricsPort;
-import me.go_gradually.omypic.application.tts.model.AudioSink;
-import me.go_gradually.omypic.application.tts.model.TtsCommand;
-import me.go_gradually.omypic.application.tts.usecase.TtsUseCase;
 import me.go_gradually.omypic.domain.feedback.Feedback;
+import me.go_gradually.omypic.domain.session.SessionId;
+import me.go_gradually.omypic.domain.session.SessionState;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -20,15 +20,14 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
@@ -40,9 +39,9 @@ class RealtimeVoiceUseCaseTest {
     @Mock
     private FeedbackUseCase feedbackUseCase;
     @Mock
-    private TtsUseCase ttsUseCase;
-    @Mock
     private SessionUseCase sessionUseCase;
+    @Mock
+    private QuestionUseCase questionUseCase;
     @Mock
     private AsyncExecutor asyncExecutor;
     @Mock
@@ -57,6 +56,18 @@ class RealtimeVoiceUseCaseTest {
 
     @BeforeEach
     void setUp() {
+        SessionState sessionState = new SessionState(SessionId.of("s1"));
+        sessionState.setActiveQuestionListId("list-1");
+        when(sessionUseCase.getOrCreate("s1")).thenReturn(sessionState);
+
+        lenient().when(questionUseCase.nextQuestion("list-1", "s1")).thenAnswer(invocation -> {
+            me.go_gradually.omypic.application.question.model.NextQuestion next = new me.go_gradually.omypic.application.question.model.NextQuestion();
+            next.setQuestionId("q-1");
+            next.setText("first question");
+            next.setGroup("A");
+            return next;
+        });
+
         when(realtimePolicy.realtimeConversationModel()).thenReturn("gpt-realtime-mini");
         when(realtimePolicy.realtimeSttModel()).thenReturn("gpt-4o-mini-transcribe");
         when(realtimePolicy.realtimeFeedbackProvider()).thenReturn("openai");
@@ -72,8 +83,8 @@ class RealtimeVoiceUseCaseTest {
         useCase = new RealtimeVoiceUseCase(
                 realtimeAudioGateway,
                 feedbackUseCase,
-                ttsUseCase,
                 sessionUseCase,
+                questionUseCase,
                 asyncExecutor,
                 realtimePolicy,
                 metrics
@@ -81,15 +92,11 @@ class RealtimeVoiceUseCaseTest {
     }
 
     @Test
-    void finalTranscript_runsFeedbackAndTtsPipeline() throws Exception {
+    void finalTranscript_runsFeedbackAndRealtimeSpeechPipeline() {
         stubAsyncExecutorRunsInline();
+        stubRealtimeSpeechSuccess();
         Feedback feedback = Feedback.of("summary", List.of("p1", "p2", "p3"), "example", List.of("[rule] evidence"));
         when(feedbackUseCase.generateFeedback(anyString(), any())).thenReturn(FeedbackResult.generated(feedback));
-        doAnswer(invocation -> {
-            AudioSink sink = invocation.getArgument(2);
-            sink.write("chunk".getBytes(StandardCharsets.UTF_8));
-            return null;
-        }).when(ttsUseCase).streamUntil(anyString(), any(TtsCommand.class), any(AudioSink.class), any(BooleanSupplier.class));
 
         List<String> eventTypes = new CopyOnWriteArrayList<>();
         RealtimeVoiceSession session = useCase.open(startCommand(), (event, payload) -> {
@@ -123,15 +130,11 @@ class RealtimeVoiceUseCaseTest {
     }
 
     @Test
-    void sessionUpdate_overridesFeedbackAndVoiceDefaults() throws Exception {
+    void sessionUpdate_overridesFeedbackAndVoiceDefaults() {
         stubAsyncExecutorRunsInline();
+        stubRealtimeSpeechSuccess();
         Feedback feedback = Feedback.of("summary", List.of("p1", "p2", "p3"), "example", List.of());
         when(feedbackUseCase.generateFeedback(anyString(), any())).thenReturn(FeedbackResult.generated(feedback));
-        doAnswer(invocation -> {
-            AudioSink sink = invocation.getArgument(2);
-            sink.write("a".getBytes(StandardCharsets.UTF_8));
-            return null;
-        }).when(ttsUseCase).streamUntil(anyString(), any(TtsCommand.class), any(AudioSink.class), any(BooleanSupplier.class));
 
         List<String> eventTypes = new ArrayList<>();
         RealtimeVoiceSession session = useCase.open(startCommand(), (event, payload) -> {
@@ -157,9 +160,9 @@ class RealtimeVoiceUseCaseTest {
         assertEquals("gemini-2.0-flash", feedbackCaptor.getValue().getModel());
         assertEquals("en", feedbackCaptor.getValue().getFeedbackLanguage());
 
-        ArgumentCaptor<TtsCommand> ttsCaptor = ArgumentCaptor.forClass(TtsCommand.class);
-        verify(ttsUseCase).streamUntil(eq("api-key"), ttsCaptor.capture(), any(AudioSink.class), any(BooleanSupplier.class));
-        assertEquals("echo", ttsCaptor.getValue().getVoice());
+        ArgumentCaptor<String> voiceCaptor = ArgumentCaptor.forClass(String.class);
+        verify(realtimeAudioSession, atLeastOnce()).speakText(anyLong(), anyString(), voiceCaptor.capture());
+        assertTrue(voiceCaptor.getAllValues().contains("echo"));
         assertTrue(eventTypes.contains("session.updated"));
         session.close();
     }
@@ -180,8 +183,9 @@ class RealtimeVoiceUseCaseTest {
     }
 
     @Test
-    void appendAudio_triggersBargeInCancel() {
+    void appendAudio_doesNotAutoCancelResponse() {
         stubAsyncExecutorRunsInline();
+        stubRealtimeSpeechSuccess();
         when(feedbackUseCase.generateFeedback(anyString(), any())).thenReturn(FeedbackResult.skipped());
         List<String> eventTypes = new CopyOnWriteArrayList<>();
         RealtimeVoiceSession session = useCase.open(startCommand(), (event, payload) -> {
@@ -192,9 +196,33 @@ class RealtimeVoiceUseCaseTest {
         listener.onFinalTranscript("first");
         session.appendAudio("YmFzZTY0");
 
-        verify(realtimeAudioSession, atLeastOnce()).cancelResponse();
+        verify(realtimeAudioSession, never()).cancelResponse();
         verify(realtimeAudioSession).appendBase64Audio("YmFzZTY0");
-        assertTrue(eventTypes.contains("response.cancelled"));
+        assertTrue(eventTypes.stream().noneMatch("response.cancelled"::equals));
+        session.close();
+    }
+
+    @Test
+    void realtimeSpeechFailure_emitsTtsErrorAndStillCompletesTurn() {
+        stubAsyncExecutorRunsInline();
+        doAnswer(invocation -> {
+            long turnId = invocation.getArgument(0);
+            listener.onAssistantAudioFailed(turnId, "Realtime response failed");
+            return null;
+        }).when(realtimeAudioSession).speakText(anyLong(), anyString(), anyString());
+        Feedback feedback = Feedback.of("summary", List.of("p1", "p2", "p3"), "example", List.of());
+        when(feedbackUseCase.generateFeedback(anyString(), any())).thenReturn(FeedbackResult.generated(feedback));
+
+        List<String> eventTypes = new CopyOnWriteArrayList<>();
+        RealtimeVoiceSession session = useCase.open(startCommand(), (event, payload) -> {
+            eventTypes.add(event);
+            return true;
+        });
+
+        listener.onFinalTranscript("hello world");
+
+        assertTrue(eventTypes.contains("tts.error"));
+        assertTrue(eventTypes.contains("turn.completed"));
         session.close();
     }
 
@@ -211,5 +239,14 @@ class RealtimeVoiceUseCaseTest {
             runnable.run();
             return null;
         }).when(asyncExecutor).execute(any(Runnable.class));
+    }
+
+    private void stubRealtimeSpeechSuccess() {
+        lenient().doAnswer(invocation -> {
+            long turnId = invocation.getArgument(0);
+            listener.onAssistantAudioChunk(turnId, "Y2h1bms=");
+            listener.onAssistantAudioCompleted(turnId);
+            return null;
+        }).when(realtimeAudioSession).speakText(anyLong(), anyString(), anyString());
     }
 }
