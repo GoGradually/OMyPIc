@@ -47,6 +47,7 @@ public class ModeController {
         response.setMode(state.getMode());
         response.setContinuousBatchSize(state.getContinuousBatchSize());
         response.setAnsweredSinceLastFeedback(state.getAnsweredSinceLastFeedback());
+        response.setActiveListId(state.getActiveQuestionListId());
         response.setSttSegments(state.getSttSegments());
         response.setFeedbackLanguage(state.getFeedbackLanguage().value());
         response.setListIndices(state.getListIndices().entrySet().stream()

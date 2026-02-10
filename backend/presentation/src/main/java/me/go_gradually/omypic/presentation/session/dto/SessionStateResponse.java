@@ -10,6 +10,7 @@ public class SessionStateResponse {
     private ModeType mode;
     private int continuousBatchSize;
     private int answeredSinceLastFeedback;
+    private String activeListId;
     private List<String> sttSegments;
     private String feedbackLanguage;
     private MockExamStateResponse mockExamState;
@@ -45,6 +46,14 @@ public class SessionStateResponse {
 
     public void setAnsweredSinceLastFeedback(int answeredSinceLastFeedback) {
         this.answeredSinceLastFeedback = answeredSinceLastFeedback;
+    }
+
+    public String getActiveListId() {
+        return activeListId;
+    }
+
+    public void setActiveListId(String activeListId) {
+        this.activeListId = activeListId;
     }
 
     public List<String> getSttSegments() {
