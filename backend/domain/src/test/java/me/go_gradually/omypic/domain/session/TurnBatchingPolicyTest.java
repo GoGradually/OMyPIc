@@ -9,25 +9,29 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class TurnBatchingPolicyTest {
 
     @Test
-    void onAnsweredTurn_immediateMode_emitsEveryTurn() {
-        TurnBatchingPolicy.BatchDecision decision = TurnBatchingPolicy.onAnsweredTurn(ModeType.IMMEDIATE, 5, 3);
+    void onTurn_immediateMode_emitsEveryTurn() {
+        TurnBatchingPolicy.BatchDecision decision = TurnBatchingPolicy.onTurn(ModeType.IMMEDIATE, 5, 3, true);
 
         assertTrue(decision.emitFeedback());
-        assertEquals(0, decision.nextAnsweredCount());
+        assertEquals(0, decision.nextCompletedGroupCount());
         assertEquals(TurnBatchingPolicy.BatchReason.IMMEDIATE_MODE, decision.reason());
     }
 
     @Test
-    void onAnsweredTurn_continuousMode_emitsOnBatchBoundary() {
-        TurnBatchingPolicy.BatchDecision waiting = TurnBatchingPolicy.onAnsweredTurn(ModeType.CONTINUOUS, 0, 2);
-        TurnBatchingPolicy.BatchDecision ready = TurnBatchingPolicy.onAnsweredTurn(ModeType.CONTINUOUS, 1, 2);
+    void onTurn_continuousMode_waitsForGroupCompletionThenBatchBoundary() {
+        TurnBatchingPolicy.BatchDecision waitingCompletion = TurnBatchingPolicy.onTurn(ModeType.CONTINUOUS, 0, 2, false);
+        TurnBatchingPolicy.BatchDecision waitingBatch = TurnBatchingPolicy.onTurn(ModeType.CONTINUOUS, 0, 2, true);
+        TurnBatchingPolicy.BatchDecision ready = TurnBatchingPolicy.onTurn(ModeType.CONTINUOUS, 1, 2, true);
 
-        assertFalse(waiting.emitFeedback());
-        assertEquals(1, waiting.nextAnsweredCount());
-        assertEquals(TurnBatchingPolicy.BatchReason.WAITING_FOR_BATCH, waiting.reason());
+        assertFalse(waitingCompletion.emitFeedback());
+        assertEquals(TurnBatchingPolicy.BatchReason.WAITING_FOR_GROUP_COMPLETION, waitingCompletion.reason());
+
+        assertFalse(waitingBatch.emitFeedback());
+        assertEquals(1, waitingBatch.nextCompletedGroupCount());
+        assertEquals(TurnBatchingPolicy.BatchReason.WAITING_FOR_BATCH, waitingBatch.reason());
 
         assertTrue(ready.emitFeedback());
-        assertEquals(0, ready.nextAnsweredCount());
+        assertEquals(0, ready.nextCompletedGroupCount());
         assertEquals(TurnBatchingPolicy.BatchReason.BATCH_READY, ready.reason());
     }
 

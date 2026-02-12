@@ -7,13 +7,20 @@ public final class TurnBatchingPolicy {
     private TurnBatchingPolicy() {
     }
 
-    public static BatchDecision onAnsweredTurn(ModeType mode, int answeredSinceLastFeedback, int continuousBatchSize) {
+    public static BatchDecision onTurn(ModeType mode,
+                                       int completedGroupCountSinceLastFeedback,
+                                       int groupBatchSize,
+                                       boolean completedGroupThisTurn) {
         ModeType resolvedMode = mode == null ? ModeType.IMMEDIATE : mode;
-        int resolvedBatchSize = Math.max(1, continuousBatchSize);
-        int currentCount = Math.max(0, answeredSinceLastFeedback);
+        int resolvedBatchSize = Math.max(1, groupBatchSize);
+        int currentCount = Math.max(0, completedGroupCountSinceLastFeedback);
 
         if (resolvedMode == ModeType.IMMEDIATE) {
             return new BatchDecision(true, 0, BatchReason.IMMEDIATE_MODE);
+        }
+
+        if (!completedGroupThisTurn) {
+            return new BatchDecision(false, currentCount, BatchReason.WAITING_FOR_GROUP_COMPLETION);
         }
 
         int nextCount = currentCount + 1;
@@ -31,11 +38,12 @@ public final class TurnBatchingPolicy {
 
     public enum BatchReason {
         IMMEDIATE_MODE,
+        WAITING_FOR_GROUP_COMPLETION,
         WAITING_FOR_BATCH,
         BATCH_READY,
         EXHAUSTED_WITH_REMAINDER
     }
 
-    public record BatchDecision(boolean emitFeedback, int nextAnsweredCount, BatchReason reason) {
+    public record BatchDecision(boolean emitFeedback, int nextCompletedGroupCount, BatchReason reason) {
     }
 }
