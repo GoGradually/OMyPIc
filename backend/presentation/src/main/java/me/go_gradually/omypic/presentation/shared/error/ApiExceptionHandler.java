@@ -1,5 +1,6 @@
 package me.go_gradually.omypic.presentation.shared.error;
 
+import me.go_gradually.omypic.application.session.model.InvalidGroupTagsException;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -10,6 +11,15 @@ import java.util.NoSuchElementException;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
+    @ExceptionHandler(InvalidGroupTagsException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public Map<String, Object> invalidGroupTags(InvalidGroupTagsException e) {
+        return Map.of(
+                "code", "INVALID_GROUP_TAGS",
+                "message", e.getMessage() == null ? "Invalid group tags" : e.getMessage(),
+                "invalidTags", e.getInvalidTags()
+        );
+    }
 
     @ExceptionHandler({IllegalArgumentException.class, IllegalStateException.class})
     @ResponseStatus(HttpStatus.BAD_REQUEST)
