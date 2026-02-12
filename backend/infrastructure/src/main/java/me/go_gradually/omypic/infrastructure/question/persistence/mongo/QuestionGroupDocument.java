@@ -7,11 +7,12 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
-@Document(collection = "question_lists")
-public class QuestionListDocument {
+@Document(collection = "question_groups")
+public class QuestionGroupDocument {
     @Id
     private String id;
     private String name;
+    private List<String> tags = new ArrayList<>();
     private List<QuestionItemDocument> questions = new ArrayList<>();
     private Instant createdAt = Instant.now();
     private Instant updatedAt = Instant.now();
@@ -30,6 +31,14 @@ public class QuestionListDocument {
 
     public void setName(String name) {
         this.name = name;
+    }
+
+    public List<String> getTags() {
+        return tags;
+    }
+
+    public void setTags(List<String> tags) {
+        this.tags = tags;
     }
 
     public List<QuestionItemDocument> getQuestions() {

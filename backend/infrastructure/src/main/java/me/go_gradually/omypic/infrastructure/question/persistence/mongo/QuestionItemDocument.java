@@ -3,7 +3,7 @@ package me.go_gradually.omypic.infrastructure.question.persistence.mongo;
 public class QuestionItemDocument {
     private String id;
     private String text;
-    private String group;
+    private String questionType;
 
     public String getId() {
         return id;
@@ -21,11 +21,11 @@ public class QuestionItemDocument {
         this.text = text;
     }
 
-    public String getGroup() {
-        return group;
+    public String getQuestionType() {
+        return questionType;
     }
 
-    public void setGroup(String group) {
-        this.group = group;
+    public void setQuestionType(String questionType) {
+        this.questionType = questionType;
     }
 }
