@@ -18,8 +18,6 @@ import java.util.List;
 import java.util.Optional;
 
 public class QuestionUseCase {
-    private static final String MOCK_EXAM_EXHAUSTED = "QUESTION_EXHAUSTED";
-
     private final QuestionListPort repository;
     private final SessionStorePort sessionStore;
     private final MetricsPort metrics;
@@ -82,10 +80,6 @@ public class QuestionUseCase {
             next.setGroup(item.getGroup() == null ? null : item.getGroup().value());
             return next;
         }).orElseGet(NextQuestion::skipped);
-        response.setMockExamCompleted(session.isMockExamCompleted());
-        if (session.isMockExamCompleted()) {
-            response.setMockExamCompletionReason(MOCK_EXAM_EXHAUSTED);
-        }
         metrics.recordQuestionNextLatency(Duration.between(start, Instant.now()));
         return response;
     }

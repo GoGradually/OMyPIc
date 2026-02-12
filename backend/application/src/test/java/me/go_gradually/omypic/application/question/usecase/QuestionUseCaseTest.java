@@ -11,7 +11,6 @@ import me.go_gradually.omypic.domain.question.QuestionList;
 import me.go_gradually.omypic.domain.question.QuestionListId;
 import me.go_gradually.omypic.domain.session.SessionId;
 import me.go_gradually.omypic.domain.session.SessionState;
-import me.go_gradually.omypic.domain.session.ModeType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -162,28 +161,4 @@ class QuestionUseCaseTest {
         assertThrows(NoSuchElementException.class, () -> useCase.nextQuestion("missing", "s1"));
     }
 
-    @Test
-    void nextQuestion_marksMockExamCompleted_whenQuestionsExhausted() {
-        QuestionListId listId = QuestionListId.of("mock-list");
-        QuestionList list = QuestionList.rehydrate(
-                listId,
-                "mock",
-                List.of(QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A"))),
-                Instant.parse("2026-01-01T00:00:00Z"),
-                Instant.parse("2026-01-01T00:00:00Z")
-        );
-        SessionState state = new SessionState(SessionId.of("s-mock"));
-        state.applyModeUpdate(ModeType.MOCK_EXAM, null);
-        state.configureMockExam(list, List.of(QuestionGroup.of("A")), java.util.Map.of(QuestionGroup.of("A"), 1));
-        when(repository.findById(listId)).thenReturn(Optional.of(list));
-        when(sessionStore.getOrCreate(SessionId.of("s-mock"))).thenReturn(state);
-
-        NextQuestion first = useCase.nextQuestion("mock-list", "s-mock");
-        NextQuestion second = useCase.nextQuestion("mock-list", "s-mock");
-
-        assertFalse(first.isMockExamCompleted());
-        assertTrue(second.isMockExamCompleted());
-        assertEquals("QUESTION_EXHAUSTED", second.getMockExamCompletionReason());
-        assertTrue(second.isSkipped());
-    }
 }
