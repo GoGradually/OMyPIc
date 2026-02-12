@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import me.go_gradually.omypic.application.question.model.NextQuestion;
 import me.go_gradually.omypic.application.question.usecase.QuestionUseCase;
 import me.go_gradually.omypic.domain.question.QuestionItem;
+import me.go_gradually.omypic.domain.question.QuestionGroup;
 import me.go_gradually.omypic.domain.question.QuestionItemId;
 import me.go_gradually.omypic.domain.question.QuestionList;
 import me.go_gradually.omypic.domain.question.QuestionListId;
@@ -47,7 +48,7 @@ class QuestionControllerTest {
         QuestionList list = QuestionList.rehydrate(
                 QuestionListId.of("l1"),
                 "My List",
-                List.of(QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", "A")),
+                List.of(QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A"))),
                 Instant.parse("2026-02-01T00:00:00Z"),
                 Instant.parse("2026-02-01T00:00:00Z")
         );
@@ -127,7 +128,7 @@ class QuestionControllerTest {
         QuestionList updated = QuestionList.rehydrate(
                 QuestionListId.of("l4"),
                 "List",
-                List.of(QuestionItem.rehydrate(QuestionItemId.of("q2"), "new question", "G")),
+                List.of(QuestionItem.rehydrate(QuestionItemId.of("q2"), "new question", QuestionGroup.of("G"))),
                 Instant.parse("2026-02-04T00:00:00Z"),
                 Instant.parse("2026-02-04T00:00:00Z")
         );

@@ -1,8 +1,10 @@
 package me.go_gradually.omypic.presentation.rulebook.controller;
 
 import me.go_gradually.omypic.application.rulebook.usecase.RulebookUseCase;
+import me.go_gradually.omypic.domain.question.QuestionGroup;
 import me.go_gradually.omypic.domain.rulebook.Rulebook;
 import me.go_gradually.omypic.domain.rulebook.RulebookId;
+import me.go_gradually.omypic.domain.rulebook.RulebookScope;
 import me.go_gradually.omypic.presentation.TestBootApplication;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -41,6 +43,8 @@ class RulebookControllerTest {
                 RulebookId.of("r1"),
                 "rules.md",
                 "/tmp/rules.md",
+                RulebookScope.MAIN,
+                null,
                 true,
                 Instant.parse("2026-02-01T00:00:00Z"),
                 Instant.parse("2026-02-01T00:00:00Z")
@@ -51,6 +55,7 @@ class RulebookControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].id").value("r1"))
                 .andExpect(jsonPath("$[0].filename").value("rules.md"))
+                .andExpect(jsonPath("$[0].scope").value("MAIN"))
                 .andExpect(jsonPath("$[0].enabled").value(true));
     }
 
@@ -60,21 +65,27 @@ class RulebookControllerTest {
                 RulebookId.of("r2"),
                 "rulebook.md",
                 "/tmp/rulebook.md",
+                RulebookScope.QUESTION,
+                QuestionGroup.of("A"),
                 true,
                 Instant.parse("2026-02-02T00:00:00Z"),
                 Instant.parse("2026-02-02T00:00:00Z")
         );
         byte[] bytes = "hello".getBytes();
-        when(rulebookUseCase.upload(eq("rulebook.md"), any(byte[].class))).thenReturn(uploaded);
+        when(rulebookUseCase.upload(eq("rulebook.md"), any(byte[].class), eq(RulebookScope.QUESTION), eq("A"))).thenReturn(uploaded);
 
         mockMvc.perform(multipart("/api/rulebooks")
-                        .file(new MockMultipartFile("file", "rulebook.md", "text/markdown", bytes)))
+                        .file(new MockMultipartFile("file", "rulebook.md", "text/markdown", bytes))
+                        .param("scope", "QUESTION")
+                        .param("questionGroup", "A"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value("r2"))
+                .andExpect(jsonPath("$.scope").value("QUESTION"))
+                .andExpect(jsonPath("$.questionGroup").value("A"))
                 .andExpect(jsonPath("$.path").value("/tmp/rulebook.md"));
 
         ArgumentCaptor<byte[]> captor = ArgumentCaptor.forClass(byte[].class);
-        verify(rulebookUseCase).upload(eq("rulebook.md"), captor.capture());
+        verify(rulebookUseCase).upload(eq("rulebook.md"), captor.capture(), eq(RulebookScope.QUESTION), eq("A"));
         assertArrayEquals(bytes, captor.getValue());
     }
 
@@ -84,6 +95,8 @@ class RulebookControllerTest {
                 RulebookId.of("r3"),
                 "rules.md",
                 "/tmp/rules.md",
+                RulebookScope.MAIN,
+                null,
                 false,
                 Instant.parse("2026-02-03T00:00:00Z"),
                 Instant.parse("2026-02-03T00:00:00Z")

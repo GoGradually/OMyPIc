@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import me.go_gradually.omypic.application.session.model.ModeUpdateCommand;
 import me.go_gradually.omypic.application.session.usecase.SessionUseCase;
 import me.go_gradually.omypic.domain.question.QuestionItem;
+import me.go_gradually.omypic.domain.question.QuestionGroup;
 import me.go_gradually.omypic.domain.question.QuestionItemId;
 import me.go_gradually.omypic.domain.question.QuestionList;
 import me.go_gradually.omypic.domain.question.QuestionListId;
@@ -72,8 +73,10 @@ class ModeControllerTest {
                                 "listId", "list-1",
                                 "mode", "MOCK_EXAM",
                                 "continuousBatchSize", 5,
-                                "mockGroupOrder", List.of("A"),
-                                "mockGroupCounts", Map.of("A", 1)
+                                "mockPlan", Map.of(
+                                        "groupOrder", List.of("A"),
+                                        "groupCounts", Map.of("A", 1)
+                                )
                         ))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.sessionId").value("s2"))
@@ -88,8 +91,8 @@ class ModeControllerTest {
         assertEquals("list-1", captor.getValue().getListId());
         assertEquals(ModeType.MOCK_EXAM, captor.getValue().getMode());
         assertEquals(5, captor.getValue().getContinuousBatchSize());
-        assertEquals(List.of("A"), captor.getValue().getMockGroupOrder());
-        assertEquals(Map.of("A", 1), captor.getValue().getMockGroupCounts());
+        assertEquals(List.of("A"), captor.getValue().getMockPlan().getGroupOrder());
+        assertEquals(Map.of("A", 1), captor.getValue().getMockPlan().getGroupCounts());
     }
 
     private SessionState buildStateForResponse() {
@@ -97,14 +100,14 @@ class ModeControllerTest {
         QuestionList list = QuestionList.rehydrate(
                 QuestionListId.of("list-1"),
                 "List",
-                List.of(QuestionItem.rehydrate(QuestionItemId.of("q1"), "Question", "A")),
+                List.of(QuestionItem.rehydrate(QuestionItemId.of("q1"), "Question", QuestionGroup.of("A"))),
                 Instant.parse("2026-02-01T00:00:00Z"),
                 Instant.parse("2026-02-01T00:00:00Z")
         );
 
         state.nextQuestion(list);
         state.applyModeUpdate(ModeType.MOCK_EXAM, 3);
-        state.configureMockExam(list, List.of("A"), Map.of("A", 1));
+        state.configureMockExam(list, List.of(QuestionGroup.of("A")), Map.of(QuestionGroup.of("A"), 1));
         return state;
     }
 }
