@@ -25,8 +25,10 @@ describe('mode utils', () => {
             listId: 'list-1',
             mode: 'MOCK_EXAM',
             continuousBatchSize: 3,
-            mockGroupOrder: ['A', 'B', 'C'],
-            mockGroupCounts: {A: 2}
+            mockPlan: {
+                groupOrder: ['A', 'B', 'C'],
+                groupCounts: {A: 2}
+            }
         })
     })
 
@@ -36,5 +38,9 @@ describe('mode utils', () => {
 
     it('returns completion question label in mock exam', () => {
         expect(getCurrentQuestionLabel({mockExamCompleted: true})).toBe('모든 모의고사 질문을 완료했습니다.')
+    })
+
+    it('returns completion label when questions are exhausted', () => {
+        expect(getCurrentQuestionLabel({exhausted: true})).toBe('모든 질문을 완료했습니다.')
     })
 })

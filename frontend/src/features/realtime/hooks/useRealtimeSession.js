@@ -59,6 +59,7 @@ export function useRealtimeSession({
     const sessionActiveRef = useRef(false)
     const ignoreIncomingRef = useRef(false)
     const localStopRef = useRef(false)
+    const serverStopRef = useRef(false)
     const sessionPhaseRef = useRef('IDLE')
 
     const streamRef = useRef(null)
@@ -440,14 +441,18 @@ export function useRealtimeSession({
                 connectedRealtimeModelsRef.current = {conversationModel: '', sttModel: ''}
 
                 if (!localStopRef.current) {
-                    setStatus(`실시간 연결이 종료되어 세션을 중단했습니다.${reason}`)
+                    if (!serverStopRef.current) {
+                        setStatus(`실시간 연결이 종료되어 세션을 중단했습니다.${reason}`)
+                    }
                 }
+                serverStopRef.current = false
                 localStopRef.current = false
                 return
             }
 
             if (event.type === 'error') {
-                setStatus(`실시간 오류: ${event.data || '알 수 없는 오류'}`)
+                const msg = typeof event.data === 'string' ? event.data : event.data?.message
+                setStatus(`실시간 오류: ${msg || '알 수 없는 오류'}`)
                 return
             }
 
@@ -471,10 +476,21 @@ export function useRealtimeSession({
                 }
 
                 if (type === 'question.prompt') {
-                    if (questionPromptRef.current) {
-                        questionPromptRef.current(data)
+                    const hasStructuredQuestion = data && Object.prototype.hasOwnProperty.call(data, 'question')
+                    const questionNode = hasStructuredQuestion ? data?.question : data
+                    const selection = data?.selection || {}
+                    const normalizedQuestion = {
+                        questionId: questionNode?.id || questionNode?.questionId || '',
+                        text: questionNode?.text || '',
+                        group: questionNode?.group || '',
+                        exhausted: Boolean(selection?.exhausted),
+                        selectionReason: selection?.reason || '',
+                        mockExamCompleted: Boolean(selection?.exhausted && selection?.mode === 'MOCK_EXAM')
                     }
-                    if (data?.text) {
+                    if (questionPromptRef.current) {
+                        questionPromptRef.current(normalizedQuestion)
+                    }
+                    if (normalizedQuestion.text) {
                         setStatus('질문이 도착했습니다. 답변을 시작해 주세요.')
                     }
                     return
@@ -492,7 +508,13 @@ export function useRealtimeSession({
                 }
 
                 if (type === 'session.stopped') {
-                    setStatus('세션이 서버에서 종료되었습니다.')
+                    serverStopRef.current = true
+                    const reason = data?.reason || ''
+                    if (reason === 'question_exhausted' || reason === 'QUESTION_EXHAUSTED') {
+                        setStatus('모든 질문을 완료하여 세션이 자동 종료되었습니다.')
+                    } else {
+                        setStatus('세션이 서버에서 종료되었습니다.')
+                    }
                     return
                 }
 

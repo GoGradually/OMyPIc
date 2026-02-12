@@ -153,7 +153,11 @@ export function useQuestionLists({
         }
         const response = await callApi(`/api/questions/${activeListId}/next?sessionId=${sessionId}`)
         const data = await response.json()
-        setCurrentQuestion(data)
+        setCurrentQuestion({
+            ...data,
+            exhausted: Boolean(data?.skipped),
+            selectionReason: data?.mockExamCompletionReason || ''
+        })
 
         if (data.mockExamCompleted && !mockFinalRequested) {
             setMockFinalRequested(true)

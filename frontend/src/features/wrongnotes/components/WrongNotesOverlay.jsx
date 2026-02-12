@@ -21,14 +21,19 @@ export function WrongNotesOverlay({wrongNotes, feedback}) {
             {feedback && (
                 <div className="feedback-block">
                     <div className="feedback-title">최근 개선 예시 답변</div>
-                    <p>{feedback.exampleAnswer}</p>
-                    {feedback.rulebookEvidence && feedback.rulebookEvidence.length > 0 && (
-                        <ul className="bullet-list">
-                            {feedback.rulebookEvidence.map((item, idx) => (
-                                <li key={idx}>{item}</li>
-                            ))}
-                        </ul>
-                    )}
+                    {(feedback.items && feedback.items.length > 0 ? feedback.items : [feedback]).map((item, idx) => (
+                        <div key={`${item.questionId || 'feedback'}-${idx}`}>
+                            {item.questionText && <p className="tiny-meta">{item.questionText}</p>}
+                            <p>{item.exampleAnswer}</p>
+                            {item.rulebookEvidence && item.rulebookEvidence.length > 0 && (
+                                <ul className="bullet-list">
+                                    {item.rulebookEvidence.map((evidence, evidenceIndex) => (
+                                        <li key={`${idx}-${evidenceIndex}`}>{evidence}</li>
+                                    ))}
+                                </ul>
+                            )}
+                        </div>
+                    ))}
                 </div>
             )}
         </div>

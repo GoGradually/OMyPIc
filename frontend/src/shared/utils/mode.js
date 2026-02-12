@@ -12,8 +12,10 @@ export function buildModePayload({sessionId, listId, mode, batchSize, mockOrder,
         listId: listId || null,
         mode,
         continuousBatchSize: batchSize,
-        mockGroupOrder: mockOrder.split(',').map((item) => item.trim()).filter(Boolean),
-        mockGroupCounts: parseMockGroupCounts(mockCounts)
+        mockPlan: {
+            groupOrder: mockOrder.split(',').map((item) => item.trim()).filter(Boolean),
+            groupCounts: parseMockGroupCounts(mockCounts)
+        }
     }
 }
 
@@ -23,6 +25,9 @@ export function getCurrentQuestionLabel(currentQuestion) {
     }
     if (currentQuestion.mockExamCompleted) {
         return '모든 모의고사 질문을 완료했습니다.'
+    }
+    if (currentQuestion.exhausted) {
+        return '모든 질문을 완료했습니다.'
     }
     return currentQuestion.text || '질문을 불러오지 못했습니다.'
 }

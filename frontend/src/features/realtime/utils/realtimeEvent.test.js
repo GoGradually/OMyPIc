@@ -13,11 +13,53 @@ describe('realtimeEvent', () => {
 
     it('builds feedback model with defaults', () => {
         const feedback = buildFeedbackFromRealtime({
-            summary: '요약',
-            correctionPoints: ['a', 'b']
+            policy: {
+                mode: 'CONTINUOUS',
+                reason: 'BATCH_READY'
+            },
+            batch: {
+                size: 1,
+                isResidual: false,
+                items: [
+                    {
+                        questionId: 'q1',
+                        questionText: '질문',
+                        questionGroup: 'A',
+                        answerText: '답변',
+                        summary: '요약',
+                        correctionPoints: ['a', 'b']
+                    }
+                ]
+            },
+            nextAction: {
+                type: 'ask_next',
+                reason: ''
+            }
         })
 
         expect(feedback).toEqual({
+            mode: 'CONTINUOUS',
+            batch: {
+                size: 1,
+                isResidual: false,
+                reason: 'BATCH_READY'
+            },
+            nextAction: {
+                type: 'ask_next',
+                reason: ''
+            },
+            items: [
+                {
+                    questionId: 'q1',
+                    questionText: '질문',
+                    questionGroup: 'A',
+                    answerText: '답변',
+                    summary: '요약',
+                    correctionPoints: ['a', 'b'],
+                    exampleAnswer: '',
+                    rulebookEvidence: []
+                }
+            ],
             summary: '요약',
             correctionPoints: ['a', 'b'],
             exampleAnswer: '',

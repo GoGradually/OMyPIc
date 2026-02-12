@@ -10,9 +10,13 @@ export function useRulebooks() {
         setRulebooks(data)
     }, [])
 
-    const uploadRulebook = useCallback(async (file) => {
+    const uploadRulebook = useCallback(async (file, scope = 'MAIN', questionGroup = '') => {
         const form = new FormData()
         form.append('file', file)
+        form.append('scope', scope)
+        if (scope === 'QUESTION') {
+            form.append('questionGroup', questionGroup || '')
+        }
         await callApi('/api/rulebooks', {method: 'POST', body: form})
         await refreshRulebooks()
     }, [refreshRulebooks])

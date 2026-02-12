@@ -1,16 +1,36 @@
 import React from 'react'
 
 export function RulebookOverlay({rulebooks, uploadRulebook, toggleRulebook, deleteRulebook}) {
+    const [scope, setScope] = React.useState('MAIN')
+    const [questionGroup, setQuestionGroup] = React.useState('')
+
+    const canUploadQuestionScope = scope !== 'QUESTION' || Boolean(questionGroup.trim())
+
     return (
         <div className="overlay-content">
             <div className="field-block">
                 <label>룰북 업로드 (.md)</label>
+                <div className="field-grid two-col">
+                    <select value={scope} onChange={(event) => setScope(event.target.value)}>
+                        <option value="MAIN">메인 룰북</option>
+                        <option value="QUESTION">질문별 룰북</option>
+                    </select>
+                    {scope === 'QUESTION' && (
+                        <input
+                            value={questionGroup}
+                            onChange={(event) => setQuestionGroup(event.target.value)}
+                            placeholder="질문 그룹 (예: A)"
+                        />
+                    )}
+                </div>
                 <input
                     type="file"
                     accept=".md"
+                    disabled={!canUploadQuestionScope}
                     onChange={(event) => {
                         if (event.target.files[0]) {
-                            uploadRulebook(event.target.files[0])
+                            uploadRulebook(event.target.files[0], scope, questionGroup.trim())
+                            event.target.value = ''
                         }
                     }}
                 />
@@ -20,7 +40,10 @@ export function RulebookOverlay({rulebooks, uploadRulebook, toggleRulebook, dele
             <ul className="item-list">
                 {rulebooks.map((book) => (
                     <li key={book.id}>
-                        <span>{book.filename}</span>
+                        <span>
+                            {book.filename}
+                            <small> · {book.scope === 'QUESTION' ? `질문별(${book.questionGroup || '-'})` : '메인'}</small>
+                        </span>
                         <div className="item-actions">
                             <button
                                 className="control-button secondary"
