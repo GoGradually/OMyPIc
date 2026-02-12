@@ -39,7 +39,7 @@ public class QuestionList {
         touchUpdatedAt(now);
     }
 
-    public QuestionItem addQuestion(String text, String group, Instant now) {
+    public QuestionItem addQuestion(String text, QuestionGroup group, Instant now) {
         if (questions.size() >= 200) {
             throw new IllegalArgumentException("Question limit exceeded");
         }
@@ -49,7 +49,7 @@ public class QuestionList {
         return item;
     }
 
-    public void updateQuestion(QuestionItemId itemId, String text, String group, Instant now) {
+    public void updateQuestion(QuestionItemId itemId, String text, QuestionGroup group, Instant now) {
         if (itemId == null) {
             return;
         }
@@ -72,7 +72,7 @@ public class QuestionList {
         touchUpdatedAt(now);
     }
 
-    public Map<String, List<QuestionItemId>> groupQuestionIdsByGroup() {
+    public Map<QuestionGroup, List<QuestionItemId>> groupQuestionIdsByGroup() {
         return questions.stream()
                 .filter(q -> q.getGroup() != null)
                 .collect(Collectors.groupingBy(QuestionItem::getGroup,
