@@ -4,130 +4,54 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
+import java.util.Set;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class QuestionListTest {
-
-    @Test
-    void addQuestion_allowsUpTo200Items() {
-        QuestionList list = QuestionList.create("list", Instant.parse("2026-01-01T00:00:00Z"));
-
-        for (int i = 0; i < 200; i++) {
-            list.addQuestion("question-" + i, QuestionGroup.of("group"), Instant.now());
-        }
-
-        assertEquals(200, list.getQuestions().size());
-    }
+class QuestionGroupAggregateTest {
 
     @Test
-    void addQuestion_throwsWhenOver200Items() {
-        QuestionList list = QuestionList.create("list", Instant.parse("2026-01-01T00:00:00Z"));
-        for (int i = 0; i < 200; i++) {
-            list.addQuestion("question-" + i, QuestionGroup.of("group"), Instant.now());
-        }
-
-        assertThrows(IllegalArgumentException.class,
-                () -> list.addQuestion("overflow", QuestionGroup.of("group"), Instant.now()));
-    }
-
-    @Test
-    void rename_updatesNameAndTimestamp() {
-        QuestionList list = QuestionList.create("before", Instant.parse("2026-01-01T00:00:00Z"));
-
-        Instant after = Instant.parse("2026-01-01T01:00:00Z");
-        list.rename("after", after);
-
-        assertEquals("after", list.getName());
-        assertEquals(after, list.getUpdatedAt());
-    }
-
-    @Test
-    void updateQuestion_updatesMatchingItem() {
-        QuestionItem item = QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A"));
-        QuestionList list = QuestionList.rehydrate(
-                QuestionListId.of("list-1"),
-                "list",
-                List.of(item),
-                Instant.parse("2026-01-01T00:00:00Z"),
+    void create_normalizesTags_trimLowercaseDeduplicate() {
+        QuestionGroupAggregate group = QuestionGroupAggregate.create(
+                "Travel Group",
+                List.of(" Travel ", "travel", "HABIT"),
                 Instant.parse("2026-01-01T00:00:00Z")
         );
 
-        list.updateQuestion(QuestionItemId.of("q1"), "Q1 updated", QuestionGroup.of("B"), Instant.parse("2026-01-01T02:00:00Z"));
-
-        assertEquals("Q1 updated", list.getQuestions().get(0).getText());
-        assertEquals(QuestionGroup.of("B"), list.getQuestions().get(0).getGroup());
+        assertEquals(Set.of("travel", "habit"), group.getTags());
     }
 
     @Test
-    void updateQuestion_withNullId_keepsQuestionsUntouched() {
-        QuestionItem item = QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A"));
-        QuestionList list = QuestionList.rehydrate(
-                QuestionListId.of("list-1"),
-                "list",
-                List.of(item),
-                Instant.parse("2026-01-01T00:00:00Z"),
-                Instant.parse("2026-01-01T00:00:00Z")
-        );
+    void addQuestion_allowsUpToThreeQuestions() {
+        QuestionGroupAggregate group = QuestionGroupAggregate.create("g1", List.of("travel"), Instant.now());
 
-        list.updateQuestion(null, "Q1 updated", QuestionGroup.of("B"), Instant.parse("2026-01-01T02:00:00Z"));
+        group.addQuestion("q1", "habit", Instant.now());
+        group.addQuestion("q2", "compare", Instant.now());
+        group.addQuestion("q3", null, Instant.now());
 
-        assertEquals("Q1", list.getQuestions().get(0).getText());
-        assertEquals(QuestionGroup.of("A"), list.getQuestions().get(0).getGroup());
+        assertEquals(3, group.getQuestions().size());
+        assertThrows(IllegalArgumentException.class, () -> group.addQuestion("q4", null, Instant.now()));
     }
 
     @Test
-    void removeQuestion_removesMatchingItem() {
-        QuestionItem item1 = QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A"));
-        QuestionItem item2 = QuestionItem.rehydrate(QuestionItemId.of("q2"), "Q2", QuestionGroup.of("B"));
-        QuestionList list = QuestionList.rehydrate(
-                QuestionListId.of("list-1"),
-                "list",
-                List.of(item1, item2),
-                Instant.parse("2026-01-01T00:00:00Z"),
-                Instant.parse("2026-01-01T00:00:00Z")
-        );
+    void updateQuestion_updatesTextAndQuestionType() {
+        QuestionGroupAggregate group = QuestionGroupAggregate.create("g2", List.of("habit"), Instant.now());
+        QuestionItem added = group.addQuestion("original", "habit", Instant.now());
 
-        list.removeQuestion(QuestionItemId.of("q1"), Instant.parse("2026-01-01T03:00:00Z"));
+        group.updateQuestion(added.getId(), "updated", "compare", Instant.now());
 
-        assertEquals(1, list.getQuestions().size());
-        assertEquals("q2", list.getQuestions().get(0).getId().value());
+        assertEquals("updated", group.getQuestions().get(0).getText());
+        assertEquals("compare", group.getQuestions().get(0).getQuestionType());
     }
 
     @Test
-    void removeQuestion_throwsWhenRemovingLastQuestion() {
-        QuestionItem item = QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A"));
-        QuestionList list = QuestionList.rehydrate(
-                QuestionListId.of("list-1"),
-                "list",
-                List.of(item),
-                Instant.parse("2026-01-01T00:00:00Z"),
-                Instant.parse("2026-01-01T00:00:00Z")
-        );
+    void hasAnyTag_returnsTrueWhenIntersectionExists() {
+        QuestionGroupAggregate group = QuestionGroupAggregate.create("g3", List.of("travel", "role-play"), Instant.now());
 
-        assertThrows(IllegalStateException.class,
-                () -> list.removeQuestion(QuestionItemId.of("q1"), Instant.parse("2026-01-01T03:00:00Z")));
-    }
-
-    @Test
-    void groupQuestionIdsByGroup_excludesNullGroups() {
-        QuestionList list = QuestionList.rehydrate(
-                QuestionListId.of("list-1"),
-                "list",
-                List.of(
-                        QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A")),
-                        QuestionItem.rehydrate(QuestionItemId.of("q2"), "Q2", QuestionGroup.of("A")),
-                        QuestionItem.rehydrate(QuestionItemId.of("q3"), "Q3", null)
-                ),
-                Instant.parse("2026-01-01T00:00:00Z"),
-                Instant.parse("2026-01-01T00:00:00Z")
-        );
-
-        Map<QuestionGroup, List<QuestionItemId>> grouped = list.groupQuestionIdsByGroup();
-
-        assertEquals(1, grouped.size());
-        assertEquals(2, grouped.get(QuestionGroup.of("A")).size());
-        assertTrue(grouped.containsKey(QuestionGroup.of("A")));
+        assertTrue(group.hasAnyTag(Set.of("travel")));
+        assertFalse(group.hasAnyTag(Set.of("habit")));
     }
 }
