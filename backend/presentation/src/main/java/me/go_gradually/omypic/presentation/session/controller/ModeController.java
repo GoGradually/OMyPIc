@@ -10,9 +10,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.Map;
-import java.util.stream.Collectors;
-
 @RestController
 @RequestMapping("/api/modes")
 public class ModeController {
@@ -24,18 +21,15 @@ public class ModeController {
 
     @PutMapping
     public SessionStateResponse update(@RequestBody ModeUpdateRequest request) {
-        if (request.getListId() == null) {
-            return toResponse(sessionUseCase.getOrCreate(request.getSessionId()));
-        }
         return toResponse(sessionUseCase.updateMode(toCommand(request)));
     }
 
     private ModeUpdateCommand toCommand(ModeUpdateRequest request) {
         ModeUpdateCommand command = new ModeUpdateCommand();
         command.setSessionId(request.getSessionId());
-        command.setListId(request.getListId());
         command.setMode(request.getMode());
         command.setContinuousBatchSize(request.getContinuousBatchSize());
+        command.setSelectedGroupTags(request.getSelectedGroupTags());
         return command;
     }
 
@@ -44,12 +38,12 @@ public class ModeController {
         response.setSessionId(state.getSessionId().value());
         response.setMode(state.getMode());
         response.setContinuousBatchSize(state.getContinuousBatchSize());
-        response.setAnsweredSinceLastFeedback(state.getAnsweredSinceLastFeedback());
-        response.setActiveListId(state.getActiveQuestionListId());
+        response.setCompletedGroupCountSinceLastFeedback(state.getCompletedGroupCountSinceLastFeedback());
+        response.setSelectedGroupTags(state.getSelectedGroupTags());
+        response.setCandidateGroupOrder(state.getCandidateGroupOrder());
+        response.setGroupQuestionIndices(state.getGroupQuestionIndices());
         response.setSttSegments(state.getSttSegments());
         response.setFeedbackLanguage(state.getFeedbackLanguage().value());
-        response.setListIndices(state.getListIndices().entrySet().stream()
-                .collect(Collectors.toMap(entry -> entry.getKey().value(), Map.Entry::getValue)));
         return response;
     }
 }

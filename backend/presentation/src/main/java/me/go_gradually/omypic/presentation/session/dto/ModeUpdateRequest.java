@@ -2,11 +2,14 @@ package me.go_gradually.omypic.presentation.session.dto;
 
 import me.go_gradually.omypic.domain.session.ModeType;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public class ModeUpdateRequest {
     private String sessionId;
-    private String listId;
     private ModeType mode;
     private Integer continuousBatchSize;
+    private List<String> selectedGroupTags = new ArrayList<>();
 
     public String getSessionId() {
         return sessionId;
@@ -14,14 +17,6 @@ public class ModeUpdateRequest {
 
     public void setSessionId(String sessionId) {
         this.sessionId = sessionId;
-    }
-
-    public String getListId() {
-        return listId;
-    }
-
-    public void setListId(String listId) {
-        this.listId = listId;
     }
 
     public ModeType getMode() {
@@ -38,5 +33,13 @@ public class ModeUpdateRequest {
 
     public void setContinuousBatchSize(Integer continuousBatchSize) {
         this.continuousBatchSize = continuousBatchSize;
+    }
+
+    public List<String> getSelectedGroupTags() {
+        return selectedGroupTags;
+    }
+
+    public void setSelectedGroupTags(List<String> selectedGroupTags) {
+        this.selectedGroupTags = selectedGroupTags == null ? new ArrayList<>() : new ArrayList<>(selectedGroupTags);
     }
 }

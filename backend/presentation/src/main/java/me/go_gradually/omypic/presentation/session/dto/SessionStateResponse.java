@@ -4,16 +4,18 @@ import me.go_gradually.omypic.domain.session.ModeType;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public class SessionStateResponse {
     private String sessionId;
     private ModeType mode;
     private int continuousBatchSize;
-    private int answeredSinceLastFeedback;
-    private String activeListId;
+    private int completedGroupCountSinceLastFeedback;
+    private Set<String> selectedGroupTags;
+    private List<String> candidateGroupOrder;
+    private Map<String, Integer> groupQuestionIndices;
     private List<String> sttSegments;
     private String feedbackLanguage;
-    private Map<String, Integer> listIndices;
 
     public String getSessionId() {
         return sessionId;
@@ -39,20 +41,36 @@ public class SessionStateResponse {
         this.continuousBatchSize = continuousBatchSize;
     }
 
-    public int getAnsweredSinceLastFeedback() {
-        return answeredSinceLastFeedback;
+    public int getCompletedGroupCountSinceLastFeedback() {
+        return completedGroupCountSinceLastFeedback;
     }
 
-    public void setAnsweredSinceLastFeedback(int answeredSinceLastFeedback) {
-        this.answeredSinceLastFeedback = answeredSinceLastFeedback;
+    public void setCompletedGroupCountSinceLastFeedback(int completedGroupCountSinceLastFeedback) {
+        this.completedGroupCountSinceLastFeedback = completedGroupCountSinceLastFeedback;
     }
 
-    public String getActiveListId() {
-        return activeListId;
+    public Set<String> getSelectedGroupTags() {
+        return selectedGroupTags;
     }
 
-    public void setActiveListId(String activeListId) {
-        this.activeListId = activeListId;
+    public void setSelectedGroupTags(Set<String> selectedGroupTags) {
+        this.selectedGroupTags = selectedGroupTags;
+    }
+
+    public List<String> getCandidateGroupOrder() {
+        return candidateGroupOrder;
+    }
+
+    public void setCandidateGroupOrder(List<String> candidateGroupOrder) {
+        this.candidateGroupOrder = candidateGroupOrder;
+    }
+
+    public Map<String, Integer> getGroupQuestionIndices() {
+        return groupQuestionIndices;
+    }
+
+    public void setGroupQuestionIndices(Map<String, Integer> groupQuestionIndices) {
+        this.groupQuestionIndices = groupQuestionIndices;
     }
 
     public List<String> getSttSegments() {
@@ -71,11 +89,4 @@ public class SessionStateResponse {
         this.feedbackLanguage = feedbackLanguage;
     }
 
-    public Map<String, Integer> getListIndices() {
-        return listIndices;
-    }
-
-    public void setListIndices(Map<String, Integer> listIndices) {
-        this.listIndices = listIndices;
-    }
 }
