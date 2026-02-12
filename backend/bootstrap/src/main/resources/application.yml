@@ -45,6 +45,10 @@ omypic:
   realtime:
     conversation-model: gpt-realtime-mini
     stt-model: gpt-4o-mini-transcribe
+    vad:
+      prefix-padding-ms: 300
+      silence-duration-ms: 1500
+      threshold: 0.5
     feedback-provider: openai
     feedback-model: gpt-4o-mini
     feedback-language: ko

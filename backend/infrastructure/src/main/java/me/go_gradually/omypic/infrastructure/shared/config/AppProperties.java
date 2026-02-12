@@ -123,6 +123,21 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
     }
 
     @Override
+    public int realtimeVadPrefixPaddingMs() {
+        return realtime.getVad().getPrefixPaddingMs();
+    }
+
+    @Override
+    public int realtimeVadSilenceDurationMs() {
+        return realtime.getVad().getSilenceDurationMs();
+    }
+
+    @Override
+    public double realtimeVadThreshold() {
+        return realtime.getVad().getThreshold();
+    }
+
+    @Override
     public String realtimeFeedbackProvider() {
         return realtime.getFeedbackProvider();
     }
@@ -283,6 +298,7 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
     public static class Realtime {
         private String conversationModel = "gpt-realtime-mini";
         private String sttModel = "gpt-4o-mini-transcribe";
+        private RealtimeVad vad = new RealtimeVad();
         private String feedbackProvider = "openai";
         private String feedbackModel = "gpt-4o-mini";
         private String feedbackLanguage = "ko";
@@ -303,6 +319,14 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
 
         public void setSttModel(String sttModel) {
             this.sttModel = sttModel;
+        }
+
+        public RealtimeVad getVad() {
+            return vad;
+        }
+
+        public void setVad(RealtimeVad vad) {
+            this.vad = vad;
         }
 
         public String getFeedbackProvider() {
@@ -343,6 +367,36 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
 
         public void setRestDisabled(boolean restDisabled) {
             this.restDisabled = restDisabled;
+        }
+    }
+
+    public static class RealtimeVad {
+        private int prefixPaddingMs = 300;
+        private int silenceDurationMs = 1500;
+        private double threshold = 0.5;
+
+        public int getPrefixPaddingMs() {
+            return prefixPaddingMs;
+        }
+
+        public void setPrefixPaddingMs(int prefixPaddingMs) {
+            this.prefixPaddingMs = prefixPaddingMs;
+        }
+
+        public int getSilenceDurationMs() {
+            return silenceDurationMs;
+        }
+
+        public void setSilenceDurationMs(int silenceDurationMs) {
+            this.silenceDurationMs = silenceDurationMs;
+        }
+
+        public double getThreshold() {
+            return threshold;
+        }
+
+        public void setThreshold(double threshold) {
+            this.threshold = threshold;
         }
     }
 

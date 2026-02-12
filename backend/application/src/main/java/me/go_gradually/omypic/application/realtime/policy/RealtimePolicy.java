@@ -5,6 +5,12 @@ public interface RealtimePolicy {
 
     String realtimeSttModel();
 
+    int realtimeVadPrefixPaddingMs();
+
+    int realtimeVadSilenceDurationMs();
+
+    double realtimeVadThreshold();
+
     String realtimeFeedbackProvider();
 
     String realtimeFeedbackModel();

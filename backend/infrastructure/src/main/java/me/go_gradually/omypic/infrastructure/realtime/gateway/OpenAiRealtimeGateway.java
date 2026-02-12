@@ -106,7 +106,14 @@ SCRIPT:
 
     private Map<String, Object> turnDetectionPayload() {
         // 서버 VAD로 턴 종료를 감지하되 자동 응답 생성은 막고(=false), 기존 응답은 인터럽트 가능하게 둔다.
-        return Map.of("type", "server_vad", "create_response", false, "interrupt_response", true);
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("type", "server_vad");
+        payload.put("threshold", properties.realtimeVadThreshold());
+        payload.put("prefix_padding_ms", properties.realtimeVadPrefixPaddingMs());
+        payload.put("silence_duration_ms", properties.realtimeVadSilenceDurationMs());
+        payload.put("create_response", false);
+        payload.put("interrupt_response", true);
+        return payload;
     }
 
     private URI toRealtimeUri(String baseUrl, String model) {

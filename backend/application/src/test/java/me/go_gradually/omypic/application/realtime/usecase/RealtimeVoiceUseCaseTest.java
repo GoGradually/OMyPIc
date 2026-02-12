@@ -24,9 +24,12 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -64,6 +67,9 @@ class RealtimeVoiceUseCaseTest {
 
         when(realtimePolicy.realtimeConversationModel()).thenReturn("gpt-realtime-mini");
         when(realtimePolicy.realtimeSttModel()).thenReturn("gpt-4o-mini-transcribe");
+        lenient().when(realtimePolicy.realtimeVadPrefixPaddingMs()).thenReturn(300);
+        lenient().when(realtimePolicy.realtimeVadSilenceDurationMs()).thenReturn(0);
+        lenient().when(realtimePolicy.realtimeVadThreshold()).thenReturn(0.5);
         when(realtimePolicy.realtimeFeedbackProvider()).thenReturn("openai");
         when(realtimePolicy.realtimeFeedbackModel()).thenReturn("gpt-realtime-mini");
         when(realtimePolicy.realtimeFeedbackLanguage()).thenReturn("ko");
@@ -133,6 +139,86 @@ class RealtimeVoiceUseCaseTest {
         assertEquals("gpt-realtime-mini", openCaptor.getValue().conversationModel());
         assertEquals("gpt-4o-mini-transcribe", openCaptor.getValue().sttModel());
         session.close();
+    }
+
+    @Test
+    void finalTranscript_debouncesRapidEventsIntoSingleTurn() throws Exception {
+        stubAsyncExecutorRunsInline();
+        stubRealtimeSpeechSuccess();
+        when(realtimePolicy.realtimeVadSilenceDurationMs()).thenReturn(60);
+        Feedback feedback = Feedback.of("summary", List.of("p1", "p2", "p3"), "example", List.of());
+        when(feedbackUseCase.generateFeedbackForTurn(anyString(), any(), anyString(), any(QuestionGroup.class), anyString(), anyInt())).thenReturn(feedback);
+
+        CountDownLatch feedbackLatch = new CountDownLatch(1);
+        List<String> finals = new CopyOnWriteArrayList<>();
+        RealtimeVoiceSession session = useCase.open(startCommand(), (event, payload) -> {
+            if ("stt.final".equals(event) && payload instanceof Map<?, ?> map) {
+                finals.add(String.valueOf(map.get("text")));
+            }
+            if ("feedback.final".equals(event)) {
+                feedbackLatch.countDown();
+            }
+            return true;
+        });
+
+        listener.onFinalTranscript("hello");
+        listener.onFinalTranscript("world");
+
+        assertTrue(feedbackLatch.await(2, TimeUnit.SECONDS));
+        assertEquals(List.of("hello world"), finals);
+        verify(sessionUseCase, times(1)).appendSegment("s1", "hello world");
+        verify(feedbackUseCase, times(1)).generateFeedbackForTurn(anyString(), any(), anyString(), any(QuestionGroup.class), anyString(), anyInt());
+        session.close();
+    }
+
+    @Test
+    void finalTranscript_ignoresTooShortFragment() {
+        stubAsyncExecutorRunsInline();
+        stubRealtimeSpeechSuccess();
+        useCase.open(startCommand(), (event, payload) -> true);
+
+        listener.onFinalTranscript("hi");
+
+        verify(sessionUseCase, never()).appendSegment("s1", "hi");
+        verify(feedbackUseCase, never()).generateFeedbackForTurn(anyString(), any(), anyString(), any(), anyString(), anyInt());
+    }
+
+    @Test
+    void nextQuestionSpeech_isSentAfterFeedbackSpeechCompletes() throws Exception {
+        stubAsyncExecutorRunsInline();
+        Feedback feedback = Feedback.of("summary", List.of("p1", "p2", "p3"), "example", List.of());
+        when(feedbackUseCase.generateFeedbackForTurn(anyString(), any(), anyString(), any(QuestionGroup.class), anyString(), anyInt())).thenReturn(feedback);
+
+        CountDownLatch firstTurnSpeech = new CountDownLatch(1);
+        CountDownLatch secondTurnSpeech = new CountDownLatch(1);
+        List<String> turnTwoSpeeches = new CopyOnWriteArrayList<>();
+        doAnswer(invocation -> {
+            long turnId = invocation.getArgument(0);
+            String text = invocation.getArgument(1);
+            if (turnId == 1L) {
+                listener.onAssistantAudioCompleted(turnId);
+                return null;
+            }
+            if (turnId == 2L) {
+                turnTwoSpeeches.add(text);
+                if (turnTwoSpeeches.size() == 1) {
+                    firstTurnSpeech.countDown();
+                }
+                if (turnTwoSpeeches.size() == 2) {
+                    secondTurnSpeech.countDown();
+                }
+            }
+            return null;
+        }).when(realtimeAudioSession).speakText(anyLong(), anyString(), anyString());
+
+        useCase.open(startCommand(), (event, payload) -> true);
+        listener.onFinalTranscript("answer");
+
+        assertTrue(firstTurnSpeech.await(1, TimeUnit.SECONDS));
+        assertFalse(secondTurnSpeech.await(200, TimeUnit.MILLISECONDS));
+        listener.onAssistantAudioCompleted(2L);
+        assertTrue(secondTurnSpeech.await(1, TimeUnit.SECONDS));
+        assertEquals(2, turnTwoSpeeches.size());
     }
 
     @Test

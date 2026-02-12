@@ -25,14 +25,18 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class RealtimeVoiceUseCase {
+    private static final int MIN_FINAL_TRANSCRIPT_LENGTH = 3;
     private final RealtimeAudioGateway realtimeAudioGateway;
     private final FeedbackUseCase feedbackUseCase;
     private final SessionUseCase sessionUseCase;
@@ -110,10 +114,95 @@ public class RealtimeVoiceUseCase {
     }
 
     private void handleFinalTranscriptEvent(RuntimeContext context, String text) {
-        if (isContextInactive(context) || isBlank(text)) {
+        String prepared = preparedFinalTranscript(text);
+        if (!canQueueFinalTranscript(context, prepared)) {
             return;
         }
-        handleFinalTranscript(context, text);
+        long version = context.bufferFinalTranscript(prepared);
+        scheduleFinalTranscriptFlush(context, version);
+    }
+
+    private String preparedFinalTranscript(String text) {
+        return text == null ? "" : text.trim();
+    }
+
+    private boolean canQueueFinalTranscript(RuntimeContext context, String text) {
+        return !isContextInactive(context) && !isBlank(text);
+    }
+
+    private void scheduleFinalTranscriptFlush(RuntimeContext context, long version) {
+        int delayMs = finalTranscriptDelayMs();
+        if (delayMs <= 0) {
+            flushFinalTranscript(context, version);
+            return;
+        }
+        CompletableFuture.delayedExecutor(delayMs, TimeUnit.MILLISECONDS)
+                .execute(() -> flushFinalTranscript(context, version));
+    }
+
+    private int finalTranscriptDelayMs() {
+        return Math.max(0, realtimePolicy.realtimeVadSilenceDurationMs());
+    }
+
+    private void flushFinalTranscript(RuntimeContext context, long version) {
+        if (!canFlushFinalTranscript(context, version)) {
+            return;
+        }
+        if (!context.startFinalTranscriptProcessing()) {
+            return;
+        }
+        consumeAndHandleBufferedTranscript(context);
+    }
+
+    private boolean canFlushFinalTranscript(RuntimeContext context, long version) {
+        return !isContextInactive(context) && context.isFinalTranscriptVersionCurrent(version);
+    }
+
+    private void consumeAndHandleBufferedTranscript(RuntimeContext context) {
+        String buffered = context.consumeBufferedFinalTranscript();
+        if (shouldSkipFinalTranscript(context, buffered)) {
+            completeFinalTranscriptProcessing(context);
+            return;
+        }
+        dispatchFinalTranscript(context, buffered);
+    }
+
+    private boolean shouldSkipFinalTranscript(RuntimeContext context, String text) {
+        String normalized = normalizedFinalTranscript(text);
+        String questionId = context.currentQuestionId();
+        if (isBlank(normalized) || normalized.length() < MIN_FINAL_TRANSCRIPT_LENGTH) {
+            return true;
+        }
+        if (context.isDuplicateFinalTranscript(questionId, normalized)) {
+            return true;
+        }
+        context.rememberFinalTranscript(questionId, normalized);
+        return false;
+    }
+
+    private String normalizedFinalTranscript(String text) {
+        return text == null ? "" : text.trim().replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
+    }
+
+    private void dispatchFinalTranscript(RuntimeContext context, String text) {
+        try {
+            handleFinalTranscript(context, text);
+        } catch (Exception e) {
+            completeFinalTranscriptProcessing(context);
+            throw e;
+        }
+    }
+
+    private void completeFinalTranscriptProcessing(RuntimeContext context) {
+        context.finishFinalTranscriptProcessing();
+        schedulePendingFinalTranscript(context);
+    }
+
+    private void schedulePendingFinalTranscript(RuntimeContext context) {
+        if (!context.hasBufferedFinalTranscript()) {
+            return;
+        }
+        scheduleFinalTranscriptFlush(context, context.currentFinalTranscriptVersion());
     }
 
     private void handleAssistantAudioChunk(RuntimeContext context, long turnId, String base64Audio) {
@@ -123,7 +212,15 @@ public class RealtimeVoiceUseCase {
         context.send("tts.chunk", Map.of("sessionId", context.sessionId, "turnId", turnId, "audio", base64Audio));
     }
 
+    private void handleAssistantAudioCompleted(RuntimeContext context, long turnId) {
+        context.finishSpeechDispatch(turnId);
+        flushSpeechQueue(context, turnId);
+        context.completeSpeech(turnId);
+    }
+
     private void handleAssistantAudioFailed(RuntimeContext context, long turnId, String message) {
+        context.finishSpeechDispatch(turnId);
+        flushSpeechQueue(context, turnId);
         context.completeSpeech(turnId);
         metrics.incrementTtsError();
         if (context.closed.get()) {
@@ -176,6 +273,7 @@ public class RealtimeVoiceUseCase {
     private void processTurn(RuntimeContext context, long turnId, TurnInput turnInput, Instant startedAt) {
         RuntimeSettings settings = context.settings;
         if (isTurnInactive(context, turnId)) {
+            completeFinalTranscriptProcessing(context);
             return;
         }
         runTurnProcessing(context, turnId, turnInput, startedAt, settings);
@@ -205,6 +303,7 @@ public class RealtimeVoiceUseCase {
 
     private void finishTurn(RuntimeContext context, long turnId, Instant startedAt) {
         context.markTurnProcessingDone(turnId);
+        completeFinalTranscriptProcessing(context);
         metrics.recordRealtimeTurnLatency(Duration.between(startedAt, Instant.now()));
     }
 
@@ -512,8 +611,45 @@ public class RealtimeVoiceUseCase {
             sendMissingAudioSession(context, turnId);
             return;
         }
+        context.enqueueSpeech(turnId, speechText);
+        flushSpeechQueue(context, turnId);
+    }
+
+    private void flushSpeechQueue(RuntimeContext context, long turnId) {
+        if (!context.tryStartSpeechDispatch(turnId)) {
+            return;
+        }
+        sendNextQueuedSpeech(context, turnId);
+    }
+
+    private void sendNextQueuedSpeech(RuntimeContext context, long turnId) {
+        String queued = context.pollNextSpeech(turnId);
+        if (isBlank(queued)) {
+            context.finishSpeechDispatch(turnId);
+            return;
+        }
+        if (!canSendQueuedSpeech(context, turnId)) {
+            return;
+        }
+        sendQueuedSpeech(context, turnId, queued);
+    }
+
+    private boolean canSendQueuedSpeech(RuntimeContext context, long turnId) {
+        if (isTurnInactive(context, turnId)) {
+            context.finishSpeechDispatch(turnId);
+            return false;
+        }
+        if (context.audioSession != null) {
+            return true;
+        }
+        context.finishSpeechDispatch(turnId);
+        sendMissingAudioSession(context, turnId);
+        return false;
+    }
+
+    private void sendQueuedSpeech(RuntimeContext context, long turnId, String speechText) {
         context.registerSpeech(turnId);
-        speakSpeech(context, turnId, speechText, audioSession);
+        speakSpeech(context, turnId, speechText, context.audioSession);
     }
 
     private boolean canStreamSpeech(RuntimeContext context, long turnId, String speechText) {
@@ -533,9 +669,11 @@ public class RealtimeVoiceUseCase {
         try {
             audioSession.speakText(turnId, speechText, context.settings.ttsVoice);
         } catch (Exception e) {
+            context.finishSpeechDispatch(turnId);
             context.completeSpeech(turnId);
             metrics.incrementTtsError();
             context.send("tts.error", ttsErrorPayload(context, turnId, defaultMessage(e.getMessage())));
+            flushSpeechQueue(context, turnId);
         }
     }
 
@@ -666,7 +804,7 @@ public class RealtimeVoiceUseCase {
 
         @Override
         public void onAssistantAudioCompleted(long turnId) {
-            context.completeSpeech(turnId);
+            handleAssistantAudioCompleted(context, turnId);
         }
 
         @Override
@@ -764,13 +902,21 @@ public class RealtimeVoiceUseCase {
         private final AtomicLong cancelledThroughTurn = new AtomicLong(0);
         private final AtomicLong autoStopAfterTurn = new AtomicLong(-1L);
         private final Deque<TurnInput> continuousTurns = new ConcurrentLinkedDeque<>();
+        private final Map<Long, Deque<String>> queuedSpeechByTurn = new ConcurrentHashMap<>();
+        private final Map<Long, AtomicBoolean> speechDispatchingByTurn = new ConcurrentHashMap<>();
         private final Map<Long, AtomicLong> pendingSpeechCounts = new ConcurrentHashMap<>();
         private final Set<Long> turnsReadyForCompletion = ConcurrentHashMap.newKeySet();
         private final Set<Long> completedTurns = ConcurrentHashMap.newKeySet();
+        private final Object finalTranscriptLock = new Object();
+        private final AtomicLong finalTranscriptVersion = new AtomicLong(0);
         private final AtomicBoolean closed = new AtomicBoolean(false);
         private final AtomicBoolean forcedStopped = new AtomicBoolean(false);
         private final AtomicBoolean autoStopPending = new AtomicBoolean(false);
+        private final AtomicBoolean finalTranscriptProcessing = new AtomicBoolean(false);
         private volatile TurnInput currentQuestion = TurnInput.empty();
+        private volatile String bufferedFinalTranscript = "";
+        private volatile String lastFinalTranscriptQuestionId = "";
+        private volatile String lastFinalTranscript = "";
         private volatile String autoStopReason = "";
         private volatile RuntimeSettings settings;
         private volatile RealtimeAudioSession audioSession;
@@ -801,8 +947,105 @@ public class RealtimeVoiceUseCase {
             );
         }
 
+        private long bufferFinalTranscript(String text) {
+            synchronized (finalTranscriptLock) {
+                bufferedFinalTranscript = mergedTranscript(bufferedFinalTranscript, text);
+                return finalTranscriptVersion.incrementAndGet();
+            }
+        }
+
+        private boolean hasBufferedFinalTranscript() {
+            synchronized (finalTranscriptLock) {
+                return !isBlank(bufferedFinalTranscript);
+            }
+        }
+
+        private String consumeBufferedFinalTranscript() {
+            synchronized (finalTranscriptLock) {
+                String consumed = safeText(bufferedFinalTranscript);
+                bufferedFinalTranscript = "";
+                return consumed;
+            }
+        }
+
+        private String currentQuestionId() {
+            return safeText(currentQuestion.questionId());
+        }
+
+        private long currentFinalTranscriptVersion() {
+            return finalTranscriptVersion.get();
+        }
+
+        private boolean isFinalTranscriptVersionCurrent(long version) {
+            return finalTranscriptVersion.get() == version;
+        }
+
+        private boolean startFinalTranscriptProcessing() {
+            return finalTranscriptProcessing.compareAndSet(false, true);
+        }
+
+        private void finishFinalTranscriptProcessing() {
+            finalTranscriptProcessing.set(false);
+        }
+
+        private boolean isDuplicateFinalTranscript(String questionId, String normalized) {
+            synchronized (finalTranscriptLock) {
+                return normalized.equals(lastFinalTranscript)
+                        && safeText(questionId).equals(lastFinalTranscriptQuestionId);
+            }
+        }
+
+        private void rememberFinalTranscript(String questionId, String normalized) {
+            synchronized (finalTranscriptLock) {
+                lastFinalTranscriptQuestionId = safeText(questionId);
+                lastFinalTranscript = normalized;
+            }
+        }
+
+        private String mergedTranscript(String current, String next) {
+            if (isBlank(current)) {
+                return safeText(next);
+            }
+            if (isBlank(next)) {
+                return safeText(current);
+            }
+            return current + " " + safeText(next);
+        }
+
+        private String safeText(String text) {
+            return text == null ? "" : text.trim();
+        }
+
         private void appendContinuousTurn(TurnInput turnInput) {
             continuousTurns.addLast(turnInput);
+        }
+
+        private void enqueueSpeech(long turnId, String speechText) {
+            queuedSpeechByTurn.computeIfAbsent(turnId, ignored -> new ConcurrentLinkedDeque<>()).addLast(speechText);
+        }
+
+        private boolean tryStartSpeechDispatch(long turnId) {
+            AtomicBoolean dispatching = speechDispatchingByTurn.computeIfAbsent(turnId, ignored -> new AtomicBoolean(false));
+            return dispatching.compareAndSet(false, true);
+        }
+
+        private void finishSpeechDispatch(long turnId) {
+            AtomicBoolean dispatching = speechDispatchingByTurn.get(turnId);
+            if (dispatching != null) {
+                dispatching.set(false);
+            }
+        }
+
+        private String pollNextSpeech(long turnId) {
+            Deque<String> queue = queuedSpeechByTurn.get(turnId);
+            if (queue == null) {
+                return "";
+            }
+            String next = queue.pollFirst();
+            if (queue.isEmpty()) {
+                queuedSpeechByTurn.remove(turnId);
+            }
+            return safeText(next);
         }
 
         private List<TurnInput> pollAllContinuousTurns() {

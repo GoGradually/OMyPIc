@@ -32,6 +32,9 @@ class AppPropertiesTest {
         properties.getIntegrations().getAnthropic().setBaseUrl("http://anthropic.local");
         properties.getRealtime().setConversationModel("gpt-realtime");
         properties.getRealtime().setSttModel("gpt-4o-transcribe");
+        properties.getRealtime().getVad().setPrefixPaddingMs(444);
+        properties.getRealtime().getVad().setSilenceDurationMs(1555);
+        properties.getRealtime().getVad().setThreshold(0.45);
         properties.getRealtime().setFeedbackProvider("gemini");
         properties.getRealtime().setFeedbackModel("gemini-2.0-flash");
         properties.getRealtime().setFeedbackLanguage("en");
@@ -57,6 +60,9 @@ class AppPropertiesTest {
         assertEquals("http://anthropic.local", properties.getIntegrations().getAnthropic().getBaseUrl());
         assertEquals("gpt-realtime", properties.realtimeConversationModel());
         assertEquals("gpt-4o-transcribe", properties.realtimeSttModel());
+        assertEquals(444, properties.realtimeVadPrefixPaddingMs());
+        assertEquals(1555, properties.realtimeVadSilenceDurationMs());
+        assertEquals(0.45, properties.realtimeVadThreshold());
         assertEquals("gemini", properties.realtimeFeedbackProvider());
         assertEquals("gemini-2.0-flash", properties.realtimeFeedbackModel());
         assertEquals("en", properties.realtimeFeedbackLanguage());
