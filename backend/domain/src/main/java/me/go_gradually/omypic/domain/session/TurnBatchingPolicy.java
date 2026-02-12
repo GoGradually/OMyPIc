@@ -12,9 +12,6 @@ public final class TurnBatchingPolicy {
         int resolvedBatchSize = Math.max(1, continuousBatchSize);
         int currentCount = Math.max(0, answeredSinceLastFeedback);
 
-        if (resolvedMode == ModeType.MOCK_EXAM) {
-            return new BatchDecision(false, currentCount, BatchReason.WAITING_FOR_MOCK_EXAM_COMPLETION);
-        }
         if (resolvedMode == ModeType.IMMEDIATE) {
             return new BatchDecision(true, 0, BatchReason.IMMEDIATE_MODE);
         }
@@ -36,8 +33,6 @@ public final class TurnBatchingPolicy {
         IMMEDIATE_MODE,
         WAITING_FOR_BATCH,
         BATCH_READY,
-        MOCK_EXAM_FINAL,
-        WAITING_FOR_MOCK_EXAM_COMPLETION,
         EXHAUSTED_WITH_REMAINDER
     }
 

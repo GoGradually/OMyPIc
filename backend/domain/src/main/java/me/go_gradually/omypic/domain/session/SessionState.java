@@ -2,8 +2,6 @@ package me.go_gradually.omypic.domain.session;
 
 import me.go_gradually.omypic.domain.feedback.FeedbackLanguage;
 import me.go_gradually.omypic.domain.question.QuestionItem;
-import me.go_gradually.omypic.domain.question.QuestionItemId;
-import me.go_gradually.omypic.domain.question.QuestionGroup;
 import me.go_gradually.omypic.domain.question.QuestionList;
 import me.go_gradually.omypic.domain.question.QuestionListId;
 
@@ -25,10 +23,6 @@ public class SessionState {
     private int continuousBatchSize = 3;
     private int answeredSinceLastFeedback = 0;
     private FeedbackLanguage feedbackLanguage = FeedbackLanguage.of("ko");
-    private MockExamPlan mockExamPlan;
-    private boolean mockExamCompleted = false;
-    private boolean mockFinalFeedbackGenerated = false;
-    private int mockExamStartSegmentIndex = 0;
 
     public SessionState(SessionId sessionId) {
         if (sessionId == null) {
@@ -75,12 +69,6 @@ public class SessionState {
         }
         if (previous != this.mode) {
             this.answeredSinceLastFeedback = 0;
-            if (this.mode != ModeType.MOCK_EXAM) {
-                this.mockExamPlan = null;
-                this.mockExamCompleted = false;
-                this.mockFinalFeedbackGenerated = false;
-                this.mockExamStartSegmentIndex = sttSegments.size();
-            }
         }
     }
 
@@ -131,42 +119,9 @@ public class SessionState {
         this.feedbackLanguage = feedbackLanguage == null ? FeedbackLanguage.of("ko") : feedbackLanguage;
     }
 
-    public MockExamPlan getMockExamState() {
-        return mockExamPlan;
-    }
-
-    public boolean isMockExamCompleted() {
-        return mockExamCompleted;
-    }
-
-    public boolean isMockFinalFeedbackGenerated() {
-        return mockFinalFeedbackGenerated;
-    }
-
-    public void configureMockExam(QuestionList list,
-                                  List<QuestionGroup> groupOrder,
-                                  Map<QuestionGroup, Integer> groupCounts) {
-        if (list == null) {
-            this.mockExamPlan = null;
-            this.mockExamCompleted = false;
-            this.mockFinalFeedbackGenerated = false;
-            this.mockExamStartSegmentIndex = sttSegments.size();
-            return;
-        }
-        this.mockExamPlan = MockExamPlan.fromQuestionList(list, groupOrder, groupCounts);
-        this.mockExamCompleted = false;
-        this.mockFinalFeedbackGenerated = false;
-        this.mockExamStartSegmentIndex = sttSegments.size();
-    }
-
     public Optional<QuestionItem> nextQuestion(QuestionList list) {
         if (list == null) {
             return Optional.empty();
-        }
-        if (mode == ModeType.MOCK_EXAM) {
-            Optional<QuestionItem> next = nextMockExam(list);
-            mockExamCompleted = next.isEmpty();
-            return next;
         }
         return nextSequential(list);
     }
@@ -177,29 +132,6 @@ public class SessionState {
         }
         listIndices.put(QuestionListId.of(listId), 0);
         answeredSinceLastFeedback = 0;
-    }
-
-    public String buildMockFinalFeedbackInput() {
-        if (!mockExamCompleted) {
-            throw new IllegalStateException("Mock exam is not completed");
-        }
-        List<String> all = new ArrayList<>(sttSegments);
-        int from = Math.max(0, Math.min(mockExamStartSegmentIndex, all.size()));
-        List<String> mockAnswers = all.subList(from, all.size());
-        if (mockAnswers.isEmpty()) {
-            throw new IllegalStateException("No answers available for mock final feedback");
-        }
-        return String.join("\n", mockAnswers);
-    }
-
-    public void markMockFinalFeedbackGenerated() {
-        if (!mockExamCompleted) {
-            throw new IllegalStateException("Mock exam is not completed");
-        }
-        if (mockFinalFeedbackGenerated) {
-            throw new IllegalStateException("Mock final feedback already generated");
-        }
-        mockFinalFeedbackGenerated = true;
     }
 
     private Optional<QuestionItem> nextSequential(QuestionList list) {
@@ -214,20 +146,6 @@ public class SessionState {
         QuestionItem item = questions.get(index);
         listIndices.put(list.getId(), index + 1);
         return Optional.ofNullable(item);
-    }
-
-    private Optional<QuestionItem> nextMockExam(QuestionList list) {
-        MockExamPlan plan = mockExamPlan;
-        if (plan == null || !plan.hasConfiguredOrder()) {
-            return nextSequential(list);
-        }
-        Optional<QuestionItemId> questionId = plan.nextQuestionId();
-        if (questionId.isEmpty()) {
-            return Optional.empty();
-        }
-        return list.getQuestions().stream()
-                .filter(question -> question.getId().equals(questionId.get()))
-                .findFirst();
     }
 
     public Map<QuestionListId, Integer> getListIndices() {
