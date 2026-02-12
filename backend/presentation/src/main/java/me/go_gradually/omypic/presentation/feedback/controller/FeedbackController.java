@@ -6,7 +6,6 @@ import me.go_gradually.omypic.application.feedback.model.FeedbackResult;
 import me.go_gradually.omypic.application.feedback.usecase.FeedbackUseCase;
 import me.go_gradually.omypic.domain.feedback.Feedback;
 import me.go_gradually.omypic.presentation.feedback.dto.FeedbackEnvelope;
-import me.go_gradually.omypic.presentation.feedback.dto.MockFinalFeedbackRequest;
 import me.go_gradually.omypic.presentation.feedback.dto.FeedbackRequest;
 import me.go_gradually.omypic.presentation.feedback.dto.FeedbackResponse;
 import org.springframework.beans.factory.annotation.Value;
@@ -37,26 +36,10 @@ public class FeedbackController {
         return FeedbackEnvelope.generated(toResponse(result.getFeedback()));
     }
 
-    @PostMapping("/mock-final")
-    public FeedbackEnvelope mockFinalFeedback(@RequestHeader("X-API-Key") String apiKey,
-                                              @Valid @RequestBody MockFinalFeedbackRequest request) {
-        FeedbackResult result = feedbackUseCase.generateMockExamFinalFeedback(apiKey, toMockFinalCommand(request));
-        return FeedbackEnvelope.generated(toResponse(result.getFeedback()));
-    }
-
     private FeedbackCommand toCommand(FeedbackRequest request) {
         FeedbackCommand command = new FeedbackCommand();
         command.setSessionId(request.getSessionId());
         command.setText(request.getText());
-        command.setProvider(request.getProvider());
-        command.setModel(request.getModel());
-        command.setFeedbackLanguage(request.getFeedbackLanguage());
-        return command;
-    }
-
-    private FeedbackCommand toMockFinalCommand(MockFinalFeedbackRequest request) {
-        FeedbackCommand command = new FeedbackCommand();
-        command.setSessionId(request.getSessionId());
         command.setProvider(request.getProvider());
         command.setModel(request.getModel());
         command.setFeedbackLanguage(request.getFeedbackLanguage());

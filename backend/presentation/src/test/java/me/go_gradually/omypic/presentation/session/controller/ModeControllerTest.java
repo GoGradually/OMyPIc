@@ -3,11 +3,6 @@ package me.go_gradually.omypic.presentation.session.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import me.go_gradually.omypic.application.session.model.ModeUpdateCommand;
 import me.go_gradually.omypic.application.session.usecase.SessionUseCase;
-import me.go_gradually.omypic.domain.question.QuestionItem;
-import me.go_gradually.omypic.domain.question.QuestionGroup;
-import me.go_gradually.omypic.domain.question.QuestionItemId;
-import me.go_gradually.omypic.domain.question.QuestionList;
-import me.go_gradually.omypic.domain.question.QuestionListId;
 import me.go_gradually.omypic.domain.session.ModeType;
 import me.go_gradually.omypic.domain.session.SessionId;
 import me.go_gradually.omypic.domain.session.SessionState;
@@ -21,13 +16,13 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
-import java.time.Instant;
-import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -62,8 +57,10 @@ class ModeControllerTest {
     }
 
     @Test
-    void update_usesUpdateMode_andMapsMockExamState() throws Exception {
-        SessionState state = buildStateForResponse();
+    void update_usesUpdateMode_withoutMockExamFields() throws Exception {
+        SessionState state = new SessionState(SessionId.of("s2"));
+        state.applyModeUpdate(ModeType.CONTINUOUS, 5);
+        state.setActiveQuestionListId("list-1");
         when(sessionUseCase.updateMode(any(ModeUpdateCommand.class))).thenReturn(state);
 
         mockMvc.perform(put("/api/modes")
@@ -71,43 +68,33 @@ class ModeControllerTest {
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "sessionId", "s2",
                                 "listId", "list-1",
-                                "mode", "MOCK_EXAM",
-                                "continuousBatchSize", 5,
-                                "mockPlan", Map.of(
-                                        "groupOrder", List.of("A"),
-                                        "groupCounts", Map.of("A", 1)
-                                )
+                                "mode", "CONTINUOUS",
+                                "continuousBatchSize", 5
                         ))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.sessionId").value("s2"))
-                .andExpect(jsonPath("$.mode").value("MOCK_EXAM"))
-                .andExpect(jsonPath("$.listIndices['list-1']").value(1))
-                .andExpect(jsonPath("$.mockExamState.groupOrder[0]").value("A"))
-                .andExpect(jsonPath("$.mockExamState.groupCounts.A").value(1));
+                .andExpect(jsonPath("$.mode").value("CONTINUOUS"))
+                .andExpect(jsonPath("$.continuousBatchSize").value(5))
+                .andExpect(jsonPath("$.activeListId").value("list-1"))
+                .andExpect(jsonPath("$.mockExamState").doesNotExist());
 
         ArgumentCaptor<ModeUpdateCommand> captor = ArgumentCaptor.forClass(ModeUpdateCommand.class);
         verify(sessionUseCase).updateMode(captor.capture());
         assertEquals("s2", captor.getValue().getSessionId());
         assertEquals("list-1", captor.getValue().getListId());
-        assertEquals(ModeType.MOCK_EXAM, captor.getValue().getMode());
+        assertEquals(ModeType.CONTINUOUS, captor.getValue().getMode());
         assertEquals(5, captor.getValue().getContinuousBatchSize());
-        assertEquals(List.of("A"), captor.getValue().getMockPlan().getGroupOrder());
-        assertEquals(Map.of("A", 1), captor.getValue().getMockPlan().getGroupCounts());
     }
 
-    private SessionState buildStateForResponse() {
-        SessionState state = new SessionState(SessionId.of("s2"));
-        QuestionList list = QuestionList.rehydrate(
-                QuestionListId.of("list-1"),
-                "List",
-                List.of(QuestionItem.rehydrate(QuestionItemId.of("q1"), "Question", QuestionGroup.of("A"))),
-                Instant.parse("2026-02-01T00:00:00Z"),
-                Instant.parse("2026-02-01T00:00:00Z")
-        );
-
-        state.nextQuestion(list);
-        state.applyModeUpdate(ModeType.MOCK_EXAM, 3);
-        state.configureMockExam(list, List.of(QuestionGroup.of("A")), Map.of(QuestionGroup.of("A"), 1));
-        return state;
+    @Test
+    void update_returnsBadRequest_whenModeIsUnsupported() throws Exception {
+        mockMvc.perform(put("/api/modes")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "sessionId", "s3",
+                                "listId", "list-1",
+                                "mode", "MOCK_EXAM"
+                        ))))
+                .andExpect(status().isBadRequest());
     }
 }

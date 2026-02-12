@@ -71,8 +71,6 @@ public class QuestionController {
         response.setText(result.getText());
         response.setGroup(result.getGroup());
         response.setSkipped(result.isSkipped());
-        response.setMockExamCompleted(result.isMockExamCompleted());
-        response.setMockExamCompletionReason(result.getMockExamCompletionReason());
         return response;
     }
 
