@@ -3,6 +3,7 @@ package me.go_gradually.omypic.application.session.usecase;
 import me.go_gradually.omypic.application.question.port.QuestionListPort;
 import me.go_gradually.omypic.application.session.model.ModeUpdateCommand;
 import me.go_gradually.omypic.application.session.port.SessionStorePort;
+import me.go_gradually.omypic.domain.question.QuestionGroup;
 import me.go_gradually.omypic.domain.question.QuestionItem;
 import me.go_gradually.omypic.domain.question.QuestionItemId;
 import me.go_gradually.omypic.domain.question.QuestionList;
@@ -47,8 +48,12 @@ class SessionUseCaseTest {
         command.setListId(listId);
         command.setMode(mode);
         command.setContinuousBatchSize(batch);
-        command.setMockGroupOrder(order);
-        command.setMockGroupCounts(counts);
+        if (order != null || counts != null) {
+            ModeUpdateCommand.MockPlan plan = new ModeUpdateCommand.MockPlan();
+            plan.setGroupOrder(order);
+            plan.setGroupCounts(counts);
+            command.setMockPlan(plan);
+        }
         return command;
     }
 
@@ -78,8 +83,8 @@ class SessionUseCaseTest {
                 QuestionListId.of("list-1"),
                 "list",
                 List.of(
-                        QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", "A"),
-                        QuestionItem.rehydrate(QuestionItemId.of("q2"), "Q2", "B")
+                        QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A")),
+                        QuestionItem.rehydrate(QuestionItemId.of("q2"), "Q2", QuestionGroup.of("B"))
                 ),
                 Instant.parse("2026-01-01T00:00:00Z"),
                 Instant.parse("2026-01-01T00:00:00Z")
@@ -101,7 +106,7 @@ class SessionUseCaseTest {
 
         assertEquals(ModeType.MOCK_EXAM, updated.getMode());
         assertNotNull(updated.getMockExamState());
-        assertEquals(List.of("A", "B"), updated.getMockExamState().getGroupOrder());
+        assertEquals(List.of(QuestionGroup.of("A"), QuestionGroup.of("B")), updated.getMockExamState().getGroupOrder());
     }
 
     @Test
@@ -132,7 +137,7 @@ class SessionUseCaseTest {
         QuestionList list = QuestionList.rehydrate(
                 QuestionListId.of("list-2"),
                 "list",
-                List.of(QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", "A")),
+                List.of(QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A"))),
                 Instant.parse("2026-01-01T00:00:00Z"),
                 Instant.parse("2026-01-01T00:00:00Z")
         );
@@ -144,5 +149,31 @@ class SessionUseCaseTest {
 
         assertTrue(state.getMockExamState().getGroupOrder().isEmpty());
         assertTrue(state.getMockExamState().getGroupCounts().isEmpty());
+    }
+
+    @Test
+    void updateMode_resetsSequentialProgressForSelectedList() {
+        SessionState state = new SessionState(SessionId.of("s6"));
+        QuestionList list = QuestionList.rehydrate(
+                QuestionListId.of("list-3"),
+                "list",
+                List.of(
+                        QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A")),
+                        QuestionItem.rehydrate(QuestionItemId.of("q2"), "Q2", QuestionGroup.of("B"))
+                ),
+                Instant.parse("2026-01-01T00:00:00Z"),
+                Instant.parse("2026-01-01T00:00:00Z")
+        );
+        state.nextQuestion(list);
+        state.nextQuestion(list);
+        assertTrue(state.nextQuestion(list).isEmpty());
+
+        when(sessionStore.getOrCreate(SessionId.of("s6"))).thenReturn(state);
+        when(questionListPort.findById(QuestionListId.of("list-3"))).thenReturn(Optional.of(list));
+
+        ModeUpdateCommand command = command("s6", "list-3", ModeType.IMMEDIATE, null, null, null);
+        useCase.updateMode(command);
+
+        assertTrue(state.nextQuestion(list).isPresent());
     }
 }

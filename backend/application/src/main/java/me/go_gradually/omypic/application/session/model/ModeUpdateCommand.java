@@ -10,8 +10,7 @@ public class ModeUpdateCommand {
     private String listId;
     private ModeType mode;
     private Integer continuousBatchSize;
-    private List<String> mockGroupOrder;
-    private Map<String, Integer> mockGroupCounts;
+    private MockPlan mockPlan;
 
     public String getSessionId() {
         return sessionId;
@@ -45,19 +44,32 @@ public class ModeUpdateCommand {
         this.continuousBatchSize = continuousBatchSize;
     }
 
-    public List<String> getMockGroupOrder() {
-        return mockGroupOrder;
+    public MockPlan getMockPlan() {
+        return mockPlan;
     }
 
-    public void setMockGroupOrder(List<String> mockGroupOrder) {
-        this.mockGroupOrder = mockGroupOrder;
+    public void setMockPlan(MockPlan mockPlan) {
+        this.mockPlan = mockPlan;
     }
 
-    public Map<String, Integer> getMockGroupCounts() {
-        return mockGroupCounts;
-    }
+    public static class MockPlan {
+        private List<String> groupOrder;
+        private Map<String, Integer> groupCounts;
 
-    public void setMockGroupCounts(Map<String, Integer> mockGroupCounts) {
-        this.mockGroupCounts = mockGroupCounts;
+        public List<String> getGroupOrder() {
+            return groupOrder;
+        }
+
+        public void setGroupOrder(List<String> groupOrder) {
+            this.groupOrder = groupOrder;
+        }
+
+        public Map<String, Integer> getGroupCounts() {
+            return groupCounts;
+        }
+
+        public void setGroupCounts(Map<String, Integer> groupCounts) {
+            this.groupCounts = groupCounts;
+        }
     }
 }
