@@ -30,3 +30,14 @@ subprojects {
         useJUnitPlatform()
     }
 }
+
+tasks.register('checkMethodLength', Exec) {
+    workingDir rootDir
+    commandLine 'bash', "$rootDir/scripts/check_method_length.sh"
+}
+
+subprojects {
+    tasks.matching { it.name == 'check' }.configureEach {
+        dependsOn rootProject.tasks.named('checkMethodLength')
+    }
+}
