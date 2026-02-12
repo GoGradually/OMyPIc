@@ -1,6 +1,7 @@
 package me.go_gradually.omypic.domain.session;
 
 import me.go_gradually.omypic.domain.question.QuestionItem;
+import me.go_gradually.omypic.domain.question.QuestionGroup;
 import me.go_gradually.omypic.domain.question.QuestionItemId;
 import me.go_gradually.omypic.domain.question.QuestionList;
 import me.go_gradually.omypic.domain.question.QuestionListId;
@@ -59,8 +60,8 @@ class SessionStateTest {
                 QuestionListId.of("seq-1"),
                 "seq-list",
                 List.of(
-                        QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", "A"),
-                        QuestionItem.rehydrate(QuestionItemId.of("q2"), "Q2", "B")
+                        QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A")),
+                        QuestionItem.rehydrate(QuestionItemId.of("q2"), "Q2", QuestionGroup.of("B"))
                 ),
                 Instant.parse("2026-01-01T00:00:00Z"),
                 Instant.parse("2026-01-01T00:00:00Z")
@@ -81,9 +82,9 @@ class SessionStateTest {
                 QuestionListId.of("list-1"),
                 "mock-list",
                 List.of(
-                        QuestionItem.rehydrate(QuestionItemId.of("a-1"), "A1", "A"),
-                        QuestionItem.rehydrate(QuestionItemId.of("a-2"), "A2", "A"),
-                        QuestionItem.rehydrate(QuestionItemId.of("b-1"), "B1", "B")
+                        QuestionItem.rehydrate(QuestionItemId.of("a-1"), "A1", QuestionGroup.of("A")),
+                        QuestionItem.rehydrate(QuestionItemId.of("a-2"), "A2", QuestionGroup.of("A")),
+                        QuestionItem.rehydrate(QuestionItemId.of("b-1"), "B1", QuestionGroup.of("B"))
                 ),
                 Instant.parse("2026-01-01T00:00:00Z"),
                 Instant.parse("2026-01-01T00:00:00Z")
@@ -91,7 +92,11 @@ class SessionStateTest {
 
         SessionState state = new SessionState(SessionId.of("session-1"));
         state.applyModeUpdate(ModeType.MOCK_EXAM, null);
-        state.configureMockExam(list, List.of("A", "B"), Map.of("A", 2, "B", 2));
+        state.configureMockExam(
+                list,
+                List.of(QuestionGroup.of("A"), QuestionGroup.of("B")),
+                Map.of(QuestionGroup.of("A"), 2, QuestionGroup.of("B"), 2)
+        );
 
         Optional<QuestionItem> first = state.nextQuestion(list);
         Optional<QuestionItem> second = state.nextQuestion(list);
@@ -103,9 +108,9 @@ class SessionStateTest {
         assertTrue(third.isPresent());
         assertTrue(fourth.isEmpty());
 
-        assertEquals("A", first.orElseThrow().getGroup());
-        assertEquals("A", second.orElseThrow().getGroup());
-        assertEquals("B", third.orElseThrow().getGroup());
+        assertEquals(QuestionGroup.of("A"), first.orElseThrow().getGroup());
+        assertEquals(QuestionGroup.of("A"), second.orElseThrow().getGroup());
+        assertEquals(QuestionGroup.of("B"), third.orElseThrow().getGroup());
         assertTrue(state.isMockExamCompleted());
 
         Set<QuestionItemId> uniqueIds = new HashSet<>();
@@ -120,13 +125,13 @@ class SessionStateTest {
         QuestionList list = QuestionList.rehydrate(
                 QuestionListId.of("list-mock"),
                 "mock",
-                List.of(QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", "A")),
+                List.of(QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A"))),
                 Instant.parse("2026-01-01T00:00:00Z"),
                 Instant.parse("2026-01-01T00:00:00Z")
         );
         SessionState state = new SessionState(SessionId.of("session-mock"));
         state.applyModeUpdate(ModeType.MOCK_EXAM, null);
-        state.configureMockExam(list, List.of("A"), Map.of("A", 1));
+        state.configureMockExam(list, List.of(QuestionGroup.of("A")), Map.of(QuestionGroup.of("A"), 1));
         state.appendSegment("answer one");
 
         assertThrows(IllegalStateException.class, state::buildMockFinalFeedbackInput);
@@ -146,14 +151,14 @@ class SessionStateTest {
         QuestionList list = QuestionList.rehydrate(
                 QuestionListId.of("list-mock-2"),
                 "mock",
-                List.of(QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", "A")),
+                List.of(QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A"))),
                 Instant.parse("2026-01-01T00:00:00Z"),
                 Instant.parse("2026-01-01T00:00:00Z")
         );
         SessionState state = new SessionState(SessionId.of("session-mock-2"));
         state.appendSegment("old-answer");
         state.applyModeUpdate(ModeType.MOCK_EXAM, null);
-        state.configureMockExam(list, List.of("A"), Map.of("A", 1));
+        state.configureMockExam(list, List.of(QuestionGroup.of("A")), Map.of(QuestionGroup.of("A"), 1));
         state.appendSegment("mock-answer");
         state.nextQuestion(list);
         state.nextQuestion(list);
@@ -167,8 +172,8 @@ class SessionStateTest {
                 QuestionListId.of("list-1"),
                 "seq-list",
                 List.of(
-                        QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", "A"),
-                        QuestionItem.rehydrate(QuestionItemId.of("q2"), "Q2", "B")
+                        QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A")),
+                        QuestionItem.rehydrate(QuestionItemId.of("q2"), "Q2", QuestionGroup.of("B"))
                 ),
                 Instant.parse("2026-01-01T00:00:00Z"),
                 Instant.parse("2026-01-01T00:00:00Z")

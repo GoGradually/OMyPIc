@@ -3,12 +3,18 @@ package me.go_gradually.omypic.domain.session;
 import me.go_gradually.omypic.domain.feedback.FeedbackLanguage;
 import me.go_gradually.omypic.domain.question.QuestionItem;
 import me.go_gradually.omypic.domain.question.QuestionItemId;
+import me.go_gradually.omypic.domain.question.QuestionGroup;
 import me.go_gradually.omypic.domain.question.QuestionList;
 import me.go_gradually.omypic.domain.question.QuestionListId;
 
-import java.util.*;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Deque;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
 
 public class SessionState {
     private final SessionId sessionId;
@@ -19,7 +25,7 @@ public class SessionState {
     private int continuousBatchSize = 3;
     private int answeredSinceLastFeedback = 0;
     private FeedbackLanguage feedbackLanguage = FeedbackLanguage.of("ko");
-    private MockExamState mockExamState;
+    private MockExamPlan mockExamPlan;
     private boolean mockExamCompleted = false;
     private boolean mockFinalFeedbackGenerated = false;
     private int mockExamStartSegmentIndex = 0;
@@ -70,6 +76,7 @@ public class SessionState {
         if (previous != this.mode) {
             this.answeredSinceLastFeedback = 0;
             if (this.mode != ModeType.MOCK_EXAM) {
+                this.mockExamPlan = null;
                 this.mockExamCompleted = false;
                 this.mockFinalFeedbackGenerated = false;
                 this.mockExamStartSegmentIndex = sttSegments.size();
@@ -77,19 +84,20 @@ public class SessionState {
         }
     }
 
+    public TurnBatchingPolicy.BatchDecision decideFeedbackBatchOnAnswer() {
+        TurnBatchingPolicy.BatchDecision decision =
+                TurnBatchingPolicy.onAnsweredTurn(mode, answeredSinceLastFeedback, continuousBatchSize);
+        answeredSinceLastFeedback = decision.nextAnsweredCount();
+        return decision;
+    }
+
     public boolean shouldGenerateFeedback() {
-        //TODO 모의고사의 경우, 모든 질문을 완료해야 피드백을 받을 수 있다.
-        if (mode == ModeType.MOCK_EXAM) {
-            return false;
-        }
-        if (mode == ModeType.CONTINUOUS) {
-            answeredSinceLastFeedback += 1;
-            if (answeredSinceLastFeedback < continuousBatchSize) {
-                return false;
-            }
-            answeredSinceLastFeedback = 0;
-        }
-        return true;
+        return decideFeedbackBatchOnAnswer().emitFeedback();
+    }
+
+    public boolean shouldGenerateResidualContinuousFeedback(boolean questionExhausted,
+                                                            boolean emittedFeedbackThisTurn) {
+        return TurnBatchingPolicy.shouldEmitResidualContinuousBatch(mode, questionExhausted, emittedFeedbackThisTurn);
     }
 
     public String resolveFeedbackInputText(String fallbackText) {
@@ -123,8 +131,8 @@ public class SessionState {
         this.feedbackLanguage = feedbackLanguage == null ? FeedbackLanguage.of("ko") : feedbackLanguage;
     }
 
-    public MockExamState getMockExamState() {
-        return mockExamState;
+    public MockExamPlan getMockExamState() {
+        return mockExamPlan;
     }
 
     public boolean isMockExamCompleted() {
@@ -136,28 +144,16 @@ public class SessionState {
     }
 
     public void configureMockExam(QuestionList list,
-                                  List<String> groupOrder,
-                                  Map<String, Integer> groupCounts) {
+                                  List<QuestionGroup> groupOrder,
+                                  Map<QuestionGroup, Integer> groupCounts) {
         if (list == null) {
-            this.mockExamState = null;
+            this.mockExamPlan = null;
             this.mockExamCompleted = false;
             this.mockFinalFeedbackGenerated = false;
             this.mockExamStartSegmentIndex = sttSegments.size();
             return;
         }
-        List<String> order = groupOrder == null ? List.of() : groupOrder;
-        Map<String, Integer> counts = groupCounts == null ? Map.of() : groupCounts;
-        Map<String, List<QuestionItemId>> grouped = list.getQuestions().stream()
-                .filter(q -> q.getGroup() != null)
-                .collect(Collectors.groupingBy(QuestionItem::getGroup,
-                        Collectors.mapping(QuestionItem::getId, Collectors.toList())));
-        Map<String, List<QuestionItemId>> remaining = new HashMap<>();
-        for (Map.Entry<String, List<QuestionItemId>> entry : grouped.entrySet()) {
-            List<QuestionItemId> shuffled = new ArrayList<>(entry.getValue());
-            Collections.shuffle(shuffled);
-            remaining.put(entry.getKey(), shuffled);
-        }
-        this.mockExamState = new MockExamState(order, counts, remaining);
+        this.mockExamPlan = MockExamPlan.fromQuestionList(list, groupOrder, groupCounts);
         this.mockExamCompleted = false;
         this.mockFinalFeedbackGenerated = false;
         this.mockExamStartSegmentIndex = sttSegments.size();
@@ -221,80 +217,20 @@ public class SessionState {
     }
 
     private Optional<QuestionItem> nextMockExam(QuestionList list) {
-        MockExamState mock = mockExamState;
-        if (mock == null || mock.groupOrder.isEmpty()) {
+        MockExamPlan plan = mockExamPlan;
+        if (plan == null || !plan.hasConfiguredOrder()) {
             return nextSequential(list);
         }
-        while (mock.groupIndex < mock.groupOrder.size()) {
-            String group = mock.groupOrder.get(mock.groupIndex);
-            int target = mock.groupCounts.getOrDefault(group, 0);
-            int selected = mock.selectedCounts.getOrDefault(group, 0);
-            if (selected >= target) {
-                mock.groupIndex += 1;
-                continue;
-            }
-            List<QuestionItemId> remaining = mock.remainingQuestions.get(group);
-            if (remaining == null || remaining.isEmpty()) {
-                mock.groupIndex += 1;
-                continue;
-            }
-            QuestionItemId questionId = remaining.remove(0);
-            mock.selectedCounts.put(group, selected + 1);
-            QuestionItem item = list.getQuestions().stream()
-                    .filter(q -> q.getId().equals(questionId))
-                    .findFirst()
-                    .orElse(null);
-            if (item == null) {
-                continue;
-            }
-            return Optional.of(item);
+        Optional<QuestionItemId> questionId = plan.nextQuestionId();
+        if (questionId.isEmpty()) {
+            return Optional.empty();
         }
-        return Optional.empty();
+        return list.getQuestions().stream()
+                .filter(question -> question.getId().equals(questionId.get()))
+                .findFirst();
     }
 
     public Map<QuestionListId, Integer> getListIndices() {
         return Collections.unmodifiableMap(listIndices);
-    }
-
-    public static class MockExamState {
-        private final List<String> groupOrder = new ArrayList<>();
-        private final Map<String, Integer> groupCounts;
-        private final Map<String, List<QuestionItemId>> remainingQuestions;
-        private final Map<String, Integer> selectedCounts = new ConcurrentHashMap<>();
-        private int groupIndex = 0;
-
-        private MockExamState(List<String> groupOrder,
-                              Map<String, Integer> groupCounts,
-                              Map<String, List<QuestionItemId>> remainingQuestions) {
-            if (groupOrder != null) {
-                this.groupOrder.addAll(groupOrder);
-            }
-            this.groupCounts = new HashMap<>(groupCounts == null ? Map.of() : groupCounts);
-            this.remainingQuestions = new HashMap<>(remainingQuestions == null ? Map.of() : remainingQuestions);
-        }
-
-        public List<String> getGroupOrder() {
-            return Collections.unmodifiableList(groupOrder);
-        }
-
-        public Map<String, Integer> getGroupCounts() {
-            return Collections.unmodifiableMap(groupCounts);
-        }
-
-        public Map<String, List<QuestionItemId>> getRemainingQuestions() {
-            Map<String, List<QuestionItemId>> copy = new HashMap<>();
-            for (Map.Entry<String, List<QuestionItemId>> entry : remainingQuestions.entrySet()) {
-                copy.put(entry.getKey(), Collections.unmodifiableList(entry.getValue()));
-            }
-            return Collections.unmodifiableMap(copy);
-        }
-
-        public Map<String, Integer> getSelectedCounts() {
-            return Collections.unmodifiableMap(selectedCounts);
-        }
-
-        public int getGroupIndex() {
-            return groupIndex;
-        }
     }
 }
