@@ -1,14 +1,14 @@
 package me.go_gradually.omypic.application.question.usecase;
 
 import me.go_gradually.omypic.application.question.model.NextQuestion;
-import me.go_gradually.omypic.application.question.port.QuestionListPort;
+import me.go_gradually.omypic.application.question.model.QuestionTagStat;
+import me.go_gradually.omypic.application.question.port.QuestionGroupPort;
 import me.go_gradually.omypic.application.session.port.SessionStorePort;
 import me.go_gradually.omypic.application.shared.port.MetricsPort;
-import me.go_gradually.omypic.domain.question.QuestionGroup;
+import me.go_gradually.omypic.domain.question.QuestionGroupAggregate;
+import me.go_gradually.omypic.domain.question.QuestionGroupId;
 import me.go_gradually.omypic.domain.question.QuestionItem;
 import me.go_gradually.omypic.domain.question.QuestionItemId;
-import me.go_gradually.omypic.domain.question.QuestionList;
-import me.go_gradually.omypic.domain.question.QuestionListId;
 import me.go_gradually.omypic.domain.session.SessionId;
 import me.go_gradually.omypic.domain.session.SessionState;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,8 +19,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.NoSuchElementException;
-import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -30,7 +28,7 @@ import static org.mockito.Mockito.*;
 class QuestionUseCaseTest {
 
     @Mock
-    private QuestionListPort repository;
+    private QuestionGroupPort repository;
     @Mock
     private SessionStorePort sessionStore;
     @Mock
@@ -44,121 +42,86 @@ class QuestionUseCaseTest {
     }
 
     @Test
-    void list_returnsFromRepository() {
-        QuestionList list = QuestionList.create("list", Instant.parse("2026-01-01T00:00:00Z"));
-        when(repository.findAll()).thenReturn(List.of(list));
+    void createGroup_savesGroupWithNormalizedTags() {
+        when(repository.save(any(QuestionGroupAggregate.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        List<QuestionList> result = useCase.list();
+        QuestionGroupAggregate created = useCase.createGroup("travel", List.of(" Travel ", "habit"));
 
-        assertEquals(1, result.size());
+        assertEquals("travel", created.getName());
+        assertTrue(created.getTags().contains("travel"));
+        assertTrue(created.getTags().contains("habit"));
+        verify(repository).save(any(QuestionGroupAggregate.class));
     }
 
     @Test
-    void create_savesNewList() {
-        when(repository.save(any(QuestionList.class))).thenAnswer(invocation -> invocation.getArgument(0));
+    void listTagStats_returnsSortedCounts() {
+        QuestionGroupAggregate g1 = group("g1", "A", List.of("travel", "habit"), List.of(item("q1", "Q1", "habit")));
+        QuestionGroupAggregate g2 = group("g2", "B", List.of("travel"), List.of(item("q2", "Q2", "compare")));
+        when(repository.findAll()).thenReturn(List.of(g1, g2));
 
-        QuestionList created = useCase.create("my-list");
+        List<QuestionTagStat> stats = useCase.listTagStats();
 
-        assertEquals("my-list", created.getName());
-        verify(repository).save(any(QuestionList.class));
+        assertEquals(2, stats.size());
+        assertEquals("habit", stats.get(0).tag());
+        assertEquals(1, stats.get(0).groupCount());
+        assertTrue(stats.get(0).selectable());
+        assertEquals("travel", stats.get(1).tag());
+        assertEquals(2, stats.get(1).groupCount());
     }
 
     @Test
-    void updateName_updatesAndSaves() {
-        QuestionListId listId = QuestionListId.of("list-1");
-        QuestionList list = QuestionList.rehydrate(
-                listId,
-                "before",
-                List.of(),
-                Instant.parse("2026-01-01T00:00:00Z"),
-                Instant.parse("2026-01-01T00:00:00Z")
-        );
-        when(repository.findById(listId)).thenReturn(Optional.of(list));
-        when(repository.save(list)).thenReturn(list);
+    void nextQuestion_usesSessionCandidateGroupOrderAndReturnsSkippedWhenExhausted() {
+        QuestionGroupAggregate g1 = group("g1", "Travel", List.of("travel"), List.of(
+                item("q1", "Q1", "habit"),
+                item("q2", "Q2", "compare")
+        ));
+        QuestionGroupAggregate g2 = group("g2", "Cafe", List.of("travel"), List.of(
+                item("q3", "Q3", null)
+        ));
 
-        QuestionList updated = useCase.updateName("list-1", "after");
-
-        assertEquals("after", updated.getName());
-        verify(repository).save(list);
-    }
-
-    @Test
-    void delete_delegatesToRepository() {
-        useCase.delete("list-1");
-
-        verify(repository).deleteById(QuestionListId.of("list-1"));
-    }
-
-    @Test
-    void addUpdateDeleteQuestion_updatesListAndSaves() {
-        QuestionListId listId = QuestionListId.of("list-1");
-        QuestionItem existing = QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A"));
-        QuestionList list = QuestionList.rehydrate(
-                listId,
-                "list",
-                List.of(existing),
-                Instant.parse("2026-01-01T00:00:00Z"),
-                Instant.parse("2026-01-01T00:00:00Z")
-        );
-        when(repository.findById(listId)).thenReturn(Optional.of(list));
-        when(repository.save(list)).thenReturn(list);
-
-        useCase.addQuestion("list-1", "Q2", "B");
-        useCase.updateQuestion("list-1", "q1", "Q1 updated", "C");
-        QuestionList afterDelete = useCase.deleteQuestion("list-1", "q1");
-
-        assertTrue(afterDelete.getQuestions().stream().noneMatch(q -> q.getId().equals(QuestionItemId.of("q1"))));
-        verify(repository, times(3)).save(list);
-    }
-
-    @Test
-    void nextQuestion_returnsSkippedWhenSequentialQuestionsAreExhausted() {
-        QuestionListId listId = QuestionListId.of("list-1");
-        QuestionList list = QuestionList.rehydrate(
-                listId,
-                "list",
-                List.of(
-                        QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A")),
-                        QuestionItem.rehydrate(QuestionItemId.of("q2"), "Q2", QuestionGroup.of("B"))
-                ),
-                Instant.parse("2026-01-01T00:00:00Z"),
-                Instant.parse("2026-01-01T00:00:00Z")
-        );
         SessionState state = new SessionState(SessionId.of("s1"));
-        when(repository.findById(listId)).thenReturn(Optional.of(list));
-        when(sessionStore.getOrCreate(SessionId.of("s1"))).thenReturn(state);
+        state.configureQuestionGroups(java.util.Set.of("travel"), List.of("g1", "g2"));
 
-        NextQuestion first = useCase.nextQuestion("list-1", "s1");
-        NextQuestion second = useCase.nextQuestion("list-1", "s1");
-        NextQuestion third = useCase.nextQuestion("list-1", "s1");
+        when(sessionStore.getOrCreate(SessionId.of("s1"))).thenReturn(state);
+        when(repository.findAll()).thenReturn(List.of(g1, g2));
+
+        NextQuestion first = useCase.nextQuestion("s1");
+        NextQuestion second = useCase.nextQuestion("s1");
+        NextQuestion third = useCase.nextQuestion("s1");
+        NextQuestion fourth = useCase.nextQuestion("s1");
 
         assertEquals("q1", first.getQuestionId());
+        assertEquals("g1", first.getGroupId());
+        assertEquals("habit", first.getQuestionType());
+
         assertEquals("q2", second.getQuestionId());
-        assertTrue(third.isSkipped());
-        assertNull(third.getQuestionId());
-        verify(metrics, times(3)).recordQuestionNextLatency(any());
+        assertEquals("q3", third.getQuestionId());
+        assertTrue(fourth.isSkipped());
+        assertEquals(List.of("g1", "g2"), state.getCandidateGroupOrder(), "candidateGroupOrder must remain fixed within a session");
+
+        verify(metrics, times(4)).recordQuestionNextLatency(any());
     }
 
     @Test
-    void nextQuestion_throwsWhenListIsEmpty() {
-        QuestionListId listId = QuestionListId.of("empty");
-        QuestionList list = QuestionList.rehydrate(
-                listId,
-                "empty",
-                List.of(),
+    void nextQuestion_throwsWhenSelectedTagsAreMissing() {
+        SessionState state = new SessionState(SessionId.of("s2"));
+        when(sessionStore.getOrCreate(SessionId.of("s2"))).thenReturn(state);
+
+        assertThrows(IllegalStateException.class, () -> useCase.nextQuestion("s2"));
+    }
+
+    private QuestionGroupAggregate group(String id, String name, List<String> tags, List<QuestionItem> questions) {
+        return QuestionGroupAggregate.rehydrate(
+                QuestionGroupId.of(id),
+                name,
+                tags,
+                questions,
                 Instant.parse("2026-01-01T00:00:00Z"),
                 Instant.parse("2026-01-01T00:00:00Z")
         );
-        when(repository.findById(listId)).thenReturn(Optional.of(list));
-
-        assertThrows(IllegalStateException.class, () -> useCase.nextQuestion("empty", "s1"));
     }
 
-    @Test
-    void nextQuestion_throwsWhenListDoesNotExist() {
-        when(repository.findById(QuestionListId.of("missing"))).thenReturn(Optional.empty());
-
-        assertThrows(NoSuchElementException.class, () -> useCase.nextQuestion("missing", "s1"));
+    private QuestionItem item(String id, String text, String questionType) {
+        return QuestionItem.rehydrate(QuestionItemId.of(id), text, questionType);
     }
-
 }

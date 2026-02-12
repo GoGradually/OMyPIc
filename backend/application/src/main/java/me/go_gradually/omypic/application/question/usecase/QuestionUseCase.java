@@ -1,85 +1,125 @@
 package me.go_gradually.omypic.application.question.usecase;
 
 import me.go_gradually.omypic.application.question.model.NextQuestion;
-import me.go_gradually.omypic.application.question.port.QuestionListPort;
+import me.go_gradually.omypic.application.question.model.QuestionTagStat;
+import me.go_gradually.omypic.application.question.port.QuestionGroupPort;
 import me.go_gradually.omypic.application.session.port.SessionStorePort;
 import me.go_gradually.omypic.application.shared.port.MetricsPort;
+import me.go_gradually.omypic.domain.question.QuestionGroupAggregate;
+import me.go_gradually.omypic.domain.question.QuestionGroupId;
 import me.go_gradually.omypic.domain.question.QuestionItem;
-import me.go_gradually.omypic.domain.question.QuestionGroup;
 import me.go_gradually.omypic.domain.question.QuestionItemId;
-import me.go_gradually.omypic.domain.question.QuestionList;
-import me.go_gradually.omypic.domain.question.QuestionListId;
 import me.go_gradually.omypic.domain.session.SessionId;
 import me.go_gradually.omypic.domain.session.SessionState;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Optional;
+import java.util.Map;
 
 public class QuestionUseCase {
-    private final QuestionListPort repository;
+    private final QuestionGroupPort repository;
     private final SessionStorePort sessionStore;
     private final MetricsPort metrics;
 
-    public QuestionUseCase(QuestionListPort repository, SessionStorePort sessionStore, MetricsPort metrics) {
+    public QuestionUseCase(QuestionGroupPort repository, SessionStorePort sessionStore, MetricsPort metrics) {
         this.repository = repository;
         this.sessionStore = sessionStore;
         this.metrics = metrics;
     }
 
-    public List<QuestionList> list() {
+    public List<QuestionGroupAggregate> list() {
         return repository.findAll();
     }
 
-    public QuestionList create(String name) {
-        QuestionList doc = QuestionList.create(name, Instant.now());
-        return repository.save(doc);
+    public QuestionGroupAggregate createGroup(String name, List<String> tags) {
+        QuestionGroupAggregate group = QuestionGroupAggregate.create(name, tags, Instant.now());
+        return repository.save(group);
     }
 
-    public QuestionList updateName(String id, String name) {
-        QuestionList doc = repository.findById(QuestionListId.of(id)).orElseThrow();
-        doc.rename(name, Instant.now());
-        return repository.save(doc);
+    public QuestionGroupAggregate updateGroup(String id, String name, List<String> tags) {
+        QuestionGroupAggregate group = repository.findById(QuestionGroupId.of(id)).orElseThrow();
+        group.rename(name, Instant.now());
+        group.updateTags(tags, Instant.now());
+        return repository.save(group);
     }
 
-    public void delete(String id) {
-        repository.deleteById(QuestionListId.of(id));
+    public void deleteGroup(String id) {
+        repository.deleteById(QuestionGroupId.of(id));
     }
 
-    public QuestionList addQuestion(String listId, String text, String group) {
-        QuestionList doc = repository.findById(QuestionListId.of(listId)).orElseThrow();
-        doc.addQuestion(text, QuestionGroup.fromNullable(group), Instant.now());
-        return repository.save(doc);
+    public QuestionGroupAggregate addQuestion(String groupId, String text, String questionType) {
+        QuestionGroupAggregate group = repository.findById(QuestionGroupId.of(groupId)).orElseThrow();
+        group.addQuestion(text, questionType, Instant.now());
+        return repository.save(group);
     }
 
-    public QuestionList updateQuestion(String listId, String itemId, String text, String group) {
-        QuestionList doc = repository.findById(QuestionListId.of(listId)).orElseThrow();
-        doc.updateQuestion(QuestionItemId.of(itemId), text, QuestionGroup.fromNullable(group), Instant.now());
-        return repository.save(doc);
+    public QuestionGroupAggregate updateQuestion(String groupId, String itemId, String text, String questionType) {
+        QuestionGroupAggregate group = repository.findById(QuestionGroupId.of(groupId)).orElseThrow();
+        group.updateQuestion(QuestionItemId.of(itemId), text, questionType, Instant.now());
+        return repository.save(group);
     }
 
-    public QuestionList deleteQuestion(String listId, String itemId) {
-        QuestionList doc = repository.findById(QuestionListId.of(listId)).orElseThrow();
-        doc.removeQuestion(QuestionItemId.of(itemId), Instant.now());
-        return repository.save(doc);
+    public QuestionGroupAggregate deleteQuestion(String groupId, String itemId) {
+        QuestionGroupAggregate group = repository.findById(QuestionGroupId.of(groupId)).orElseThrow();
+        group.removeQuestion(QuestionItemId.of(itemId), Instant.now());
+        return repository.save(group);
     }
 
-    public NextQuestion nextQuestion(String listId, String sessionId) {
-        Instant start = Instant.now();
-        QuestionList doc = repository.findById(QuestionListId.of(listId)).orElseThrow();
-        if (doc.getQuestions().isEmpty()) {
-            throw new IllegalStateException("Question list must contain at least 1 question");
+    public List<QuestionTagStat> listTagStats() {
+        Map<String, Long> counts = new LinkedHashMap<>();
+        for (QuestionGroupAggregate group : repository.findAll()) {
+            for (String tag : group.getTags()) {
+                counts.merge(tag, 1L, Long::sum);
+            }
         }
+        return counts.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .map(entry -> new QuestionTagStat(entry.getKey(), entry.getValue(), entry.getValue() > 0L))
+                .toList();
+    }
+
+    public NextQuestion nextQuestion(String sessionId) {
+        Instant start = Instant.now();
         SessionState session = sessionStore.getOrCreate(SessionId.of(sessionId));
-        Optional<QuestionItem> selected = session.nextQuestion(doc);
-        NextQuestion response = selected.map(item -> {
-            NextQuestion next = new NextQuestion();
-            next.setQuestionId(item.getId().value());
-            next.setText(item.getText());
-            next.setGroup(item.getGroup() == null ? null : item.getGroup().value());
-            return next;
-        }).orElseGet(NextQuestion::skipped);
+        if (session.getSelectedGroupTags().isEmpty()) {
+            throw new IllegalStateException("질문 그룹 태그를 선택하고 학습 모드를 적용해 주세요.");
+        }
+
+        List<QuestionGroupAggregate> allGroups = repository.findAll();
+        Map<String, QuestionGroupAggregate> groupsById = allGroups.stream()
+                .collect(java.util.stream.Collectors.toMap(group -> group.getId().value(), group -> group, (left, right) -> left));
+
+        NextQuestion response = NextQuestion.skipped();
+        while (true) {
+            String groupId = session.currentCandidateGroupId();
+            if (groupId == null) {
+                break;
+            }
+            QuestionGroupAggregate group = groupsById.get(groupId);
+            if (group == null || group.getQuestions().isEmpty()) {
+                session.moveToNextGroup();
+                continue;
+            }
+
+            int questionIndex = session.getCurrentQuestionIndex(groupId);
+            if (questionIndex >= group.getQuestions().size()) {
+                session.moveToNextGroup();
+                continue;
+            }
+
+            QuestionItem item = group.getQuestions().get(questionIndex);
+            session.markQuestionAsked(groupId);
+            response.setSkipped(false);
+            response.setQuestionId(item.getId().value());
+            response.setText(item.getText());
+            response.setGroupId(group.getId().value());
+            response.setGroup(group.getName());
+            response.setQuestionType(item.getQuestionType());
+            break;
+        }
+
         metrics.recordQuestionNextLatency(Duration.between(start, Instant.now()));
         return response;
     }
