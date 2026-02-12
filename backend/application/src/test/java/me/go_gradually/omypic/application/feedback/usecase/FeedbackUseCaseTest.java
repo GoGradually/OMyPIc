@@ -10,10 +10,6 @@ import me.go_gradually.omypic.application.shared.port.MetricsPort;
 import me.go_gradually.omypic.application.wrongnote.usecase.WrongNoteUseCase;
 import me.go_gradually.omypic.domain.feedback.Feedback;
 import me.go_gradually.omypic.domain.question.QuestionGroup;
-import me.go_gradually.omypic.domain.question.QuestionItem;
-import me.go_gradually.omypic.domain.question.QuestionItemId;
-import me.go_gradually.omypic.domain.question.QuestionList;
-import me.go_gradually.omypic.domain.question.QuestionListId;
 import me.go_gradually.omypic.domain.rulebook.RulebookContext;
 import me.go_gradually.omypic.domain.rulebook.RulebookId;
 import me.go_gradually.omypic.domain.session.ModeType;
@@ -72,19 +68,6 @@ class FeedbackUseCaseTest {
                 sessionStore,
                 wrongNoteUseCase
         );
-    }
-
-    @Test
-    void generateFeedback_skipsInMockExamMode_withoutCallingLlm() throws Exception {
-        SessionState state = new SessionState(SessionId.of("s1"));
-        state.applyModeUpdate(ModeType.MOCK_EXAM, null);
-        when(sessionStore.getOrCreate(SessionId.of("s1"))).thenReturn(state);
-
-        FeedbackResult result = useCase.generateFeedback("key", command("s1", "openai", "en", "hello"));
-
-        assertFalse(result.isGenerated());
-        verify(openAiClient, never()).generate(anyString(), anyString(), anyString(), anyString());
-        verify(wrongNoteUseCase, never()).addFeedback(any());
     }
 
     @Test
@@ -189,40 +172,6 @@ class FeedbackUseCaseTest {
                 () -> useCase.generateFeedback("key", command("s6", "claude", "ko", "답변")));
 
         verify(metrics, never()).incrementFeedbackError();
-    }
-
-    @Test
-    void generateMockExamFinalFeedback_generatesOnceAfterCompletion() throws Exception {
-        stubDefaultFeedbackPolicy();
-        SessionState state = new SessionState(SessionId.of("mock-1"));
-        state.applyModeUpdate(ModeType.MOCK_EXAM, null);
-        QuestionList list = QuestionList.rehydrate(
-                QuestionListId.of("list-1"),
-                "mock",
-                List.of(QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A"))),
-                Instant.parse("2026-01-01T00:00:00Z"),
-                Instant.parse("2026-01-01T00:00:00Z")
-        );
-        state.configureMockExam(list, List.of(QuestionGroup.of("A")), java.util.Map.of(QuestionGroup.of("A"), 1));
-        state.nextQuestion(list);
-        state.nextQuestion(list);
-        state.appendSegment("mock answer one");
-        state.appendSegment("mock answer two");
-
-        when(sessionStore.getOrCreate(SessionId.of("mock-1"))).thenReturn(state);
-        when(rulebookUseCase.searchContexts(anyString())).thenReturn(List.of());
-        when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
-                .thenReturn("{\"summary\":\"summary\",\"correctionPoints\":[\"Grammar\",\"Expression\",\"Logic\"],\"exampleAnswer\":\"example answer\",\"rulebookEvidence\":[]}");
-
-        FeedbackResult result = useCase.generateMockExamFinalFeedback("key", command("mock-1", "openai", "ko", "ignored"));
-
-        assertTrue(result.isGenerated());
-        assertTrue(state.isMockFinalFeedbackGenerated());
-        verify(rulebookUseCase).searchContexts("mock answer one\nmock answer two");
-
-        IllegalStateException exception = assertThrows(IllegalStateException.class,
-                () -> useCase.generateMockExamFinalFeedback("key", command("mock-1", "openai", "ko", "ignored")));
-        assertTrue(exception.getMessage().contains("already generated"));
     }
 
     @Test

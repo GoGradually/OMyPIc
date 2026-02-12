@@ -58,23 +58,6 @@ public class FeedbackUseCase {
         return FeedbackResult.generated(generateFeedbackInternal(apiKey, command, language, inputText, contexts));
     }
 
-    public FeedbackResult generateMockExamFinalFeedback(String apiKey, FeedbackCommand command) {
-        SessionState state = sessionStore.getOrCreate(SessionId.of(command.getSessionId()));
-        FeedbackLanguage language = FeedbackLanguage.of(command.getFeedbackLanguage());
-        state.setFeedbackLanguage(language);
-        if (!state.isMockExamCompleted()) {
-            throw new IllegalStateException("Mock exam is not completed");
-        }
-        if (state.isMockFinalFeedbackGenerated()) {
-            throw new IllegalStateException("Mock final feedback already generated");
-        }
-        String inputText = state.buildMockFinalFeedbackInput();
-        List<RulebookContext> contexts = rulebookUseCase.searchContexts(inputText);
-        FeedbackResult result = FeedbackResult.generated(generateFeedbackInternal(apiKey, command, language, inputText, contexts));
-        state.markMockFinalFeedbackGenerated();
-        return result;
-    }
-
     public Feedback generateFeedbackForTurn(String apiKey,
                                             FeedbackCommand command,
                                             String questionText,
