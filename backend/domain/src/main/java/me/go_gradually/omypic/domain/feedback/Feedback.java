@@ -13,6 +13,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 public final class Feedback {
+    private static final List<String> CATEGORY_ORDER = List.of("Grammar", "Expression", "Logic");
     private final String summary;
     private final List<String> correctionPoints;
     private final String exampleAnswer;
@@ -47,27 +48,40 @@ public final class Feedback {
     }
 
     private String normalizeSummary(FeedbackLanguage language, int summaryMaxChars) {
+        String base = summaryBase(language);
+        List<String> sentences = splitSentences(base);
+        String selected = selectSummary(sentences, language);
+        return trimSummary(selected, language, summaryMaxChars);
+    }
+
+    private String summaryBase(FeedbackLanguage language) {
         String base = summary == null ? "" : summary.trim();
-        if (base.isEmpty()) {
-            base = defaultSummary(language);
-        }
-        List<String> sentences = Arrays.stream(base.split("(?<=[.!?])\\s+|\\n+"))
+        return base.isEmpty() ? defaultSummary(language) : base;
+    }
+
+    private List<String> splitSentences(String text) {
+        return Arrays.stream(text.split("(?<=[.!?])\\s+|\\n+"))
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
                 .toList();
-        String selected;
+    }
+
+    private String selectSummary(List<String> sentences, FeedbackLanguage language) {
         if (sentences.isEmpty()) {
-            selected = defaultSummary(language);
-        } else if (sentences.size() == 1) {
-            selected = sentences.get(0);
-        } else {
-            selected = sentences.get(0) + " " + sentences.get(1);
+            return defaultSummary(language);
         }
-        String trimmed = TextUtils.trimToLength(selected, summaryMaxChars).trim();
+        if (sentences.size() == 1) {
+            return sentences.get(0);
+        }
+        return sentences.get(0) + " " + sentences.get(1);
+    }
+
+    private String trimSummary(String selected, FeedbackLanguage language, int maxChars) {
+        String trimmed = TextUtils.trimToLength(selected, maxChars).trim();
         if (!trimmed.isEmpty()) {
             return trimmed;
         }
-        return TextUtils.trimToLength(defaultSummary(language), summaryMaxChars).trim();
+        return TextUtils.trimToLength(defaultSummary(language), maxChars).trim();
     }
 
     private List<String> normalizeCorrectionPoints(FeedbackLanguage language) {
@@ -75,45 +89,58 @@ public final class Feedback {
                 .filter(p -> p != null && !p.isBlank())
                 .map(String::trim)
                 .collect(Collectors.toCollection(ArrayList::new));
-        if (points.size() > 3) {
-            points = new ArrayList<>(points.subList(0, 3));
-        }
+        trimToMax(points, 3);
+        appendMissingCategories(points, language);
+        fillUntilThree(points, language);
+        trimToMax(points, 3);
+        ensureCategoryCoverageByReplacement(points, language);
+        return points;
+    }
 
-        Set<String> categories = categoriesOf(points);
-        if (categories.size() < 2) {
-            for (String category : List.of("Grammar", "Expression", "Logic")) {
-                if (categories.contains(category)) {
-                    continue;
-                }
-                points.add(defaultPointForCategory(language, category));
-                categories.add(category);
-                if (categories.size() >= 2) {
-                    break;
-                }
-            }
-        }
-
+    private void fillUntilThree(List<String> points, FeedbackLanguage language) {
         while (points.size() < 3) {
             points.add(defaultPoint(language, points.size()));
         }
-        if (points.size() > 3) {
-            points = new ArrayList<>(points.subList(0, 3));
-        }
+    }
 
-        categories = categoriesOf(points);
-        if (categories.size() < 2) {
-            for (String category : List.of("Grammar", "Expression", "Logic")) {
-                if (categories.contains(category)) {
-                    continue;
-                }
-                points.set(points.size() - 1, defaultPointForCategory(language, category));
-                categories = categoriesOf(points);
-                if (categories.size() >= 2) {
-                    break;
-                }
+    private void appendMissingCategories(List<String> points, FeedbackLanguage language) {
+        Set<String> categories = categoriesOf(points);
+        for (String category : CATEGORY_ORDER) {
+            if (categories.size() >= 2) {
+                return;
+            }
+            if (categories.contains(category)) {
+                continue;
+            }
+            points.add(defaultPointForCategory(language, category));
+            categories.add(category);
+        }
+    }
+
+    private void ensureCategoryCoverageByReplacement(List<String> points, FeedbackLanguage language) {
+        if (points.isEmpty() || categoriesOf(points).size() >= 2) {
+            return;
+        }
+        replaceLastPointWithMissingCategory(points, language);
+    }
+
+    private void replaceLastPointWithMissingCategory(List<String> points, FeedbackLanguage language) {
+        for (String category : CATEGORY_ORDER) {
+            if (categoriesOf(points).contains(category)) {
+                continue;
+            }
+            points.set(points.size() - 1, defaultPointForCategory(language, category));
+            if (categoriesOf(points).size() >= 2) {
+                return;
             }
         }
-        return points;
+    }
+
+    private void trimToMax(List<String> points, int maxSize) {
+        if (points.size() <= maxSize) {
+            return;
+        }
+        points.subList(maxSize, points.size()).clear();
     }
 
     private Set<String> categoriesOf(List<String> points) {
@@ -198,13 +225,18 @@ public final class Feedback {
         if (contexts == null || contexts.isEmpty()) {
             return List.of();
         }
-        List<String> cleaned = rulebookEvidence.stream()
+        List<String> cleaned = cleanedEvidence();
+        return cleaned.isEmpty() ? fallbackEvidence(contexts) : cleaned;
+    }
+
+    private List<String> cleanedEvidence() {
+        return rulebookEvidence.stream()
                 .filter(e -> e != null && !e.isBlank())
                 .map(String::trim)
                 .toList();
-        if (!cleaned.isEmpty()) {
-            return cleaned;
-        }
+    }
+
+    private List<String> fallbackEvidence(List<RulebookContext> contexts) {
         return contexts.stream()
                 .limit(1)
                 .map(ctx -> "[" + ctx.filename() + "] " + TextUtils.trimToLength(ctx.text(), 200))

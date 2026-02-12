@@ -77,20 +77,31 @@ public class SessionState {
     }
 
     public void configureQuestionGroups(Set<String> selectedTags, List<String> candidateGroupIds) {
+        resetSelectedTags(selectedTags);
+        resetCandidateGroupOrder(candidateGroupIds);
+        resetQuestionProgress();
+    }
+
+    private void resetSelectedTags(Set<String> selectedTags) {
         selectedGroupTags.clear();
         if (selectedTags != null) {
             selectedGroupTags.addAll(selectedTags);
         }
+    }
 
+    private void resetCandidateGroupOrder(List<String> candidateGroupIds) {
         candidateGroupOrder.clear();
-        if (candidateGroupIds != null) {
-            for (String groupId : candidateGroupIds) {
-                if (groupId != null && !groupId.isBlank()) {
-                    candidateGroupOrder.add(groupId);
-                }
+        if (candidateGroupIds == null) {
+            return;
+        }
+        for (String groupId : candidateGroupIds) {
+            if (groupId != null && !groupId.isBlank()) {
+                candidateGroupOrder.add(groupId);
             }
         }
+    }
 
+    private void resetQuestionProgress() {
         groupQuestionIndices.clear();
         currentGroupCursor = 0;
         completedGroupCountSinceLastFeedback = 0;
