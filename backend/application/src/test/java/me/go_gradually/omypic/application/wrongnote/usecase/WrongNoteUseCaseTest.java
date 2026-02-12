@@ -72,6 +72,20 @@ class WrongNoteUseCaseTest {
     }
 
     @Test
+    void addFeedback_appliesConfiguredWindowSize() {
+        stubAddFeedbackDependencies();
+        when(feedbackPolicy.getWrongnoteWindowSize()).thenReturn(2);
+        stubDeleteByIdFromStorage();
+
+        useCase.addFeedback(Feedback.of("summary", List.of("A"), "", List.of()));
+        useCase.addFeedback(Feedback.of("summary", List.of("B"), "", List.of()));
+        useCase.addFeedback(Feedback.of("summary", List.of("C"), "", List.of()));
+
+        assertEquals(List.of("B", "C"), queueStorage);
+        assertNull(storage.get("A"));
+    }
+
+    @Test
     void addFeedback_decrementsExistingCountWhenEvictedFromQueue() {
         stubAddFeedbackDependencies();
         useCase.addFeedback(Feedback.of("summary", List.of("A"), "", List.of()));
@@ -110,6 +124,7 @@ class WrongNoteUseCaseTest {
 
     private void stubAddFeedbackDependencies() {
         when(feedbackPolicy.getWrongnoteSummaryMaxChars()).thenReturn(255);
+        when(feedbackPolicy.getWrongnoteWindowSize()).thenReturn(30);
         when(repository.findByPattern(anyString())).thenAnswer(invocation -> Optional.ofNullable(storage.get(invocation.getArgument(0))));
         when(repository.save(any(WrongNote.class))).thenAnswer(invocation -> {
             WrongNote note = invocation.getArgument(0);
