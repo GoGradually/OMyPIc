@@ -31,7 +31,10 @@ export function buildFeedbackFromRealtime(data) {
         batch: {
             size: Number.isInteger(data?.batch?.size) ? data.batch.size : items.length,
             isResidual: Boolean(data?.batch?.isResidual),
-            reason: data?.policy?.reason || ''
+            reason: data?.policy?.reason || '',
+            groupBatchSize: Number.isInteger(data?.policy?.groupBatchSize)
+                ? data.policy.groupBatchSize
+                : (Number.isInteger(data?.policy?.batchSize) ? data.policy.batchSize : 1)
         },
         nextAction: {
             type: data?.nextAction?.type || '',

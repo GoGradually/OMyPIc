@@ -15,7 +15,7 @@ import {useSessionId} from './providers/session.js'
 import {useRealtimeSession} from '../features/realtime/hooks/useRealtimeSession.js'
 import {useRulebooks} from '../features/rulebooks/hooks/useRulebooks.js'
 import {useWrongNotes} from '../features/wrongnotes/hooks/useWrongNotes.js'
-import {useQuestionLists} from '../features/questions/hooks/useQuestionLists.js'
+import {useQuestionGroups} from '../features/questions/hooks/useQuestionGroups.js'
 
 import {getAudioUiState} from '../features/realtime/utils/audioStatus.js'
 
@@ -64,29 +64,34 @@ export default function App() {
     } = useWrongNotes()
 
     const {
-        questionLists,
-        activeListId,
-        setActiveListId,
-        activeQuestionList,
-        newListName,
-        setNewListName,
+        questionGroups,
+        tagStats,
+        selectedGroupTags,
+        toggleSelectedTag,
+        activeGroupId,
+        setActiveGroupId,
+        activeQuestionGroup,
+        newGroupName,
+        setNewGroupName,
+        newGroupTagsInput,
+        setNewGroupTagsInput,
         newQuestion,
         setNewQuestion,
-        newGroup,
-        setNewGroup,
+        newQuestionType,
+        setNewQuestionType,
         editingQuestionId,
         editingQuestionText,
         setEditingQuestionText,
-        editingQuestionGroup,
-        setEditingQuestionGroup,
+        editingQuestionType,
+        setEditingQuestionType,
         mode,
         setMode,
         batchSize,
         setBatchSize,
         currentQuestion,
-        refreshQuestionLists,
-        createList,
-        deleteList,
+        refreshQuestionGroups,
+        createGroup,
+        deleteGroup,
         addQuestion,
         startEditQuestion,
         cancelEditQuestion,
@@ -95,7 +100,7 @@ export default function App() {
         nextQuestion,
         updateMode,
         setCurrentQuestion
-    } = useQuestionLists({
+    } = useQuestionGroups({
         sessionId,
         onStatus: setStatusMessage
     })
@@ -129,11 +134,11 @@ export default function App() {
     useEffect(() => {
         refreshRulebooks().catch(() => {
         })
-        refreshQuestionLists().catch(() => {
+        refreshQuestionGroups().catch(() => {
         })
         refreshWrongNotes().catch(() => {
         })
-    }, [refreshRulebooks, refreshQuestionLists, refreshWrongNotes])
+    }, [refreshRulebooks, refreshQuestionGroups, refreshWrongNotes])
 
     useEffect(() => {
         setFeedbackModel(FEEDBACK_MODELS[provider][0])
@@ -172,17 +177,13 @@ export default function App() {
     }, [])
 
     const handleStartSession = useCallback(async () => {
-        if (!activeListId) {
-            setStatusMessage('질문 리스트를 선택하고 학습 모드를 먼저 적용해 주세요.')
-            return
-        }
         try {
             await updateMode()
             await startSession()
         } catch (error) {
             setStatusMessage(error?.message || '세션 시작에 실패했습니다.')
         }
-    }, [activeListId, updateMode, startSession])
+    }, [updateMode, startSession])
 
     const handleStopSession = useCallback(async () => {
         await stopSession({forced: true, reason: 'user_stop', statusMessage: '세션을 종료했습니다.'})
@@ -232,24 +233,29 @@ export default function App() {
                 setBatchSize={setBatchSize}
                 updateMode={updateMode}
                 nextQuestion={nextQuestion}
-                activeListId={activeListId}
-                newListName={newListName}
-                setNewListName={setNewListName}
-                questionLists={questionLists}
-                setActiveListId={setActiveListId}
-                createList={createList}
-                deleteList={deleteList}
+                tagStats={tagStats}
+                selectedGroupTags={selectedGroupTags}
+                toggleSelectedTag={toggleSelectedTag}
+                activeGroupId={activeGroupId}
+                newGroupName={newGroupName}
+                setNewGroupName={setNewGroupName}
+                newGroupTagsInput={newGroupTagsInput}
+                setNewGroupTagsInput={setNewGroupTagsInput}
+                questionGroups={questionGroups}
+                setActiveGroupId={setActiveGroupId}
+                createGroup={createGroup}
+                deleteGroup={deleteGroup}
                 newQuestion={newQuestion}
                 setNewQuestion={setNewQuestion}
-                newGroup={newGroup}
-                setNewGroup={setNewGroup}
+                newQuestionType={newQuestionType}
+                setNewQuestionType={setNewQuestionType}
                 addQuestion={addQuestion}
-                activeQuestionList={activeQuestionList}
+                activeQuestionGroup={activeQuestionGroup}
                 editingQuestionId={editingQuestionId}
                 editingQuestionText={editingQuestionText}
                 setEditingQuestionText={setEditingQuestionText}
-                editingQuestionGroup={editingQuestionGroup}
-                setEditingQuestionGroup={setEditingQuestionGroup}
+                editingQuestionType={editingQuestionType}
+                setEditingQuestionType={setEditingQuestionType}
                 startEditQuestion={startEditQuestion}
                 saveEditedQuestion={saveEditedQuestion}
                 cancelEditQuestion={cancelEditQuestion}
@@ -332,7 +338,7 @@ export default function App() {
                         realtimeSttModel={realtimeSttModel}
                         feedbackModel={feedbackModel}
                         enabledRulebookCount={enabledRulebookCount}
-                        questionListCount={questionLists.length}
+                        questionGroupCount={questionGroups.length}
                         onOpenSettings={() => setActivePanel('model')}
                     />
 

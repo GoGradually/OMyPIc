@@ -5,16 +5,16 @@ describe('mode utils', () => {
     it('builds mode payload without mock plan', () => {
         const payload = buildModePayload({
             sessionId: 'session-1',
-            listId: 'list-1',
             mode: 'CONTINUOUS',
-            batchSize: 3
+            batchSize: 3,
+            selectedGroupTags: ['travel', 'habit']
         })
 
         expect(payload).toEqual({
             sessionId: 'session-1',
-            listId: 'list-1',
             mode: 'CONTINUOUS',
-            continuousBatchSize: 3
+            continuousBatchSize: 3,
+            selectedGroupTags: ['travel', 'habit']
         })
     })
 

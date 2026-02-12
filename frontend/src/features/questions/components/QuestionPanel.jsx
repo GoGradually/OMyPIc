@@ -19,7 +19,7 @@ export function QuestionPanel({currentQuestionLabel, modeSummary, onOpenQuestion
                     className="control-button secondary"
                     onClick={onOpenQuestionsPanel}
                 >
-                    모드/질문 관리
+                    모드/질문 그룹 관리
                 </button>
             </div>
         </section>

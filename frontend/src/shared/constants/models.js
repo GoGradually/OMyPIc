@@ -25,14 +25,14 @@ export const AUDIO_PERMISSION_LABELS = {
 
 export const PANEL_TITLES = {
     rulebook: '룰북 관리',
-    questions: '질문 및 모드 설정',
+    questions: '질문 그룹 및 모드 설정',
     wrongnotes: '오답 노트',
     model: '연결 설정'
 }
 
 export function getModeSummary(mode, batchSize) {
     if (mode === 'CONTINUOUS') {
-        return `연속 발화 (${batchSize}문항 단위)`
+        return `연속 발화 (${batchSize}질문 그룹 단위)`
     }
     return '즉시 피드백'
 }

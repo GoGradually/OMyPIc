@@ -1,9 +1,9 @@
-export function buildModePayload({sessionId, listId, mode, batchSize}) {
+export function buildModePayload({sessionId, mode, batchSize, selectedGroupTags}) {
     return {
         sessionId,
-        listId: listId || null,
         mode,
-        continuousBatchSize: batchSize
+        continuousBatchSize: batchSize,
+        selectedGroupTags: Array.isArray(selectedGroupTags) ? selectedGroupTags : []
     }
 }
 

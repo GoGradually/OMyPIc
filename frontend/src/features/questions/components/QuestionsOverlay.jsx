@@ -8,24 +8,29 @@ export function QuestionsOverlay({
                                      setBatchSize,
                                      updateMode,
                                      nextQuestion,
-                                     activeListId,
-                                     newListName,
-                                     setNewListName,
-                                     questionLists,
-                                     setActiveListId,
-                                     createList,
-                                     deleteList,
+                                     tagStats,
+                                     selectedGroupTags,
+                                     toggleSelectedTag,
+                                     activeGroupId,
+                                     newGroupName,
+                                     setNewGroupName,
+                                     newGroupTagsInput,
+                                     setNewGroupTagsInput,
+                                     questionGroups,
+                                     setActiveGroupId,
+                                     createGroup,
+                                     deleteGroup,
                                      newQuestion,
                                      setNewQuestion,
-                                     newGroup,
-                                     setNewGroup,
+                                     newQuestionType,
+                                     setNewQuestionType,
                                      addQuestion,
-                                     activeQuestionList,
+                                     activeQuestionGroup,
                                      editingQuestionId,
                                      editingQuestionText,
                                      setEditingQuestionText,
-                                     editingQuestionGroup,
-                                     setEditingQuestionGroup,
+                                     editingQuestionType,
+                                     setEditingQuestionType,
                                      startEditQuestion,
                                      saveEditedQuestion,
                                      cancelEditQuestion,
@@ -48,7 +53,7 @@ export function QuestionsOverlay({
             <div className="field-grid two-col">
                 {mode === 'CONTINUOUS' && (
                     <div className="field-block">
-                        <label>묶음 피드백 개수 (1~10)</label>
+                        <label>묶음 피드백 그룹 수 (1~10)</label>
                         <input
                             type="number"
                             min="1"
@@ -60,38 +65,69 @@ export function QuestionsOverlay({
                 )}
             </div>
 
+            <div className="field-block">
+                <label>출제 태그 선택</label>
+                <div className="mode-tabs">
+                    {tagStats.length === 0 && (
+                        <span className="tiny-meta">사용 가능한 태그가 없습니다.</span>
+                    )}
+                    {tagStats.map((tag) => (
+                        <button
+                            key={tag.tag}
+                            className={`mode-tab ${selectedGroupTags.includes(tag.tag) ? 'is-active' : ''}`}
+                            onClick={() => toggleSelectedTag(tag.tag, tag.selectable)}
+                            disabled={!tag.selectable}
+                        >
+                            {tag.tag} ({tag.groupCount})
+                        </button>
+                    ))}
+                </div>
+            </div>
+
             <div className="action-row">
                 <button className="control-button" onClick={updateMode}>모드 적용</button>
-                <button className="control-button secondary" onClick={nextQuestion} disabled={!activeListId}>
+                <button className="control-button secondary" onClick={nextQuestion}>
                     다음 질문
                 </button>
             </div>
 
             <div className="field-grid two-col">
                 <div className="field-block">
-                    <label>새 리스트 이름</label>
+                    <label>새 질문 그룹 이름</label>
                     <input
-                        value={newListName}
-                        onChange={(event) => setNewListName(event.target.value)}
-                        placeholder="예: 자주 나오는 주제"
+                        value={newGroupName}
+                        onChange={(event) => setNewGroupName(event.target.value)}
+                        placeholder="예: 여행/카페"
                     />
                 </div>
                 <div className="field-block">
-                    <label>리스트 선택</label>
-                    <select value={activeListId} onChange={(event) => setActiveListId(event.target.value)}>
-                        {questionLists.length === 0 && <option value="">리스트 없음</option>}
-                        {questionLists.map((list) => (
-                            <option key={list.id} value={list.id}>{list.name}</option>
-                        ))}
-                    </select>
+                    <label>그룹 태그(쉼표 구분)</label>
+                    <input
+                        value={newGroupTagsInput}
+                        onChange={(event) => setNewGroupTagsInput(event.target.value)}
+                        placeholder="travel, habit"
+                    />
                 </div>
             </div>
 
-            <div className="action-row">
-                <button className="control-button" onClick={createList}>리스트 생성</button>
-                <button className="control-button secondary" onClick={deleteList} disabled={!activeListId}>
-                    리스트 삭제
-                </button>
+            <div className="field-grid two-col">
+                <div className="action-row">
+                    <button className="control-button" onClick={createGroup}>그룹 생성</button>
+                    <button className="control-button secondary" onClick={deleteGroup} disabled={!activeGroupId}>
+                        그룹 삭제
+                    </button>
+                </div>
+                <div className="field-block">
+                    <label>질문 그룹 선택</label>
+                    <select value={activeGroupId} onChange={(event) => setActiveGroupId(event.target.value)}>
+                        {questionGroups.length === 0 && <option value="">그룹 없음</option>}
+                        {questionGroups.map((group) => (
+                            <option key={group.id} value={group.id}>
+                                {group.name} [{(group.tags || []).join(', ')}]
+                            </option>
+                        ))}
+                    </select>
+                </div>
             </div>
 
             <div className="field-grid two-col">
@@ -104,20 +140,20 @@ export function QuestionsOverlay({
                     />
                 </div>
                 <div className="field-block">
-                    <label>그룹</label>
+                    <label>질문 타입(선택)</label>
                     <input
-                        value={newGroup}
-                        onChange={(event) => setNewGroup(event.target.value)}
-                        placeholder="예: Group A"
+                        value={newQuestionType}
+                        onChange={(event) => setNewQuestionType(event.target.value)}
+                        placeholder="예: habit, compare"
                     />
                 </div>
             </div>
 
-            <button className="control-button" onClick={addQuestion} disabled={!activeListId}>질문 추가</button>
+            <button className="control-button" onClick={addQuestion} disabled={!activeGroupId}>질문 추가</button>
 
-            {activeQuestionList && activeQuestionList.questions && activeQuestionList.questions.length > 0 && (
+            {activeQuestionGroup && activeQuestionGroup.questions && activeQuestionGroup.questions.length > 0 && (
                 <ul className="item-list question-items">
-                    {activeQuestionList.questions.map((item) => (
+                    {activeQuestionGroup.questions.map((item) => (
                         <li key={item.id}>
                             {editingQuestionId === item.id ? (
                                 <div className="edit-box">
@@ -126,9 +162,9 @@ export function QuestionsOverlay({
                                         onChange={(event) => setEditingQuestionText(event.target.value)}
                                     />
                                     <input
-                                        value={editingQuestionGroup}
-                                        onChange={(event) => setEditingQuestionGroup(event.target.value)}
-                                        placeholder="Group"
+                                        value={editingQuestionType}
+                                        onChange={(event) => setEditingQuestionType(event.target.value)}
+                                        placeholder="questionType"
                                     />
                                     <div className="item-actions">
                                         <button className="control-button" onClick={saveEditedQuestion}>저장</button>
@@ -140,7 +176,7 @@ export function QuestionsOverlay({
                                 <>
                                     <div className="question-line">
                                         <span>{item.text}</span>
-                                        {item.group && <small>{item.group}</small>}
+                                        {item.questionType && <small>{item.questionType}</small>}
                                     </div>
                                     <div className="item-actions">
                                         <button className="control-button secondary"
@@ -159,8 +195,8 @@ export function QuestionsOverlay({
                 </ul>
             )}
 
-            {(!activeQuestionList || !activeQuestionList.questions || activeQuestionList.questions.length === 0) && (
-                <p className="empty-text">선택된 리스트에 질문이 없습니다.</p>
+            {(!activeQuestionGroup || !activeQuestionGroup.questions || activeQuestionGroup.questions.length === 0) && (
+                <p className="empty-text">선택된 질문 그룹에 질문이 없습니다.</p>
             )}
         </div>
     )

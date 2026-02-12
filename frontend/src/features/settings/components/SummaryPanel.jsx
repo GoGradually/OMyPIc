@@ -7,7 +7,7 @@ export function SummaryPanel({
                                  realtimeSttModel,
                                  feedbackModel,
                                  enabledRulebookCount,
-                                 questionListCount,
+                                 questionGroupCount,
                                  onOpenSettings
                              }) {
     return (
@@ -39,8 +39,8 @@ export function SummaryPanel({
                     <strong>{enabledRulebookCount}개</strong>
                 </li>
                 <li>
-                    <span>질문 리스트</span>
-                    <strong>{questionListCount}개</strong>
+                    <span>질문 그룹</span>
+                    <strong>{questionGroupCount}개</strong>
                 </li>
             </ul>
             <div className="action-row">

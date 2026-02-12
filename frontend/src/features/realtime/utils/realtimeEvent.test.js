@@ -15,7 +15,8 @@ describe('realtimeEvent', () => {
         const feedback = buildFeedbackFromRealtime({
             policy: {
                 mode: 'CONTINUOUS',
-                reason: 'BATCH_READY'
+                reason: 'BATCH_READY',
+                groupBatchSize: 2
             },
             batch: {
                 size: 1,
@@ -42,7 +43,8 @@ describe('realtimeEvent', () => {
             batch: {
                 size: 1,
                 isResidual: false,
-                reason: 'BATCH_READY'
+                reason: 'BATCH_READY',
+                groupBatchSize: 2
             },
             nextAction: {
                 type: 'ask_next',
