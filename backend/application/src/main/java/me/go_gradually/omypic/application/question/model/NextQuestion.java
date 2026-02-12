@@ -3,7 +3,9 @@ package me.go_gradually.omypic.application.question.model;
 public class NextQuestion {
     private String questionId;
     private String text;
+    private String groupId;
     private String group;
+    private String questionType;
     private boolean skipped;
 
     public static NextQuestion skipped() {
@@ -28,12 +30,28 @@ public class NextQuestion {
         this.text = text;
     }
 
+    public String getGroupId() {
+        return groupId;
+    }
+
+    public void setGroupId(String groupId) {
+        this.groupId = groupId;
+    }
+
     public String getGroup() {
         return group;
     }
 
     public void setGroup(String group) {
         this.group = group;
+    }
+
+    public String getQuestionType() {
+        return questionType;
+    }
+
+    public void setQuestionType(String questionType) {
+        this.questionType = questionType;
     }
 
     public boolean isSkipped() {
