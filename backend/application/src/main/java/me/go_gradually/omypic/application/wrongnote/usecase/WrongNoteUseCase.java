@@ -6,11 +6,10 @@ import me.go_gradually.omypic.application.wrongnote.port.WrongNoteRecentQueuePor
 import me.go_gradually.omypic.domain.feedback.Feedback;
 import me.go_gradually.omypic.domain.shared.util.TextUtils;
 import me.go_gradually.omypic.domain.wrongnote.WrongNote;
+import me.go_gradually.omypic.domain.wrongnote.WrongNoteWindow;
 
 import java.time.Instant;
-import java.util.ArrayDeque;
 import java.util.Comparator;
-import java.util.Deque;
 import java.util.List;
 
 public class WrongNoteUseCase {
@@ -27,20 +26,22 @@ public class WrongNoteUseCase {
     }
 
     public synchronized void addFeedback(Feedback response) {
-        Deque<String> recentQueue = new ArrayDeque<>(recentQueueStore.loadGlobalQueue());
+        WrongNoteWindow window = WrongNoteWindow.from(
+                recentQueueStore.loadGlobalQueue(),
+                feedbackPolicy.getWrongnoteWindowSize()
+        );
         for (String point : response.getCorrectionPoints()) {
             String pattern = TextUtils.trimToLength(point, 120);
             WrongNote note = repository.findByPattern(pattern)
                     .orElseGet(() -> WrongNote.createNew(pattern, Instant.now()));
             note.recordOccurrence(point, feedbackPolicy.getWrongnoteSummaryMaxChars(), Instant.now());
             repository.save(note);
-            recentQueue.addLast(pattern);
-            if (recentQueue.size() > 30) {
-                String removed = recentQueue.removeFirst();
+            String removed = window.append(pattern);
+            if (removed != null) {
                 decrementOrRemove(removed);
             }
         }
-        recentQueueStore.saveGlobalQueue(List.copyOf(recentQueue));
+        recentQueueStore.saveGlobalQueue(window.snapshot());
     }
 
     private void decrementOrRemove(String pattern) {
