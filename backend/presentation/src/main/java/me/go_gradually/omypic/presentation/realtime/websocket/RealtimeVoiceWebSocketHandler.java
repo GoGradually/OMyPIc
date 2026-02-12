@@ -30,21 +30,30 @@ public class RealtimeVoiceWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     public void afterConnectionEstablished(WebSocketSession rawSession) throws Exception {
-        rawSession.setTextMessageSizeLimit(1_048_576);
-        WebSocketSession session = new ConcurrentWebSocketSessionDecorator(rawSession, 10_000, 1_048_576);
+        WebSocketSession session = decorateSession(rawSession);
         RealtimeStartCommand command = buildStartCommand(session);
         if (command == null) {
-            session.close(CloseStatus.BAD_DATA.withReason("sessionId and apiKey are required"));
+            closeBadRequest(session, "sessionId and apiKey are required");
             return;
         }
+        openVoiceSession(session, command);
+    }
 
+    private WebSocketSession decorateSession(WebSocketSession rawSession) {
+        rawSession.setTextMessageSizeLimit(1_048_576);
+        return new ConcurrentWebSocketSessionDecorator(rawSession, 10_000, 1_048_576);
+    }
+
+    private void closeBadRequest(WebSocketSession session, String reason) throws Exception {
+        session.close(CloseStatus.BAD_DATA.withReason(reason));
+    }
+
+    private void openVoiceSession(WebSocketSession session, RealtimeStartCommand command) throws Exception {
         try {
             RealtimeVoiceSession voiceSession = realtimeVoiceUseCase.open(command, (event, payload) -> sendEvent(session, event, payload));
             sessionBySocketId.put(session.getId(), voiceSession);
         } catch (Exception e) {
-            String message = defaultMessage(e.getMessage());
-            sendEvent(session, "error", errorPayload("REALTIME_INIT_FAILED", message));
-            session.close(CloseStatus.SERVER_ERROR.withReason(toCloseReason(message)));
+            handleInitializationFailure(session, e);
         }
     }
 
@@ -55,11 +64,20 @@ public class RealtimeVoiceWebSocketHandler extends TextWebSocketHandler {
             sendEvent(session, "error", errorPayload("UNKNOWN_SESSION", "Unknown realtime session"));
             return;
         }
+        dispatchClientEvent(session, realtimeSession, message.getPayload());
+    }
 
-        JsonNode root = objectMapper.readTree(message.getPayload());
+    private void dispatchClientEvent(WebSocketSession session, RealtimeVoiceSession realtimeSession, String payload) throws Exception {
+        JsonNode root = objectMapper.readTree(payload);
         String type = root.path("type").asText("");
         JsonNode data = root.has("data") ? root.path("data") : root;
+        applyClientEvent(session, realtimeSession, type, data);
+    }
 
+    private void applyClientEvent(WebSocketSession session,
+                                  RealtimeVoiceSession realtimeSession,
+                                  String type,
+                                  JsonNode data) {
         switch (type) {
             case "audio.append" -> realtimeSession.appendAudio(readString(data, "audio"));
             case "audio.commit" -> realtimeSession.commitAudio();
@@ -68,6 +86,12 @@ public class RealtimeVoiceWebSocketHandler extends TextWebSocketHandler {
             case "session.stop" -> realtimeSession.stopSession(readBoolean(data, "forced", true), readString(data, "reason"));
             default -> sendEvent(session, "error", errorPayload("UNSUPPORTED_EVENT", "Unsupported event type: " + type));
         }
+    }
+
+    private void handleInitializationFailure(WebSocketSession session, Exception e) throws Exception {
+        String message = defaultMessage(e.getMessage());
+        sendEvent(session, "error", errorPayload("REALTIME_INIT_FAILED", message));
+        session.close(CloseStatus.SERVER_ERROR.withReason(toCloseReason(message)));
     }
 
     @Override

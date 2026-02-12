@@ -22,12 +22,19 @@ public class ApiKeyController {
 
     @PostMapping("/verify")
     public ApiKeyVerifyResponse verify(@Valid @RequestBody ApiKeyVerifyRequest request) {
+        ApiKeyVerifyResult result = apiKeyVerifyUseCase.verify(toCommand(request));
+        return toResponse(result);
+    }
+
+    private ApiKeyVerifyCommand toCommand(ApiKeyVerifyRequest request) {
         ApiKeyVerifyCommand command = new ApiKeyVerifyCommand();
         command.setProvider(request.getProvider());
         command.setApiKey(request.getApiKey());
         command.setModel(request.getModel());
+        return command;
+    }
 
-        ApiKeyVerifyResult result = apiKeyVerifyUseCase.verify(command);
+    private ApiKeyVerifyResponse toResponse(ApiKeyVerifyResult result) {
         ApiKeyVerifyResponse response = new ApiKeyVerifyResponse();
         response.setValid(result.isValid());
         response.setProvider(result.getProvider());

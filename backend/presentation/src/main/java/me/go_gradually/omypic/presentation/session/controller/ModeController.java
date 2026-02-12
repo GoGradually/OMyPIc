@@ -34,16 +34,25 @@ public class ModeController {
     }
 
     private SessionStateResponse toResponse(SessionState state) {
+        SessionStateResponse response = baseResponse(state);
+        fillProgress(response, state);
+        return response;
+    }
+
+    private SessionStateResponse baseResponse(SessionState state) {
         SessionStateResponse response = new SessionStateResponse();
         response.setSessionId(state.getSessionId().value());
         response.setMode(state.getMode());
         response.setContinuousBatchSize(state.getContinuousBatchSize());
+        response.setFeedbackLanguage(state.getFeedbackLanguage().value());
+        return response;
+    }
+
+    private void fillProgress(SessionStateResponse response, SessionState state) {
         response.setCompletedGroupCountSinceLastFeedback(state.getCompletedGroupCountSinceLastFeedback());
         response.setSelectedGroupTags(state.getSelectedGroupTags());
         response.setCandidateGroupOrder(state.getCandidateGroupOrder());
         response.setGroupQuestionIndices(state.getGroupQuestionIndices());
         response.setSttSegments(state.getSttSegments());
-        response.setFeedbackLanguage(state.getFeedbackLanguage().value());
-        return response;
     }
 }

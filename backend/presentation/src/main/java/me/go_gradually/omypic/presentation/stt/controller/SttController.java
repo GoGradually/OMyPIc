@@ -70,7 +70,14 @@ public class SttController {
         assertLegacyRouteEnabled();
         SseEmitter emitter = new SseEmitter(Duration.ofMinutes(5).toMillis());
         AtomicBoolean open = new AtomicBoolean(true);
-        SttEventSink sink = (event, data) -> {
+        SttEventSink sink = toEventSink(emitter, open);
+        registerEmitterCallbacks(emitter, open, jobId, sink);
+        jobUseCase.registerSink(jobId, sink);
+        return emitter;
+    }
+
+    private SttEventSink toEventSink(SseEmitter emitter, AtomicBoolean open) {
+        return (event, data) -> {
             if (!open.get()) {
                 return false;
             }
@@ -82,16 +89,19 @@ public class SttController {
                 return false;
             }
         };
-        emitter.onCompletion(() -> {
-            open.set(false);
-            jobUseCase.unregisterSink(jobId, sink);
-        });
-        emitter.onTimeout(() -> {
-            open.set(false);
-            jobUseCase.unregisterSink(jobId, sink);
-        });
-        jobUseCase.registerSink(jobId, sink);
-        return emitter;
+    }
+
+    private void registerEmitterCallbacks(SseEmitter emitter,
+                                          AtomicBoolean open,
+                                          String jobId,
+                                          SttEventSink sink) {
+        emitter.onCompletion(() -> closeSink(open, jobId, sink));
+        emitter.onTimeout(() -> closeSink(open, jobId, sink));
+    }
+
+    private void closeSink(AtomicBoolean open, String jobId, SttEventSink sink) {
+        open.set(false);
+        jobUseCase.unregisterSink(jobId, sink);
     }
 
     private void assertLegacyRouteEnabled() {
