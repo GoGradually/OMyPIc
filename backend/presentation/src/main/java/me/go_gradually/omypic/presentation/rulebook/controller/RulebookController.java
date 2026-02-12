@@ -2,6 +2,7 @@ package me.go_gradually.omypic.presentation.rulebook.controller;
 
 import me.go_gradually.omypic.application.rulebook.usecase.RulebookUseCase;
 import me.go_gradually.omypic.domain.rulebook.Rulebook;
+import me.go_gradually.omypic.domain.rulebook.RulebookScope;
 import me.go_gradually.omypic.presentation.rulebook.dto.RulebookResponse;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
@@ -27,8 +28,10 @@ public class RulebookController {
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public RulebookResponse upload(@RequestParam("file") MultipartFile file) throws IOException {
-        return toResponse(service.upload(file.getOriginalFilename(), file.getBytes()));
+    public RulebookResponse upload(@RequestParam("file") MultipartFile file,
+                                   @RequestParam(value = "scope", required = false) RulebookScope scope,
+                                   @RequestParam(value = "questionGroup", required = false) String questionGroup) throws IOException {
+        return toResponse(service.upload(file.getOriginalFilename(), file.getBytes(), scope, questionGroup));
     }
 
     @PutMapping("/{id}/toggle")
@@ -46,6 +49,8 @@ public class RulebookController {
         response.setId(rulebook.getId().value());
         response.setFilename(rulebook.getFilename());
         response.setPath(rulebook.getPath());
+        response.setScope(rulebook.getScope());
+        response.setQuestionGroup(rulebook.getQuestionGroup() == null ? null : rulebook.getQuestionGroup().value());
         response.setEnabled(rulebook.isEnabled());
         response.setCreatedAt(rulebook.getCreatedAt());
         response.setUpdatedAt(rulebook.getUpdatedAt());

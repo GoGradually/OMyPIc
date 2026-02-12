@@ -2,6 +2,7 @@ package me.go_gradually.omypic.presentation.session.controller;
 
 import me.go_gradually.omypic.application.session.model.ModeUpdateCommand;
 import me.go_gradually.omypic.application.session.usecase.SessionUseCase;
+import me.go_gradually.omypic.domain.session.MockExamPlan;
 import me.go_gradually.omypic.domain.session.SessionState;
 import me.go_gradually.omypic.presentation.session.dto.ModeUpdateRequest;
 import me.go_gradually.omypic.presentation.session.dto.SessionStateResponse;
@@ -36,9 +37,18 @@ public class ModeController {
         command.setListId(request.getListId());
         command.setMode(request.getMode());
         command.setContinuousBatchSize(request.getContinuousBatchSize());
-        command.setMockGroupOrder(request.getMockGroupOrder());
-        command.setMockGroupCounts(request.getMockGroupCounts());
+        command.setMockPlan(toMockPlan(request.getMockPlan()));
         return command;
+    }
+
+    private ModeUpdateCommand.MockPlan toMockPlan(ModeUpdateRequest.MockPlanRequest request) {
+        if (request == null) {
+            return null;
+        }
+        ModeUpdateCommand.MockPlan plan = new ModeUpdateCommand.MockPlan();
+        plan.setGroupOrder(request.getGroupOrder());
+        plan.setGroupCounts(request.getGroupCounts());
+        return plan;
     }
 
     private SessionStateResponse toResponse(SessionState state) {
@@ -56,17 +66,19 @@ public class ModeController {
         return response;
     }
 
-    private SessionStateResponse.MockExamStateResponse toMockResponse(SessionState.MockExamState mockExamState) {
+    private SessionStateResponse.MockExamStateResponse toMockResponse(MockExamPlan mockExamState) {
         if (mockExamState == null) {
             return null;
         }
         SessionStateResponse.MockExamStateResponse response = new SessionStateResponse.MockExamStateResponse();
-        response.setGroupOrder(mockExamState.getGroupOrder());
-        response.setGroupCounts(mockExamState.getGroupCounts());
-        response.setSelectedCounts(mockExamState.getSelectedCounts());
+        response.setGroupOrder(mockExamState.getGroupOrder().stream().map(group -> group.value()).toList());
+        response.setGroupCounts(mockExamState.getGroupCounts().entrySet().stream()
+                .collect(Collectors.toMap(entry -> entry.getKey().value(), Map.Entry::getValue)));
+        response.setSelectedCounts(mockExamState.getSelectedCounts().entrySet().stream()
+                .collect(Collectors.toMap(entry -> entry.getKey().value(), Map.Entry::getValue)));
         response.setGroupIndex(mockExamState.getGroupIndex());
         response.setRemainingQuestions(mockExamState.getRemainingQuestions().entrySet().stream()
-                .collect(Collectors.toMap(Map.Entry::getKey,
+                .collect(Collectors.toMap(entry -> entry.getKey().value(),
                         entry -> entry.getValue().stream().map(id -> id.value()).toList())));
         return response;
     }

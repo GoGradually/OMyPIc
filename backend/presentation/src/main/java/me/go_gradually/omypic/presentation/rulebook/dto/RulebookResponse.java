@@ -1,11 +1,15 @@
 package me.go_gradually.omypic.presentation.rulebook.dto;
 
+import me.go_gradually.omypic.domain.rulebook.RulebookScope;
+
 import java.time.Instant;
 
 public class RulebookResponse {
     private String id;
     private String filename;
     private String path;
+    private RulebookScope scope;
+    private String questionGroup;
     private boolean enabled;
     private Instant createdAt;
     private Instant updatedAt;
@@ -32,6 +36,22 @@ public class RulebookResponse {
 
     public void setPath(String path) {
         this.path = path;
+    }
+
+    public RulebookScope getScope() {
+        return scope;
+    }
+
+    public void setScope(RulebookScope scope) {
+        this.scope = scope;
+    }
+
+    public String getQuestionGroup() {
+        return questionGroup;
+    }
+
+    public void setQuestionGroup(String questionGroup) {
+        this.questionGroup = questionGroup;
     }
 
     public boolean isEnabled() {

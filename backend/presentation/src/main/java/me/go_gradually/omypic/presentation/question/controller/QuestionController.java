@@ -92,7 +92,7 @@ public class QuestionController {
         QuestionItemResponse response = new QuestionItemResponse();
         response.setId(item.getId().value());
         response.setText(item.getText());
-        response.setGroup(item.getGroup());
+        response.setGroup(item.getGroup() == null ? null : item.getGroup().value());
         return response;
     }
 }

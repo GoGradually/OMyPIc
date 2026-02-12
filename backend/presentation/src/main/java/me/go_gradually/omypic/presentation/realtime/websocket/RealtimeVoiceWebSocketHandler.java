@@ -43,7 +43,7 @@ public class RealtimeVoiceWebSocketHandler extends TextWebSocketHandler {
             sessionBySocketId.put(session.getId(), voiceSession);
         } catch (Exception e) {
             String message = defaultMessage(e.getMessage());
-            sendEvent(session, "error", Map.of("message", message));
+            sendEvent(session, "error", errorPayload("REALTIME_INIT_FAILED", message));
             session.close(CloseStatus.SERVER_ERROR.withReason(toCloseReason(message)));
         }
     }
@@ -52,7 +52,7 @@ public class RealtimeVoiceWebSocketHandler extends TextWebSocketHandler {
     protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
         RealtimeVoiceSession realtimeSession = sessionBySocketId.get(session.getId());
         if (realtimeSession == null) {
-            sendEvent(session, "error", Map.of("message", "Unknown realtime session"));
+            sendEvent(session, "error", errorPayload("UNKNOWN_SESSION", "Unknown realtime session"));
             return;
         }
 
@@ -66,13 +66,16 @@ public class RealtimeVoiceWebSocketHandler extends TextWebSocketHandler {
             case "response.cancel" -> realtimeSession.cancelResponse();
             case "session.update" -> realtimeSession.update(toUpdateCommand(data));
             case "session.stop" -> realtimeSession.stopSession(readBoolean(data, "forced", true), readString(data, "reason"));
-            default -> sendEvent(session, "error", Map.of("message", "Unsupported event type: " + type));
+            default -> sendEvent(session, "error", errorPayload("UNSUPPORTED_EVENT", "Unsupported event type: " + type));
         }
     }
 
     @Override
     public void handleTransportError(WebSocketSession session, Throwable exception) throws Exception {
-        sendEvent(session, "error", Map.of("message", exception == null ? "Transport error" : exception.getMessage()));
+        sendEvent(session, "error", errorPayload(
+                "TRANSPORT_ERROR",
+                exception == null ? "Transport error" : exception.getMessage()
+        ));
         RealtimeVoiceSession realtimeSession = sessionBySocketId.remove(session.getId());
         if (realtimeSession != null) {
             realtimeSession.close();
@@ -172,6 +175,13 @@ public class RealtimeVoiceWebSocketHandler extends TextWebSocketHandler {
 
     private String defaultMessage(String message) {
         return isBlank(message) ? "Realtime initialization failed" : message;
+    }
+
+    private Map<String, Object> errorPayload(String code, String message) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("code", code == null ? "UNKNOWN_ERROR" : code);
+        payload.put("message", message == null ? "" : message);
+        return payload;
     }
 
     private String toCloseReason(String message) {
