@@ -1,7 +1,6 @@
 package me.go_gradually.omypic.application.realtime.usecase;
 
 import me.go_gradually.omypic.application.feedback.model.FeedbackCommand;
-import me.go_gradually.omypic.application.feedback.model.FeedbackResult;
 import me.go_gradually.omypic.application.feedback.usecase.FeedbackUseCase;
 import me.go_gradually.omypic.application.question.model.NextQuestion;
 import me.go_gradually.omypic.application.question.usecase.QuestionUseCase;
@@ -12,15 +11,24 @@ import me.go_gradually.omypic.application.session.usecase.SessionUseCase;
 import me.go_gradually.omypic.application.shared.port.AsyncExecutor;
 import me.go_gradually.omypic.application.shared.port.MetricsPort;
 import me.go_gradually.omypic.domain.feedback.Feedback;
+import me.go_gradually.omypic.domain.feedback.FeedbackLanguage;
+import me.go_gradually.omypic.domain.question.QuestionGroup;
 import me.go_gradually.omypic.domain.session.ModeType;
+import me.go_gradually.omypic.domain.session.SessionFlowPolicy;
+import me.go_gradually.omypic.domain.session.SessionStopReason;
 import me.go_gradually.omypic.domain.session.SessionState;
+import me.go_gradually.omypic.domain.session.TurnBatchingPolicy;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Deque;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -138,8 +146,11 @@ public class RealtimeVoiceUseCase {
         }
         long turnId = context.nextTurnId();
         try {
-            NextQuestion nextQuestion = requestNextQuestion(context, turnId);
-            if (!isBlank(nextQuestion.getText())) {
+            SessionState sessionState = sessionUseCase.getOrCreate(context.sessionId);
+            NextQuestion nextQuestion = requestNextQuestion(context, turnId, sessionState);
+            if (isQuestionExhausted(nextQuestion)) {
+                context.requestAutoStop(turnId, SessionStopReason.QUESTION_EXHAUSTED.code());
+            } else if (!isBlank(nextQuestion.getText())) {
                 streamSpeech(context, turnId, nextQuestion.getText());
             }
         } catch (Exception e) {
@@ -151,14 +162,15 @@ public class RealtimeVoiceUseCase {
 
     private void handleFinalTranscript(RuntimeContext context, String text) {
         long turnId = context.nextTurnId();
+        TurnInput turnInput = context.captureTurnInput(text);
         context.activeTurn.set(turnId);
         context.send("stt.final", Map.of("sessionId", context.sessionId, "turnId", turnId, "text", text));
         sessionUseCase.appendSegment(context.sessionId, text);
         Instant startedAt = Instant.now();
-        asyncExecutor.execute(() -> processTurn(context, turnId, text, startedAt));
+        asyncExecutor.execute(() -> processTurn(context, turnId, turnInput, startedAt));
     }
 
-    private void processTurn(RuntimeContext context, long turnId, String transcript, Instant startedAt) {
+    private void processTurn(RuntimeContext context, long turnId, TurnInput turnInput, Instant startedAt) {
         RuntimeSettings settings = context.settings;
         try {
             if (context.closed.get() || context.forcedStopped.get() || isCancelled(context, turnId)) {
@@ -167,40 +179,109 @@ public class RealtimeVoiceUseCase {
 
             SessionState sessionState = sessionUseCase.getOrCreate(context.sessionId);
             ModeType mode = sessionState.getMode();
+            sessionState.setFeedbackLanguage(FeedbackLanguage.of(settings.feedbackLanguage));
             String feedbackApiKey = firstNonBlank(settings.feedbackApiKey, context.apiKey);
 
-            FeedbackResult feedbackResult = FeedbackResult.skipped();
-            if (mode != ModeType.MOCK_EXAM) {
-                feedbackResult = feedbackUseCase.generateFeedback(feedbackApiKey, feedbackCommand(settings, context.sessionId, transcript));
-                if (feedbackResult.isGenerated()) {
-                    Feedback feedback = feedbackResult.getFeedback();
-                    if (!context.closed.get() && !context.forcedStopped.get() && !isCancelled(context, turnId)) {
-                        context.send("feedback.final", feedbackPayload(context.sessionId, turnId, feedback));
-                        streamSpeech(context, turnId, toTtsText(feedback));
-                    }
+            List<TurnInput> feedbackInputs = List.of();
+            TurnBatchingPolicy.BatchReason batchReason = TurnBatchingPolicy.BatchReason.IMMEDIATE_MODE;
+            boolean residualBatch = false;
+            if (mode == ModeType.IMMEDIATE) {
+                feedbackInputs = List.of(turnInput);
+                batchReason = TurnBatchingPolicy.BatchReason.IMMEDIATE_MODE;
+            } else if (mode == ModeType.CONTINUOUS) {
+                context.appendContinuousTurn(turnInput);
+                TurnBatchingPolicy.BatchDecision decision = sessionState.decideFeedbackBatchOnAnswer();
+                batchReason = decision.reason();
+                if (decision.emitFeedback()) {
+                    feedbackInputs = context.pollContinuousTurns(sessionState.getContinuousBatchSize());
                 } else {
-                    context.send("feedback.skipped", Map.of("sessionId", context.sessionId, "turnId", turnId));
+                    context.send("feedback.skipped", Map.of(
+                            "sessionId", context.sessionId,
+                            "turnId", turnId,
+                            "reason", decision.reason().name()
+                    ));
                 }
+            } else if (mode == ModeType.MOCK_EXAM) {
+                context.appendMockTurn(turnInput);
+                batchReason = TurnBatchingPolicy.BatchReason.WAITING_FOR_MOCK_EXAM_COMPLETION;
             }
 
             NextQuestion nextQuestion = null;
-            if (shouldPromptNextQuestion(mode, feedbackResult) && !context.closed.get() && !context.forcedStopped.get()) {
-                nextQuestion = requestNextQuestion(context, turnId);
-                if (!isBlank(nextQuestion.getText()) && !isCancelled(context, turnId)) {
-                    streamSpeech(context, turnId, nextQuestion.getText());
+            boolean questionExhausted = false;
+            SessionFlowPolicy.SessionAction nextAction = SessionFlowPolicy.SessionAction.askNext();
+            if (shouldPromptNextQuestion(mode) && !context.closed.get() && !context.forcedStopped.get()) {
+                nextQuestion = requestNextQuestion(context, turnId, sessionState);
+                questionExhausted = isQuestionExhausted(nextQuestion);
+                nextAction = SessionFlowPolicy.decideAfterQuestionSelection(questionExhausted);
+            }
+
+            if (!feedbackInputs.isEmpty()) {
+                List<FeedbackItem> feedbackItems = generateFeedbackItems(settings, context.sessionId, feedbackApiKey, feedbackInputs);
+                if (!context.closed.get() && !context.forcedStopped.get() && !isCancelled(context, turnId)) {
+                    context.send("feedback.final", feedbackPayload(
+                            context.sessionId,
+                            turnId,
+                            mode,
+                            mode == ModeType.CONTINUOUS ? sessionState.getContinuousBatchSize() : feedbackItems.size(),
+                            batchReason,
+                            residualBatch,
+                            feedbackItems,
+                            nextAction
+                    ));
+                    streamSpeech(context, turnId, toTtsText(feedbackItems));
                 }
             }
 
             if (mode == ModeType.MOCK_EXAM && nextQuestion != null && nextQuestion.isMockExamCompleted() && !context.forcedStopped.get()) {
-                FeedbackResult mockFinalFeedback = feedbackUseCase.generateMockExamFinalFeedback(
-                        feedbackApiKey,
-                        feedbackCommand(settings, context.sessionId, transcript)
-                );
-                if (mockFinalFeedback.isGenerated() && !isCancelled(context, turnId) && !context.closed.get() && !context.forcedStopped.get()) {
-                    Feedback feedback = mockFinalFeedback.getFeedback();
-                    context.send("feedback.final", feedbackPayload(context.sessionId, turnId, feedback));
-                    streamSpeech(context, turnId, toTtsText(feedback));
+                if (!sessionState.isMockFinalFeedbackGenerated()) {
+                    List<TurnInput> mockTurns = context.pollMockTurns();
+                    if (!mockTurns.isEmpty()) {
+                        List<FeedbackItem> mockFinalItems = generateFeedbackItems(settings, context.sessionId, feedbackApiKey, mockTurns);
+                        if (!isCancelled(context, turnId) && !context.closed.get() && !context.forcedStopped.get()) {
+                            context.send("feedback.final", feedbackPayload(
+                                    context.sessionId,
+                                    turnId,
+                                    mode,
+                                    mockFinalItems.size(),
+                                    TurnBatchingPolicy.BatchReason.MOCK_EXAM_FINAL,
+                                    false,
+                                    mockFinalItems,
+                                    nextAction
+                            ));
+                            streamSpeech(context, turnId, toTtsText(mockFinalItems));
+                        }
+                    }
+                    sessionState.markMockFinalFeedbackGenerated();
                 }
+            }
+
+            if (sessionState.shouldGenerateResidualContinuousFeedback(questionExhausted, !feedbackInputs.isEmpty())) {
+                List<TurnInput> remainingContinuousTurns = context.pollAllContinuousTurns();
+                if (!remainingContinuousTurns.isEmpty()) {
+                    residualBatch = true;
+                    List<FeedbackItem> remainingItems = generateFeedbackItems(settings, context.sessionId, feedbackApiKey, remainingContinuousTurns);
+                    if (!context.closed.get() && !context.forcedStopped.get() && !isCancelled(context, turnId)) {
+                        context.send("feedback.final", feedbackPayload(
+                                context.sessionId,
+                                turnId,
+                                mode,
+                                sessionState.getContinuousBatchSize(),
+                                TurnBatchingPolicy.BatchReason.EXHAUSTED_WITH_REMAINDER,
+                                residualBatch,
+                                remainingItems,
+                                nextAction
+                        ));
+                        streamSpeech(context, turnId, toTtsText(remainingItems));
+                    }
+                }
+            }
+
+            if (nextQuestion != null && !questionExhausted && !isBlank(nextQuestion.getText()) && !isCancelled(context, turnId)) {
+                streamSpeech(context, turnId, nextQuestion.getText());
+            }
+
+            if (nextAction.type() == SessionFlowPolicy.NextActionType.AUTO_STOP) {
+                context.requestAutoStop(turnId, nextAction.reason().code());
             }
 
         } catch (Exception e) {
@@ -215,25 +296,29 @@ public class RealtimeVoiceUseCase {
         }
     }
 
-    private boolean shouldPromptNextQuestion(ModeType mode, FeedbackResult feedbackResult) {
+    private boolean shouldPromptNextQuestion(ModeType mode) {
         if (mode == ModeType.IMMEDIATE) {
             return true;
         }
         if (mode == ModeType.CONTINUOUS) {
-            return !feedbackResult.isGenerated();
+            return true;
         }
         return mode == ModeType.MOCK_EXAM;
     }
 
-    private NextQuestion requestNextQuestion(RuntimeContext context, long turnId) {
-        String listId = resolveActiveQuestionListId(context.sessionId);
+    private boolean isQuestionExhausted(NextQuestion nextQuestion) {
+        return nextQuestion == null || nextQuestion.isSkipped();
+    }
+
+    private NextQuestion requestNextQuestion(RuntimeContext context, long turnId, SessionState sessionState) {
+        String listId = resolveActiveQuestionListId(sessionState);
         NextQuestion nextQuestion = questionUseCase.nextQuestion(listId, context.sessionId);
-        context.send("question.prompt", questionPayload(context.sessionId, turnId, nextQuestion));
+        context.updateCurrentQuestion(nextQuestion);
+        context.send("question.prompt", questionPayload(context.sessionId, turnId, sessionState.getMode(), nextQuestion));
         return nextQuestion;
     }
 
-    private String resolveActiveQuestionListId(String sessionId) {
-        SessionState state = sessionUseCase.getOrCreate(sessionId);
+    private String resolveActiveQuestionListId(SessionState state) {
         String listId = state.getActiveQuestionListId();
         if (isBlank(listId)) {
             throw new IllegalStateException("질문 리스트를 먼저 선택하고 학습 모드를 적용해 주세요.");
@@ -251,28 +336,108 @@ public class RealtimeVoiceUseCase {
         return feedbackCommand;
     }
 
-    private Map<String, Object> questionPayload(String sessionId, long turnId, NextQuestion question) {
+    private List<FeedbackItem> generateFeedbackItems(RuntimeSettings settings,
+                                                     String sessionId,
+                                                     String apiKey,
+                                                     List<TurnInput> turns) {
+        List<FeedbackItem> items = new ArrayList<>();
+        for (TurnInput turn : turns) {
+            Feedback feedback = feedbackUseCase.generateFeedbackForTurn(
+                    apiKey,
+                    feedbackCommand(settings, sessionId, turn.answerText()),
+                    turn.questionText(),
+                    turn.questionGroup(),
+                    turn.answerText(),
+                    2
+            );
+            items.add(new FeedbackItem(
+                    turn.questionId(),
+                    turn.questionText(),
+                    turn.questionGroup(),
+                    turn.answerText(),
+                    feedback
+            ));
+        }
+        return items;
+    }
+
+    private Map<String, Object> questionPayload(String sessionId, long turnId, ModeType mode, NextQuestion question) {
+        boolean exhausted = isQuestionExhausted(question);
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("sessionId", sessionId);
         payload.put("turnId", turnId);
-        payload.put("questionId", question.getQuestionId());
-        payload.put("text", question.getText());
-        payload.put("group", question.getGroup());
-        payload.put("skipped", question.isSkipped());
-        payload.put("mockExamCompleted", question.isMockExamCompleted());
-        payload.put("mockExamCompletionReason", question.getMockExamCompletionReason());
+        payload.put("question", questionNode(question, exhausted));
+
+        Map<String, Object> selection = new LinkedHashMap<>();
+        selection.put("mode", mode == null ? ModeType.IMMEDIATE.name() : mode.name());
+        selection.put("exhausted", exhausted);
+        if (exhausted) {
+            selection.put("reason", resolveExhaustedReason(question));
+        }
+        payload.put("selection", selection);
         return payload;
     }
 
-    private Map<String, Object> feedbackPayload(String sessionId, long turnId, Feedback feedback) {
+    private Map<String, Object> questionNode(NextQuestion question, boolean exhausted) {
+        if (question == null || exhausted) {
+            return null;
+        }
+        Map<String, Object> node = new LinkedHashMap<>();
+        node.put("id", question.getQuestionId());
+        node.put("text", question.getText());
+        node.put("group", question.getGroup());
+        return node;
+    }
+
+    private Map<String, Object> feedbackPayload(String sessionId,
+                                                long turnId,
+                                                ModeType mode,
+                                                int batchSize,
+                                                TurnBatchingPolicy.BatchReason reason,
+                                                boolean residual,
+                                                List<FeedbackItem> items,
+                                                SessionFlowPolicy.SessionAction nextAction) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("sessionId", sessionId);
         payload.put("turnId", turnId);
-        payload.put("summary", feedback.getSummary());
-        payload.put("correctionPoints", feedback.getCorrectionPoints());
-        payload.put("exampleAnswer", feedback.getExampleAnswer());
-        payload.put("rulebookEvidence", feedback.getRulebookEvidence());
+        payload.put("policy", feedbackPolicyPayload(mode, batchSize, reason));
+        payload.put("batch", feedbackBatchPayload(items, residual));
+        payload.put("nextAction", nextActionPayload(nextAction));
         return payload;
+    }
+
+    private Map<String, Object> feedbackPolicyPayload(ModeType mode, int batchSize, TurnBatchingPolicy.BatchReason reason) {
+        Map<String, Object> policy = new LinkedHashMap<>();
+        policy.put("mode", mode == null ? ModeType.IMMEDIATE.name() : mode.name());
+        policy.put("batchSize", Math.max(1, batchSize));
+        policy.put("reason", reason == null ? "" : reason.name());
+        return policy;
+    }
+
+    private Map<String, Object> feedbackBatchPayload(List<FeedbackItem> items, boolean residual) {
+        Map<String, Object> batch = new LinkedHashMap<>();
+        List<FeedbackItem> safeItems = items == null ? List.of() : items;
+        batch.put("size", safeItems.size());
+        batch.put("isResidual", residual);
+        batch.put("items", safeItems.stream().map(this::feedbackItemPayload).toList());
+        return batch;
+    }
+
+    private Map<String, Object> nextActionPayload(SessionFlowPolicy.SessionAction action) {
+        SessionFlowPolicy.SessionAction safeAction = action == null ? SessionFlowPolicy.SessionAction.askNext() : action;
+        Map<String, Object> nextAction = new LinkedHashMap<>();
+        nextAction.put("type", safeAction.type() == SessionFlowPolicy.NextActionType.AUTO_STOP ? "auto_stop" : "ask_next");
+        if (safeAction.reason() != null) {
+            nextAction.put("reason", safeAction.reason().code());
+        }
+        return nextAction;
+    }
+
+    private String resolveExhaustedReason(NextQuestion question) {
+        if (question != null && !isBlank(question.getMockExamCompletionReason())) {
+            return question.getMockExamCompletionReason();
+        }
+        return SessionStopReason.QUESTION_EXHAUSTED.code();
     }
 
     private void streamSpeech(RuntimeContext context, long turnId, String speechText) {
@@ -304,6 +469,19 @@ public class RealtimeVoiceUseCase {
         }
     }
 
+    private Map<String, Object> feedbackItemPayload(FeedbackItem item) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("questionId", item.questionId());
+        payload.put("questionText", item.questionText());
+        payload.put("questionGroup", item.questionGroup() == null ? null : item.questionGroup().value());
+        payload.put("answerText", item.answerText());
+        payload.put("summary", item.feedback().getSummary());
+        payload.put("correctionPoints", item.feedback().getCorrectionPoints());
+        payload.put("exampleAnswer", item.feedback().getExampleAnswer());
+        payload.put("rulebookEvidence", item.feedback().getRulebookEvidence());
+        return payload;
+    }
+
     private String toTtsText(Feedback feedback) {
         StringBuilder sb = new StringBuilder();
         if (!isBlank(feedback.getSummary())) {
@@ -322,12 +500,60 @@ public class RealtimeVoiceUseCase {
         return text;
     }
 
+    private String toTtsText(List<FeedbackItem> items) {
+        if (items == null || items.isEmpty()) {
+            return "No feedback available.";
+        }
+        if (items.size() == 1) {
+            return toTtsText(items.get(0).feedback());
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < items.size(); i++) {
+            FeedbackItem item = items.get(i);
+            sb.append("Feedback ").append(i + 1).append('\n');
+            if (!isBlank(item.questionText())) {
+                sb.append(item.questionText()).append('\n');
+            }
+            sb.append(toTtsText(item.feedback())).append('\n');
+        }
+        return sb.toString().trim();
+    }
+
     private boolean isCancelled(RuntimeContext context, long turnId) {
         return context.cancelledThroughTurn.get() >= turnId;
     }
 
     private String defaultMessage(String message) {
         return isBlank(message) ? "Unknown realtime error" : message;
+    }
+
+    private record TurnInput(String questionId, String questionText, QuestionGroup questionGroup, String answerText) {
+        private static TurnInput fromQuestion(NextQuestion question) {
+            if (question == null) {
+                return empty();
+            }
+            return new TurnInput(
+                    safe(question.getQuestionId()),
+                    safe(question.getText()),
+                    QuestionGroup.fromNullable(question.getGroup()),
+                    ""
+            );
+        }
+
+        private static TurnInput empty() {
+            return new TurnInput("", "", null, "");
+        }
+
+        private static String safe(String value) {
+            return value == null ? "" : value;
+        }
+    }
+
+    private record FeedbackItem(String questionId,
+                                String questionText,
+                                QuestionGroup questionGroup,
+                                String answerText,
+                                Feedback feedback) {
     }
 
     private record RuntimeSettings(String conversationModel, String sttModel,
@@ -378,11 +604,17 @@ public class RealtimeVoiceUseCase {
         private final AtomicLong turnSequence = new AtomicLong(0);
         private final AtomicLong activeTurn = new AtomicLong(0);
         private final AtomicLong cancelledThroughTurn = new AtomicLong(0);
+        private final AtomicLong autoStopAfterTurn = new AtomicLong(-1L);
+        private final Deque<TurnInput> continuousTurns = new ConcurrentLinkedDeque<>();
+        private final Deque<TurnInput> mockTurns = new ConcurrentLinkedDeque<>();
         private final Map<Long, AtomicLong> pendingSpeechCounts = new ConcurrentHashMap<>();
         private final Set<Long> turnsReadyForCompletion = ConcurrentHashMap.newKeySet();
         private final Set<Long> completedTurns = ConcurrentHashMap.newKeySet();
         private final AtomicBoolean closed = new AtomicBoolean(false);
         private final AtomicBoolean forcedStopped = new AtomicBoolean(false);
+        private final AtomicBoolean autoStopPending = new AtomicBoolean(false);
+        private volatile TurnInput currentQuestion = TurnInput.empty();
+        private volatile String autoStopReason = "";
         private volatile RuntimeSettings settings;
         private volatile RealtimeAudioSession audioSession;
 
@@ -395,6 +627,59 @@ public class RealtimeVoiceUseCase {
 
         private long nextTurnId() {
             return turnSequence.incrementAndGet();
+        }
+
+        private void updateCurrentQuestion(NextQuestion question) {
+            currentQuestion = TurnInput.fromQuestion(question);
+        }
+
+        private TurnInput captureTurnInput(String answerText) {
+            TurnInput question = currentQuestion;
+            return new TurnInput(
+                    question.questionId(),
+                    question.questionText(),
+                    question.questionGroup(),
+                    answerText == null ? "" : answerText.trim()
+            );
+        }
+
+        private void appendContinuousTurn(TurnInput turnInput) {
+            continuousTurns.addLast(turnInput);
+        }
+
+        private List<TurnInput> pollContinuousTurns(int batchSize) {
+            int size = Math.max(1, batchSize);
+            List<TurnInput> batch = new ArrayList<>();
+            while (batch.size() < size) {
+                TurnInput item = continuousTurns.pollFirst();
+                if (item == null) {
+                    break;
+                }
+                batch.add(item);
+            }
+            return batch;
+        }
+
+        private List<TurnInput> pollAllContinuousTurns() {
+            List<TurnInput> turns = new ArrayList<>();
+            TurnInput item;
+            while ((item = continuousTurns.pollFirst()) != null) {
+                turns.add(item);
+            }
+            return turns;
+        }
+
+        private void appendMockTurn(TurnInput turnInput) {
+            mockTurns.addLast(turnInput);
+        }
+
+        private List<TurnInput> pollMockTurns() {
+            List<TurnInput> turns = new ArrayList<>();
+            TurnInput item;
+            while ((item = mockTurns.pollFirst()) != null) {
+                turns.add(item);
+            }
+            return turns;
         }
 
         private void registerSpeech(long turnId) {
@@ -419,6 +704,17 @@ public class RealtimeVoiceUseCase {
             tryCompleteTurn(turnId);
         }
 
+        private void requestAutoStop(long turnId, String reason) {
+            if (turnId <= 0L) {
+                return;
+            }
+            autoStopPending.set(true);
+            autoStopAfterTurn.updateAndGet(previous -> previous < 0L ? turnId : Math.max(previous, turnId));
+            if (reason != null && !reason.isBlank()) {
+                autoStopReason = reason;
+            }
+        }
+
         private void tryCompleteTurn(long turnId) {
             if (closed.get() || !turnsReadyForCompletion.contains(turnId)) {
                 return;
@@ -436,6 +732,18 @@ public class RealtimeVoiceUseCase {
                     "turnId", turnId,
                     "cancelled", cancelledThroughTurn.get() >= turnId
             ));
+
+            long stopAfter = autoStopAfterTurn.get();
+            if (autoStopPending.get() && stopAfter > 0L && turnId >= stopAfter) {
+                if (autoStopPending.compareAndSet(true, false) && !closed.get()) {
+                    Map<String, Object> payload = new LinkedHashMap<>();
+                    payload.put("sessionId", sessionId);
+                    payload.put("forced", false);
+                    payload.put("reason", autoStopReason == null ? "" : autoStopReason);
+                    send("session.stopped", payload);
+                    close();
+                }
+            }
         }
 
         @Override
