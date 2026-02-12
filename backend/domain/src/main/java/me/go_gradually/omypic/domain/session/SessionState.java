@@ -1,27 +1,31 @@
 package me.go_gradually.omypic.domain.session;
 
 import me.go_gradually.omypic.domain.feedback.FeedbackLanguage;
+import me.go_gradually.omypic.domain.question.QuestionGroupAggregate;
 import me.go_gradually.omypic.domain.question.QuestionItem;
-import me.go_gradually.omypic.domain.question.QuestionList;
-import me.go_gradually.omypic.domain.question.QuestionListId;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class SessionState {
     private final SessionId sessionId;
     private final Deque<String> sttSegments = new ArrayDeque<>();
-    private final Map<QuestionListId, Integer> listIndices = new ConcurrentHashMap<>();
-    private QuestionListId activeQuestionListId;
+    private final Set<String> selectedGroupTags = new LinkedHashSet<>();
+    private final List<String> candidateGroupOrder = new ArrayList<>();
+    private final Map<String, Integer> groupQuestionIndices = new ConcurrentHashMap<>();
+
     private ModeType mode = ModeType.IMMEDIATE;
     private int continuousBatchSize = 3;
-    private int answeredSinceLastFeedback = 0;
+    private int completedGroupCountSinceLastFeedback = 0;
+    private int currentGroupCursor = 0;
     private FeedbackLanguage feedbackLanguage = FeedbackLanguage.of("ko");
 
     public SessionState(SessionId sessionId) {
@@ -43,20 +47,20 @@ public class SessionState {
         return continuousBatchSize;
     }
 
-    public int getAnsweredSinceLastFeedback() {
-        return answeredSinceLastFeedback;
+    public int getCompletedGroupCountSinceLastFeedback() {
+        return completedGroupCountSinceLastFeedback;
     }
 
-    public String getActiveQuestionListId() {
-        return activeQuestionListId == null ? null : activeQuestionListId.value();
+    public Set<String> getSelectedGroupTags() {
+        return Collections.unmodifiableSet(selectedGroupTags);
     }
 
-    public void setActiveQuestionListId(String listId) {
-        if (listId == null || listId.isBlank()) {
-            this.activeQuestionListId = null;
-            return;
-        }
-        this.activeQuestionListId = QuestionListId.of(listId);
+    public List<String> getCandidateGroupOrder() {
+        return List.copyOf(candidateGroupOrder);
+    }
+
+    public Map<String, Integer> getGroupQuestionIndices() {
+        return Collections.unmodifiableMap(groupQuestionIndices);
     }
 
     public void applyModeUpdate(ModeType mode, Integer continuousBatchSize) {
@@ -68,19 +72,43 @@ public class SessionState {
             this.continuousBatchSize = Math.min(10, Math.max(1, continuousBatchSize));
         }
         if (previous != this.mode) {
-            this.answeredSinceLastFeedback = 0;
+            this.completedGroupCountSinceLastFeedback = 0;
         }
     }
 
-    public TurnBatchingPolicy.BatchDecision decideFeedbackBatchOnAnswer() {
-        TurnBatchingPolicy.BatchDecision decision =
-                TurnBatchingPolicy.onAnsweredTurn(mode, answeredSinceLastFeedback, continuousBatchSize);
-        answeredSinceLastFeedback = decision.nextAnsweredCount();
+    public void configureQuestionGroups(Set<String> selectedTags, List<String> candidateGroupIds) {
+        selectedGroupTags.clear();
+        if (selectedTags != null) {
+            selectedGroupTags.addAll(selectedTags);
+        }
+
+        candidateGroupOrder.clear();
+        if (candidateGroupIds != null) {
+            for (String groupId : candidateGroupIds) {
+                if (groupId != null && !groupId.isBlank()) {
+                    candidateGroupOrder.add(groupId);
+                }
+            }
+        }
+
+        groupQuestionIndices.clear();
+        currentGroupCursor = 0;
+        completedGroupCountSinceLastFeedback = 0;
+    }
+
+    public TurnBatchingPolicy.BatchDecision decideFeedbackBatchOnTurn(boolean completedGroupThisTurn) {
+        TurnBatchingPolicy.BatchDecision decision = TurnBatchingPolicy.onTurn(
+                mode,
+                completedGroupCountSinceLastFeedback,
+                continuousBatchSize,
+                completedGroupThisTurn
+        );
+        completedGroupCountSinceLastFeedback = decision.nextCompletedGroupCount();
         return decision;
     }
 
     public boolean shouldGenerateFeedback() {
-        return decideFeedbackBatchOnAnswer().emitFeedback();
+        return decideFeedbackBatchOnTurn(true).emitFeedback();
     }
 
     public boolean shouldGenerateResidualContinuousFeedback(boolean questionExhausted,
@@ -96,8 +124,7 @@ public class SessionState {
         if (list.isEmpty()) {
             return fallbackText == null ? "" : fallbackText;
         }
-        int from = Math.max(0, list.size() - continuousBatchSize);
-        return String.join("\n", list.subList(from, list.size()));
+        return String.join("\n", list);
     }
 
     public List<String> getSttSegments() {
@@ -119,36 +146,41 @@ public class SessionState {
         this.feedbackLanguage = feedbackLanguage == null ? FeedbackLanguage.of("ko") : feedbackLanguage;
     }
 
-    public Optional<QuestionItem> nextQuestion(QuestionList list) {
-        if (list == null) {
-            return Optional.empty();
+    public String currentCandidateGroupId() {
+        if (currentGroupCursor < 0 || currentGroupCursor >= candidateGroupOrder.size()) {
+            return null;
         }
-        return nextSequential(list);
+        return candidateGroupOrder.get(currentGroupCursor);
     }
 
-    public void resetQuestionProgress(String listId) {
-        if (listId == null || listId.isBlank()) {
+    public void moveToNextGroup() {
+        currentGroupCursor = Math.min(candidateGroupOrder.size(), currentGroupCursor + 1);
+    }
+
+    public int getCurrentQuestionIndex(String groupId) {
+        if (groupId == null || groupId.isBlank()) {
+            return 0;
+        }
+        return Math.max(0, groupQuestionIndices.getOrDefault(groupId, 0));
+    }
+
+    public void markQuestionAsked(String groupId) {
+        if (groupId == null || groupId.isBlank()) {
             return;
         }
-        listIndices.put(QuestionListId.of(listId), 0);
-        answeredSinceLastFeedback = 0;
+        groupQuestionIndices.merge(groupId, 1, Integer::sum);
     }
 
-    private Optional<QuestionItem> nextSequential(QuestionList list) {
-        List<QuestionItem> questions = list.getQuestions();
-        if (questions.isEmpty()) {
+    public Optional<QuestionItem> nextQuestion(QuestionGroupAggregate group) {
+        if (group == null) {
             return Optional.empty();
         }
-        int index = listIndices.getOrDefault(list.getId(), 0);
-        if (index >= questions.size()) {
+        int index = getCurrentQuestionIndex(group.getId().value());
+        if (index >= group.getQuestions().size()) {
             return Optional.empty();
         }
-        QuestionItem item = questions.get(index);
-        listIndices.put(list.getId(), index + 1);
-        return Optional.ofNullable(item);
-    }
-
-    public Map<QuestionListId, Integer> getListIndices() {
-        return Collections.unmodifiableMap(listIndices);
+        QuestionItem item = group.getQuestions().get(index);
+        markQuestionAsked(group.getId().value());
+        return Optional.of(item);
     }
 }

@@ -1,78 +1,57 @@
 package me.go_gradually.omypic.domain.session;
 
-import me.go_gradually.omypic.domain.question.QuestionGroup;
-import me.go_gradually.omypic.domain.question.QuestionItem;
-import me.go_gradually.omypic.domain.question.QuestionItemId;
-import me.go_gradually.omypic.domain.question.QuestionList;
-import me.go_gradually.omypic.domain.question.QuestionListId;
 import org.junit.jupiter.api.Test;
 
-import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SessionStateTest {
 
     @Test
-    void shouldGenerateFeedback_inContinuousMode_onlyOnBatchBoundary() {
+    void decideFeedbackBatchOnTurn_inContinuousMode_usesCompletedGroupCount() {
         SessionState state = new SessionState(SessionId.of("session-1"));
+        state.applyModeUpdate(ModeType.CONTINUOUS, 2);
+
+        TurnBatchingPolicy.BatchDecision waitingForCompletion = state.decideFeedbackBatchOnTurn(false);
+        assertFalse(waitingForCompletion.emitFeedback());
+        assertEquals(0, state.getCompletedGroupCountSinceLastFeedback());
+
+        TurnBatchingPolicy.BatchDecision waitingForBatch = state.decideFeedbackBatchOnTurn(true);
+        assertFalse(waitingForBatch.emitFeedback());
+        assertEquals(1, state.getCompletedGroupCountSinceLastFeedback());
+
+        TurnBatchingPolicy.BatchDecision ready = state.decideFeedbackBatchOnTurn(true);
+        assertTrue(ready.emitFeedback());
+        assertEquals(0, state.getCompletedGroupCountSinceLastFeedback());
+    }
+
+    @Test
+    void configureQuestionGroups_resetsProgressAndStoresTags() {
+        SessionState state = new SessionState(SessionId.of("session-2"));
+        state.configureQuestionGroups(Set.of("travel", "habit"), List.of("g1", "g2"));
+
+        assertEquals(Set.of("travel", "habit"), state.getSelectedGroupTags());
+        assertEquals(List.of("g1", "g2"), state.getCandidateGroupOrder());
+        assertEquals("g1", state.currentCandidateGroupId());
+
+        state.markQuestionAsked("g1");
+        assertEquals(1, state.getCurrentQuestionIndex("g1"));
+
+        state.moveToNextGroup();
+        assertEquals("g2", state.currentCandidateGroupId());
+    }
+
+    @Test
+    void shouldGenerateResidualContinuousFeedback_onlyForContinuousExhaustedWithoutEmit() {
+        SessionState state = new SessionState(SessionId.of("session-3"));
         state.applyModeUpdate(ModeType.CONTINUOUS, 3);
 
-        assertFalse(state.shouldGenerateFeedback());
-        assertEquals(1, state.getAnsweredSinceLastFeedback());
-
-        assertFalse(state.shouldGenerateFeedback());
-        assertEquals(2, state.getAnsweredSinceLastFeedback());
-
-        assertTrue(state.shouldGenerateFeedback());
-        assertEquals(0, state.getAnsweredSinceLastFeedback());
-    }
-
-    @Test
-    void resolveFeedbackInputText_inContinuousMode_usesMostRecentNAnswers() {
-        SessionState state = new SessionState(SessionId.of("session-batch"));
-        state.applyModeUpdate(ModeType.CONTINUOUS, 2);
-        state.appendSegment("one");
-        state.appendSegment("two");
-        state.appendSegment("three");
-
-        String input = state.resolveFeedbackInputText("fallback");
-
-        assertEquals("two\nthree", input);
-    }
-
-    @Test
-    void applyModeUpdate_clampsBatchSizeAndKeepsModeWhenNull() {
-        SessionState state = new SessionState(SessionId.of("session-2"));
-
-        state.applyModeUpdate(ModeType.CONTINUOUS, 100);
-        assertEquals(10, state.getContinuousBatchSize());
-
-        state.applyModeUpdate(null, 0);
-        assertEquals(ModeType.CONTINUOUS, state.getMode());
-        assertEquals(1, state.getContinuousBatchSize());
-    }
-
-    @Test
-    void nextQuestion_inSequentialMode_stopsWhenQuestionsAreExhausted() {
-        QuestionList list = QuestionList.rehydrate(
-                QuestionListId.of("seq-1"),
-                "seq-list",
-                List.of(
-                        QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A")),
-                        QuestionItem.rehydrate(QuestionItemId.of("q2"), "Q2", QuestionGroup.of("B"))
-                ),
-                Instant.parse("2026-01-01T00:00:00Z"),
-                Instant.parse("2026-01-01T00:00:00Z")
-        );
-        SessionState state = new SessionState(SessionId.of("seq-session"));
-
-        assertTrue(state.nextQuestion(list).isPresent());
-        assertTrue(state.nextQuestion(list).isPresent());
-        assertTrue(state.nextQuestion(list).isEmpty());
-
-        state.resetQuestionProgress("seq-1");
-        assertTrue(state.nextQuestion(list).isPresent());
+        assertTrue(state.shouldGenerateResidualContinuousFeedback(true, false));
+        assertFalse(state.shouldGenerateResidualContinuousFeedback(true, true));
+        assertFalse(state.shouldGenerateResidualContinuousFeedback(false, false));
     }
 }
