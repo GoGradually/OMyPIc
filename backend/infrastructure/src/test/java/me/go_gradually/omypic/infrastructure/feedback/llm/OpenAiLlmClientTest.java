@@ -76,4 +76,20 @@ class OpenAiLlmClientTest {
         assertThrows(IllegalStateException.class,
                 () -> client.generate("api-key", "gpt-4o-mini", "sys", "user"));
     }
+
+    @Test
+    void generate_remapsRealtimeModelToChatModel() throws Exception {
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"choices\":[{\"message\":{\"content\":\"{\\\"summary\\\":\\\"ok\\\"}\"}}]}"));
+
+        OpenAiLlmClient client = new OpenAiLlmClient(WebClient.builder()
+                .baseUrl(server.url("/").toString())
+                .build());
+
+        client.generate("api-key", "gpt-realtime-mini", "sys", "user");
+
+        JsonNode payload = objectMapper.readTree(server.takeRequest().getBody().readUtf8());
+        assertEquals("gpt-4o-mini", payload.path("model").asText());
+    }
 }

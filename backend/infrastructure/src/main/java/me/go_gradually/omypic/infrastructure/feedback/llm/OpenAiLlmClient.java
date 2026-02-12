@@ -9,10 +9,12 @@ import org.springframework.web.reactive.function.client.WebClient;
 
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 @Component
 public class OpenAiLlmClient implements LlmClient {
+    private static final String DEFAULT_CHAT_MODEL = "gpt-4o-mini";
     private final WebClient webClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -44,7 +46,7 @@ public class OpenAiLlmClient implements LlmClient {
 
     private Map<String, Object> requestPayload(String model, String systemPrompt, String userPrompt) {
         Map<String, Object> payload = new HashMap<>();
-        payload.put("model", model);
+        payload.put("model", resolveChatModel(model));
         payload.put("temperature", 0.2);
         payload.put("response_format", Map.of("type", "json_object"));
         payload.put("messages", List.of(
@@ -52,6 +54,18 @@ public class OpenAiLlmClient implements LlmClient {
                 Map.of("role", "user", "content", userPrompt)
         ));
         return payload;
+    }
+
+    private String resolveChatModel(String model) {
+        String candidate = model == null ? "" : model.trim();
+        if (candidate.isBlank()) {
+            return DEFAULT_CHAT_MODEL;
+        }
+        String lowered = candidate.toLowerCase(Locale.ROOT);
+        if (lowered.startsWith("gpt-realtime") || lowered.contains("transcribe")) {
+            return DEFAULT_CHAT_MODEL;
+        }
+        return candidate;
     }
 
     private String extractContent(String response) throws Exception {

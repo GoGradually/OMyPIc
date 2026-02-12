@@ -31,6 +31,16 @@ import java.util.concurrent.atomic.AtomicLong;
 @Component
 public class OpenAiRealtimeGateway implements RealtimeAudioGateway {
     private static final String DEFAULT_TTS_VOICE = "alloy";
+    private static final String READ_ALOUD_INSTRUCTION_TEMPLATE = """
+You are OMyPIc's strict voice reader.
+Read the SCRIPT below verbatim exactly once.
+Do not answer, summarize, translate, explain, add, or remove any words.
+If the script is a question, read it naturally with interrogative intonation.
+Stop immediately after the last character.
+
+SCRIPT:
+%s
+""";
     private final AppProperties properties;
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -207,11 +217,12 @@ public class OpenAiRealtimeGateway implements RealtimeAudioGateway {
             Map<String, Object> response = new LinkedHashMap<>();
             // TTS 전용 응답이므로 대화 히스토리에 누적하지 않도록 conversation을 none으로 고정한다.
             response.put("conversation", "none");
+            // Realtime API 제약: audio 단독은 허용되지 않아 ["audio","text"] 조합을 사용한다.
             response.put("modalities", List.of("audio", "text"));
             response.put("voice", resolvedVoice(voice));
-            response.put("instructions", "Read the provided text exactly as written. Do not add or remove words.");
+            response.put("instructions", readAloudInstruction(text));
             response.put("metadata", metadataPayload(turnId));
-            response.put("input", inputPayload(text));
+            response.put("input", List.of());
             return response;
         }
 
@@ -220,12 +231,8 @@ public class OpenAiRealtimeGateway implements RealtimeAudioGateway {
             return Map.of("turnId", Long.toString(turnId));
         }
 
-        private List<Map<String, Object>> inputPayload(String text) {
-            return List.of(Map.of(
-                    "type", "message",
-                    "role", "user",
-                    "content", List.of(Map.of("type", "input_text", "text", text))
-            ));
+        private String readAloudInstruction(String text) {
+            return READ_ALOUD_INSTRUCTION_TEMPLATE.formatted(text == null ? "" : text);
         }
 
         private String resolvedVoice(String voice) {

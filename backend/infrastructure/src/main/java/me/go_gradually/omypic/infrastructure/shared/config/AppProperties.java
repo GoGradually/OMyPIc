@@ -284,7 +284,7 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
         private String conversationModel = "gpt-realtime-mini";
         private String sttModel = "gpt-4o-mini-transcribe";
         private String feedbackProvider = "openai";
-        private String feedbackModel = "gpt-realtime-mini";
+        private String feedbackModel = "gpt-4o-mini";
         private String feedbackLanguage = "ko";
         private String ttsVoice = "alloy";
         private boolean restDisabled = true;
