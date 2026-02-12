@@ -42,24 +42,32 @@ public class RulebookUseCase {
 
     public Rulebook upload(String filename, byte[] bytes, RulebookScope scope, String questionGroup) throws IOException {
         Instant start = Instant.now();
+        validateMarkdownFilename(filename);
+        Rulebook saved = storeRulebook(filename, bytes, scope, questionGroup);
+        indexRulebook(saved, filename);
+        metrics.recordRulebookUploadLatency(Duration.between(start, Instant.now()));
+        return saved;
+    }
+
+    private void validateMarkdownFilename(String filename) {
         if (filename == null || !filename.endsWith(".md")) {
             throw new IllegalArgumentException("Only .md files are supported");
         }
+    }
+
+    private Rulebook storeRulebook(String filename, byte[] bytes, RulebookScope scope, String questionGroup) throws IOException {
         RulebookScope resolvedScope = scope == null ? RulebookScope.MAIN : scope;
         QuestionGroup resolvedQuestionGroup = QuestionGroup.fromNullable(questionGroup);
-        // Validate domain invariants before touching storage.
         Rulebook.create(filename, "", resolvedScope, resolvedQuestionGroup, Instant.now());
-
         StoredRulebookFile stored = fileStore.store(filename, bytes);
-
         Rulebook doc = Rulebook.create(filename, stored.path(), resolvedScope, resolvedQuestionGroup, Instant.now());
-        Rulebook saved = repository.save(doc);
+        return repository.save(doc);
+    }
 
+    private void indexRulebook(Rulebook saved, String filename) throws IOException {
         String text = fileStore.readText(saved.getPath());
         List<String> chunks = TextUtils.splitChunks(text, 800);
         indexPort.indexRulebookChunks(saved.getId(), filename, chunks);
-        metrics.recordRulebookUploadLatency(Duration.between(start, Instant.now()));
-        return saved;
     }
 
     public List<Rulebook> list() {
@@ -88,23 +96,38 @@ public class RulebookUseCase {
         if (maxDocuments <= 0) {
             return List.of();
         }
-        List<Rulebook> enabledRulebooks = repository.findAll().stream()
-                .filter(Rulebook::isEnabled)
-                .toList();
+        List<Rulebook> enabledRulebooks = enabledRulebooks();
         if (enabledRulebooks.isEmpty()) {
             return List.of();
         }
+        Set<RulebookId> mainIds = mainRulebookIds(enabledRulebooks);
+        Set<RulebookId> questionIds = questionRulebookIds(enabledRulebooks, questionGroup);
+        return selectContextsForTurn(query, maxDocuments, mainIds, questionIds);
+    }
 
-        Set<RulebookId> mainIds = enabledRulebooks.stream()
+    private List<Rulebook> enabledRulebooks() {
+        return repository.findAll().stream().filter(Rulebook::isEnabled).toList();
+    }
+
+    private Set<RulebookId> mainRulebookIds(List<Rulebook> enabledRulebooks) {
+        return enabledRulebooks.stream()
                 .filter(rulebook -> rulebook.getScope() == RulebookScope.MAIN)
                 .map(Rulebook::getId)
                 .collect(Collectors.toSet());
-        Set<RulebookId> questionIds = enabledRulebooks.stream()
+    }
+
+    private Set<RulebookId> questionRulebookIds(List<Rulebook> enabledRulebooks, QuestionGroup questionGroup) {
+        return enabledRulebooks.stream()
                 .filter(rulebook -> rulebook.getScope() == RulebookScope.QUESTION)
                 .filter(rulebook -> questionGroup != null && questionGroup.equals(rulebook.getQuestionGroup()))
                 .map(Rulebook::getId)
                 .collect(Collectors.toSet());
+    }
 
+    private List<RulebookContext> selectContextsForTurn(String query,
+                                                        int maxDocuments,
+                                                        Set<RulebookId> mainIds,
+                                                        Set<RulebookId> questionIds) {
         List<RulebookContext> selected = new ArrayList<>();
         addUnique(selected, searchByIds(query, 1, mainIds), maxDocuments);
         addUnique(selected, searchByIds(query, maxDocuments - selected.size(), questionIds), maxDocuments);
@@ -125,21 +148,25 @@ public class RulebookUseCase {
     }
 
     private void addUnique(List<RulebookContext> target, List<RulebookContext> candidates, int limit) {
-        if (target.size() >= limit) {
-            return;
-        }
         for (RulebookContext candidate : candidates) {
-            boolean duplicate = target.stream()
-                    .anyMatch(existing -> existing.rulebookId().equals(candidate.rulebookId())
-                            && existing.text().equals(candidate.text()));
-            if (duplicate) {
+            if (!hasCapacity(target, limit)) {
+                return;
+            }
+            if (isDuplicate(target, candidate)) {
                 continue;
             }
             target.add(candidate);
-            if (target.size() >= limit) {
-                return;
-            }
         }
+    }
+
+    private boolean hasCapacity(List<RulebookContext> target, int limit) {
+        return target.size() < limit;
+    }
+
+    private boolean isDuplicate(List<RulebookContext> target, RulebookContext candidate) {
+        return target.stream()
+                .anyMatch(existing -> existing.rulebookId().equals(candidate.rulebookId())
+                        && existing.text().equals(candidate.text()));
     }
 
 }

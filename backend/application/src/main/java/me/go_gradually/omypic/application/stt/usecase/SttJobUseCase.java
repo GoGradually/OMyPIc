@@ -56,22 +56,43 @@ public class SttJobUseCase {
 
     private void process(SttJob job, SttCommand command) {
         try {
-            String text = sttUseCase.transcribe(command);
-            job.setText(text);
-            job.setDone(true);
-            if (job.getSessionId() != null && !job.getSessionId().isBlank()) {
-                sessionStore.getOrCreate(SessionId.of(job.getSessionId())).appendSegment(text);
-            }
-            List<String> parts = TextUtils.splitChunks(text, Math.max(1, text.length() / 3 + 1));
-            for (String part : parts) {
-                sendEvent(job, "partial", part);
-            }
-            sendEvent(job, "final", text);
+            handleTranscriptionSuccess(job, command);
         } catch (Exception e) {
-            job.setError(e.getMessage());
-            job.setDone(true);
-            sendEvent(job, "error", job.getError());
+            handleTranscriptionFailure(job, e);
         }
+    }
+
+    private void handleTranscriptionSuccess(SttJob job, SttCommand command) {
+        String text = sttUseCase.transcribe(command);
+        completeJob(job, text);
+        appendSessionSegment(job, text);
+        emitPartialChunks(job, text);
+        sendEvent(job, "final", text);
+    }
+
+    private void completeJob(SttJob job, String text) {
+        job.setText(text);
+        job.setDone(true);
+    }
+
+    private void appendSessionSegment(SttJob job, String text) {
+        if (job.getSessionId() == null || job.getSessionId().isBlank()) {
+            return;
+        }
+        sessionStore.getOrCreate(SessionId.of(job.getSessionId())).appendSegment(text);
+    }
+
+    private void emitPartialChunks(SttJob job, String text) {
+        List<String> parts = TextUtils.splitChunks(text, Math.max(1, text.length() / 3 + 1));
+        for (String part : parts) {
+            sendEvent(job, "partial", part);
+        }
+    }
+
+    private void handleTranscriptionFailure(SttJob job, Exception error) {
+        job.setError(error.getMessage());
+        job.setDone(true);
+        sendEvent(job, "error", job.getError());
     }
 
     private void sendEvent(SttJob job, String event, String data) {

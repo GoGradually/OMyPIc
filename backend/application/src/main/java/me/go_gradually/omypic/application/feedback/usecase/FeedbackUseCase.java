@@ -105,19 +105,35 @@ public class FeedbackUseCase {
     }
 
     private String buildSystemPrompt(String language, List<RulebookContext> contexts) {
-        String lang = "en".equalsIgnoreCase(language) ? "English" : "Korean";
-        StringBuilder sb = new StringBuilder();
-        sb.append("You are a speaking coach. Output strictly valid JSON with keys: summary, correctionPoints, exampleAnswer, rulebookEvidence. ");
-        sb.append("summary: 1-2 sentences. correctionPoints: array of 3 items, include at least 2 categories among Grammar, Expression, Logic. ");
-        sb.append("exampleAnswer length 0.8-1.2x of user answer. rulebookEvidence: array (empty if none). ");
-        sb.append("Write all text in ").append(lang).append(".");
-        if (!contexts.isEmpty()) {
-            sb.append(" Use the following rulebook excerpts when relevant:\n");
-            for (RulebookContext ctx : contexts) {
-                sb.append("- [").append(ctx.filename()).append("] ").append(ctx.text()).append("\n");
-            }
+        StringBuilder prompt = new StringBuilder();
+        appendSystemInstructions(prompt, promptLanguage(language));
+        appendRulebookContexts(prompt, contexts);
+        return prompt.toString();
+    }
+
+    private String promptLanguage(String language) {
+        return "en".equalsIgnoreCase(language) ? "English" : "Korean";
+    }
+
+    private void appendSystemInstructions(StringBuilder prompt, String language) {
+        prompt.append("You are a speaking coach. Output strictly valid JSON with keys: summary, correctionPoints, exampleAnswer, rulebookEvidence. ");
+        prompt.append("summary: 1-2 sentences. correctionPoints: array of 3 items, include at least 2 categories among Grammar, Expression, Logic. ");
+        prompt.append("exampleAnswer length 0.8-1.2x of user answer. rulebookEvidence: array (empty if none). ");
+        prompt.append("Write all text in ").append(language).append(".");
+    }
+
+    private void appendRulebookContexts(StringBuilder prompt, List<RulebookContext> contexts) {
+        if (contexts == null || contexts.isEmpty()) {
+            return;
         }
-        return sb.toString();
+        prompt.append(" Use the following rulebook excerpts when relevant:\n");
+        for (RulebookContext context : contexts) {
+            appendRulebookLine(prompt, context);
+        }
+    }
+
+    private void appendRulebookLine(StringBuilder prompt, RulebookContext context) {
+        prompt.append("- [").append(context.filename()).append("] ").append(context.text()).append("\n");
     }
 
     private String buildUserPrompt(String text, String language) {
@@ -138,33 +154,53 @@ public class FeedbackUseCase {
     }
 
     private String buildTurnInput(String questionText, String answerText, String language) {
-        boolean english = "en".equalsIgnoreCase(language);
-        String questionLabel = english ? "Question" : "질문";
-        String answerLabel = english ? "Answer" : "답변";
-        String safeQuestion = questionText == null ? "" : questionText.trim();
-        String safeAnswer = answerText == null ? "" : answerText.trim();
-        StringBuilder sb = new StringBuilder();
-        if (!safeQuestion.isBlank()) {
-            sb.append(questionLabel).append(":\n").append(safeQuestion).append('\n');
+        String questionLabel = localizedLabel(language, "Question", "질문");
+        String answerLabel = localizedLabel(language, "Answer", "답변");
+        String question = safeText(questionText);
+        String answer = safeText(answerText);
+        return formatTurnInput(questionLabel, answerLabel, question, answer);
+    }
+
+    private String localizedLabel(String language, String english, String korean) {
+        return "en".equalsIgnoreCase(language) ? english : korean;
+    }
+
+    private String safeText(String text) {
+        return text == null ? "" : text.trim();
+    }
+
+    private String formatTurnInput(String questionLabel, String answerLabel, String question, String answer) {
+        StringBuilder builder = new StringBuilder();
+        appendSection(builder, questionLabel, question);
+        appendSection(builder, answerLabel, answer);
+        return builder.toString().trim();
+    }
+
+    private void appendSection(StringBuilder builder, String label, String text) {
+        if (text == null || text.isBlank()) {
+            return;
         }
-        sb.append(answerLabel).append(":\n").append(safeAnswer);
-        return sb.toString().trim();
+        if (builder.length() > 0) {
+            builder.append('\n');
+        }
+        builder.append(label).append(":\n").append(text);
     }
 
     private Feedback parseFeedback(String raw) throws Exception {
-        String json = extractJson(raw);
-        JsonNode root = objectMapper.readTree(json);
+        JsonNode root = objectMapper.readTree(extractJson(raw));
         String summary = root.path("summary").asText("");
-        List<String> points = new ArrayList<>();
-        for (JsonNode node : root.path("correctionPoints")) {
-            points.add(node.asText());
-        }
+        List<String> points = toStringList(root.path("correctionPoints"));
         String exampleAnswer = root.path("exampleAnswer").asText("");
-        List<String> evidence = new ArrayList<>();
-        for (JsonNode node : root.path("rulebookEvidence")) {
-            evidence.add(node.asText());
-        }
+        List<String> evidence = toStringList(root.path("rulebookEvidence"));
         return Feedback.of(summary, points, exampleAnswer, evidence);
+    }
+
+    private List<String> toStringList(JsonNode arrayNode) {
+        List<String> values = new ArrayList<>();
+        for (JsonNode node : arrayNode) {
+            values.add(node.asText());
+        }
+        return values;
     }
 
     private String extractJson(String raw) {

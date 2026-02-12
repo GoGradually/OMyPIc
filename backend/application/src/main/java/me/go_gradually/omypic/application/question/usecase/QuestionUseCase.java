@@ -17,6 +17,7 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 public class QuestionUseCase {
     private final QuestionGroupPort repository;
@@ -83,44 +84,58 @@ public class QuestionUseCase {
     public NextQuestion nextQuestion(String sessionId) {
         Instant start = Instant.now();
         SessionState session = sessionStore.getOrCreate(SessionId.of(sessionId));
+        validateSelectedGroupTags(session);
+        NextQuestion response = selectNextQuestion(session, mapGroupsById());
+        metrics.recordQuestionNextLatency(Duration.between(start, Instant.now()));
+        return response;
+    }
+
+    private void validateSelectedGroupTags(SessionState session) {
         if (session.getSelectedGroupTags().isEmpty()) {
             throw new IllegalStateException("질문 그룹 태그를 선택하고 학습 모드를 적용해 주세요.");
         }
+    }
 
-        List<QuestionGroupAggregate> allGroups = repository.findAll();
-        Map<String, QuestionGroupAggregate> groupsById = allGroups.stream()
-                .collect(java.util.stream.Collectors.toMap(group -> group.getId().value(), group -> group, (left, right) -> left));
+    private Map<String, QuestionGroupAggregate> mapGroupsById() {
+        return repository.findAll().stream()
+                .collect(Collectors.toMap(group -> group.getId().value(), group -> group, (left, right) -> left));
+    }
 
+    private NextQuestion selectNextQuestion(SessionState session, Map<String, QuestionGroupAggregate> groupsById) {
         NextQuestion response = NextQuestion.skipped();
         while (true) {
             String groupId = session.currentCandidateGroupId();
             if (groupId == null) {
-                break;
+                return response;
             }
-            QuestionGroupAggregate group = groupsById.get(groupId);
-            if (group == null || group.getQuestions().isEmpty()) {
-                session.moveToNextGroup();
-                continue;
+            if (trySelectQuestion(session, groupsById.get(groupId), response)) {
+                return response;
             }
-
-            int questionIndex = session.getCurrentQuestionIndex(groupId);
-            if (questionIndex >= group.getQuestions().size()) {
-                session.moveToNextGroup();
-                continue;
-            }
-
-            QuestionItem item = group.getQuestions().get(questionIndex);
-            session.markQuestionAsked(groupId);
-            response.setSkipped(false);
-            response.setQuestionId(item.getId().value());
-            response.setText(item.getText());
-            response.setGroupId(group.getId().value());
-            response.setGroup(group.getName());
-            response.setQuestionType(item.getQuestionType());
-            break;
+            session.moveToNextGroup();
         }
+    }
 
-        metrics.recordQuestionNextLatency(Duration.between(start, Instant.now()));
-        return response;
+    private boolean trySelectQuestion(SessionState session, QuestionGroupAggregate group, NextQuestion response) {
+        if (group == null || group.getQuestions().isEmpty()) {
+            return false;
+        }
+        String groupId = group.getId().value();
+        int questionIndex = session.getCurrentQuestionIndex(groupId);
+        if (questionIndex >= group.getQuestions().size()) {
+            return false;
+        }
+        QuestionItem item = group.getQuestions().get(questionIndex);
+        session.markQuestionAsked(groupId);
+        applyResponse(response, group, item);
+        return true;
+    }
+
+    private void applyResponse(NextQuestion response, QuestionGroupAggregate group, QuestionItem item) {
+        response.setSkipped(false);
+        response.setQuestionId(item.getId().value());
+        response.setText(item.getText());
+        response.setGroupId(group.getId().value());
+        response.setGroup(group.getName());
+        response.setQuestionType(item.getQuestionType());
     }
 }

@@ -16,21 +16,25 @@ public class ApiKeyVerifyUseCase {
     public ApiKeyVerifyResult verify(ApiKeyVerifyCommand command) {
         String provider = normalizeProvider(command.getProvider());
         String apiKey = command.getApiKey();
-
         String formatError = validateFormat(provider, apiKey);
         if (formatError != null) {
             return ApiKeyVerifyResult.failure(provider, formatError);
         }
+        return verifyProvider(provider, apiKey, command.getModel());
+    }
 
+    private ApiKeyVerifyResult verifyProvider(String provider, String apiKey, String model) {
         try {
-            probePort.probe(provider, apiKey, command.getModel());
+            probePort.probe(provider, apiKey, model);
             return ApiKeyVerifyResult.success(provider);
         } catch (Exception e) {
-            String message = e.getMessage() == null || e.getMessage().isBlank()
-                    ? "Provider verification failed"
-                    : e.getMessage();
-            return ApiKeyVerifyResult.failure(provider, message);
+            return ApiKeyVerifyResult.failure(provider, failureMessage(e));
         }
+    }
+
+    private String failureMessage(Exception e) {
+        String message = e.getMessage();
+        return message == null || message.isBlank() ? "Provider verification failed" : message;
     }
 
     private String normalizeProvider(String provider) {

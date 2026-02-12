@@ -20,25 +20,41 @@ public class SttUseCase {
     }
 
     public String transcribe(SttCommand command) {
+        validateFile(command);
+        metrics.incrementSttRequest();
+        Instant start = Instant.now();
+        try {
+            return transcribeWithRetry(command, start);
+        } catch (Exception e) {
+            metrics.incrementSttError();
+            throw new IllegalStateException("STT failed", e);
+        }
+    }
+
+    private void validateFile(SttCommand command) {
         if (command.getFileBytes() == null || command.getFileBytes().length > sttPolicy.getMaxFileBytes()) {
             throw new IllegalArgumentException("File too large");
         }
-        metrics.incrementSttRequest();
+    }
+
+    private String transcribeWithRetry(SttCommand command, Instant start) throws Exception {
         int attempt = 0;
-        Exception last = null;
-        Instant start = Instant.now();
+        Exception lastError = new IllegalStateException("STT failed");
         while (attempt <= sttPolicy.retryMax()) {
             try {
-                String text = sttGateway.transcribe(command.getFileBytes(), command.getModel(),
-                        command.getApiKey(), command.isTranslate(), sttPolicy.getVadSettings());
-                metrics.recordSttLatency(Duration.between(start, Instant.now()));
-                return text;
+                return transcribeOnce(command, start);
             } catch (Exception e) {
-                last = e;
+                lastError = e;
                 attempt++;
             }
         }
-        metrics.incrementSttError();
-        throw new IllegalStateException("STT failed", last);
+        throw lastError;
+    }
+
+    private String transcribeOnce(SttCommand command, Instant start) throws Exception {
+        String text = sttGateway.transcribe(command.getFileBytes(), command.getModel(),
+                command.getApiKey(), command.isTranslate(), sttPolicy.getVadSettings());
+        metrics.recordSttLatency(Duration.between(start, Instant.now()));
+        return text;
     }
 }

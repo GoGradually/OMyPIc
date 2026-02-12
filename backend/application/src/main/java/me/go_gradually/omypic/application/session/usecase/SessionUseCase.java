@@ -30,34 +30,49 @@ public class SessionUseCase {
     public SessionState updateMode(ModeUpdateCommand command) {
         SessionState state = getOrCreate(command.getSessionId());
         state.applyModeUpdate(command.getMode(), command.getContinuousBatchSize());
+        Set<String> selectedTags = normalizedSelectedTags(command);
+        List<QuestionGroupAggregate> allGroups = questionGroupPort.findAll();
+        validateSelectedTags(selectedTags, allGroups);
+        List<String> candidateGroupIds = shuffledCandidateGroupIds(allGroups, selectedTags);
+        state.configureQuestionGroups(selectedTags, candidateGroupIds);
+        return state;
+    }
 
+    private Set<String> normalizedSelectedTags(ModeUpdateCommand command) {
         Set<String> selectedTags = QuestionGroupAggregate.normalizeTags(command.getSelectedGroupTags());
         if (selectedTags.isEmpty()) {
             throw new InvalidGroupTagsException("selectedGroupTags must not be empty", List.of());
         }
+        return selectedTags;
+    }
 
-        List<QuestionGroupAggregate> allGroups = questionGroupPort.findAll();
-        Set<String> availableTags = allGroups.stream()
-                .flatMap(group -> group.getTags().stream())
-                .collect(Collectors.toSet());
-
-        List<String> invalidTags = selectedTags.stream()
-                .filter(tag -> !availableTags.contains(tag))
-                .sorted()
-                .toList();
+    private void validateSelectedTags(Set<String> selectedTags, List<QuestionGroupAggregate> allGroups) {
+        Set<String> availableTags = availableTags(allGroups);
+        List<String> invalidTags = invalidTags(selectedTags, availableTags);
         if (!invalidTags.isEmpty()) {
             throw new InvalidGroupTagsException("Some selectedGroupTags are invalid", invalidTags);
         }
+    }
 
+    private Set<String> availableTags(List<QuestionGroupAggregate> allGroups) {
+        return allGroups.stream().flatMap(group -> group.getTags().stream()).collect(Collectors.toSet());
+    }
+
+    private List<String> invalidTags(Set<String> selectedTags, Set<String> availableTags) {
+        return selectedTags.stream()
+                .filter(tag -> !availableTags.contains(tag))
+                .sorted()
+                .toList();
+    }
+
+    private List<String> shuffledCandidateGroupIds(List<QuestionGroupAggregate> allGroups, Set<String> selectedTags) {
         List<String> candidateGroupIds = allGroups.stream()
                 .filter(group -> group.hasAnyTag(selectedTags))
                 .filter(QuestionGroupAggregate::hasQuestions)
                 .map(group -> group.getId().value())
                 .collect(Collectors.toCollection(ArrayList::new));
         Collections.shuffle(candidateGroupIds);
-
-        state.configureQuestionGroups(selectedTags, candidateGroupIds);
-        return state;
+        return candidateGroupIds;
     }
 
     public void appendSegment(String sessionId, String text) {

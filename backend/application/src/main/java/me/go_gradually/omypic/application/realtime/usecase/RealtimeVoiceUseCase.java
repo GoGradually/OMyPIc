@@ -66,98 +66,101 @@ public class RealtimeVoiceUseCase {
     }
 
     public RealtimeVoiceSession open(RealtimeStartCommand command, RealtimeVoiceEventSink sink) {
-        if (command == null || isBlank(command.getSessionId()) || isBlank(command.getApiKey())) {
-            throw new IllegalArgumentException("sessionId and apiKey are required");
-        }
-
+        validateStartCommand(command);
         sessionUseCase.getOrCreate(command.getSessionId());
-        RuntimeSettings defaults = RuntimeSettings.defaults(realtimePolicy);
-        RuntimeSettings settings = defaults.withRealtimeModels(
-                firstNonBlank(command.getConversationModel(), defaults.conversationModel()),
-                firstNonBlank(command.getSttModel(), defaults.sttModel())
-        );
+        RuntimeSettings settings = resolveRuntimeSettings(command);
         RuntimeContext context = new RuntimeContext(command.getSessionId(), command.getApiKey(), sink, settings);
-
-        RealtimeAudioSession realtimeAudioSession = realtimeAudioGateway.open(
-                new RealtimeAudioOpenCommand(command.getApiKey(), settings.conversationModel(), settings.sttModel()),
-                new RealtimeAudioEventListener() {
-                    @Override
-                    public void onPartialTranscript(String delta) {
-                        if (context.closed.get() || context.forcedStopped.get() || isBlank(delta)) {
-                            return;
-                        }
-                        context.send("stt.partial", Map.of("sessionId", context.sessionId, "text", delta));
-                    }
-
-                    @Override
-                    public void onFinalTranscript(String text) {
-                        if (context.closed.get() || context.forcedStopped.get() || isBlank(text)) {
-                            return;
-                        }
-                        handleFinalTranscript(context, text);
-                    }
-
-                    @Override
-                    public void onAssistantAudioChunk(long turnId, String base64Audio) {
-                        if (context.closed.get() || context.forcedStopped.get() || isBlank(base64Audio) || isCancelled(context, turnId)) {
-                            return;
-                        }
-                        context.send("tts.chunk", Map.of("sessionId", context.sessionId, "turnId", turnId, "audio", base64Audio));
-                    }
-
-                    @Override
-                    public void onAssistantAudioCompleted(long turnId) {
-                        context.completeSpeech(turnId);
-                    }
-
-                    @Override
-                    public void onAssistantAudioFailed(long turnId, String message) {
-                        context.completeSpeech(turnId);
-                        metrics.incrementTtsError();
-                        if (context.closed.get()) {
-                            return;
-                        }
-                        context.send("tts.error", Map.of(
-                                "sessionId", context.sessionId,
-                                "turnId", turnId,
-                                "message", defaultMessage(message)
-                        ));
-                    }
-
-                    @Override
-                    public void onError(String message) {
-                        if (context.closed.get()) {
-                            return;
-                        }
-                        context.send("error", Map.of("sessionId", context.sessionId, "message", defaultMessage(message)));
-                    }
-                }
-        );
-        context.audioSession = realtimeAudioSession;
+        context.audioSession = openAudioSession(command, settings, context);
         context.send("connection.ready", Map.of("sessionId", context.sessionId));
-
         asyncExecutor.execute(() -> sendInitialQuestion(context));
         return context;
     }
 
+    private void validateStartCommand(RealtimeStartCommand command) {
+        if (command == null || isBlank(command.getSessionId()) || isBlank(command.getApiKey())) {
+            throw new IllegalArgumentException("sessionId and apiKey are required");
+        }
+    }
+
+    private RuntimeSettings resolveRuntimeSettings(RealtimeStartCommand command) {
+        RuntimeSettings defaults = RuntimeSettings.defaults(realtimePolicy);
+        String conversationModel = firstNonBlank(command.getConversationModel(), defaults.conversationModel());
+        String sttModel = firstNonBlank(command.getSttModel(), defaults.sttModel());
+        return defaults.withRealtimeModels(conversationModel, sttModel);
+    }
+
+    private RealtimeAudioSession openAudioSession(RealtimeStartCommand command,
+                                                  RuntimeSettings settings,
+                                                  RuntimeContext context) {
+        RealtimeAudioOpenCommand openCommand = new RealtimeAudioOpenCommand(
+                command.getApiKey(), settings.conversationModel(), settings.sttModel()
+        );
+        return realtimeAudioGateway.open(openCommand, createAudioListener(context));
+    }
+
+    private RealtimeAudioEventListener createAudioListener(RuntimeContext context) {
+        return new GatewayAudioListener(context);
+    }
+
+    private void handlePartialTranscript(RuntimeContext context, String delta) {
+        if (isContextInactive(context) || isBlank(delta)) {
+            return;
+        }
+        context.send("stt.partial", Map.of("sessionId", context.sessionId, "text", delta));
+    }
+
+    private void handleFinalTranscriptEvent(RuntimeContext context, String text) {
+        if (isContextInactive(context) || isBlank(text)) {
+            return;
+        }
+        handleFinalTranscript(context, text);
+    }
+
+    private void handleAssistantAudioChunk(RuntimeContext context, long turnId, String base64Audio) {
+        if (isTurnInactive(context, turnId) || isBlank(base64Audio)) {
+            return;
+        }
+        context.send("tts.chunk", Map.of("sessionId", context.sessionId, "turnId", turnId, "audio", base64Audio));
+    }
+
+    private void handleAssistantAudioFailed(RuntimeContext context, long turnId, String message) {
+        context.completeSpeech(turnId);
+        metrics.incrementTtsError();
+        if (context.closed.get()) {
+            return;
+        }
+        context.send("tts.error", ttsErrorPayload(context, turnId, defaultMessage(message)));
+    }
+
+    private void handleRealtimeError(RuntimeContext context, String message) {
+        if (context.closed.get()) {
+            return;
+        }
+        context.send("error", Map.of("sessionId", context.sessionId, "message", defaultMessage(message)));
+    }
+
     private void sendInitialQuestion(RuntimeContext context) {
-        if (context.closed.get() || context.forcedStopped.get()) {
+        if (isContextInactive(context)) {
             return;
         }
         long turnId = context.nextTurnId();
         try {
-            SessionState sessionState = sessionUseCase.getOrCreate(context.sessionId);
-            NextQuestion nextQuestion = requestNextQuestion(context, turnId, sessionState);
-            if (isQuestionExhausted(nextQuestion)) {
-                context.requestAutoStop(turnId, SessionStopReason.QUESTION_EXHAUSTED.code());
-            } else if (!isBlank(nextQuestion.getText())) {
-                streamSpeech(context, turnId, nextQuestion.getText());
-            }
+            askInitialQuestion(context, turnId);
         } catch (Exception e) {
             context.send("error", Map.of("sessionId", context.sessionId, "message", defaultMessage(e.getMessage())));
         } finally {
             context.markTurnProcessingDone(turnId);
         }
+    }
+
+    private void askInitialQuestion(RuntimeContext context, long turnId) {
+        SessionState sessionState = sessionUseCase.getOrCreate(context.sessionId);
+        NextQuestion nextQuestion = requestNextQuestion(context, turnId, sessionState);
+        if (isQuestionExhausted(nextQuestion)) {
+            context.requestAutoStop(turnId, SessionStopReason.QUESTION_EXHAUSTED.code());
+            return;
+        }
+        streamSpeech(context, turnId, nextQuestion.getText());
     }
 
     private void handleFinalTranscript(RuntimeContext context, String text) {
@@ -172,109 +175,189 @@ public class RealtimeVoiceUseCase {
 
     private void processTurn(RuntimeContext context, long turnId, TurnInput turnInput, Instant startedAt) {
         RuntimeSettings settings = context.settings;
-        try {
-            if (context.closed.get() || context.forcedStopped.get() || isCancelled(context, turnId)) {
-                return;
-            }
-
-            SessionState sessionState = sessionUseCase.getOrCreate(context.sessionId);
-            ModeType mode = sessionState.getMode();
-            sessionState.setFeedbackLanguage(FeedbackLanguage.of(settings.feedbackLanguage));
-            String feedbackApiKey = firstNonBlank(settings.feedbackApiKey, context.apiKey);
-
-            NextQuestion nextQuestion = null;
-            boolean questionExhausted = false;
-            SessionFlowPolicy.SessionAction nextAction = SessionFlowPolicy.SessionAction.askNext();
-            if (shouldPromptNextQuestion(mode) && !context.closed.get() && !context.forcedStopped.get()) {
-                nextQuestion = requestNextQuestion(context, turnId, sessionState);
-                questionExhausted = isQuestionExhausted(nextQuestion);
-                nextAction = SessionFlowPolicy.decideAfterQuestionSelection(questionExhausted);
-            }
-
-            boolean completedGroupThisTurn = mode == ModeType.CONTINUOUS
-                    && isContinuousGroupCompleted(turnInput, nextQuestion, questionExhausted);
-
-            List<TurnInput> feedbackInputs = List.of();
-            TurnBatchingPolicy.BatchReason batchReason = TurnBatchingPolicy.BatchReason.IMMEDIATE_MODE;
-            boolean residualBatch = false;
-            if (mode == ModeType.IMMEDIATE) {
-                feedbackInputs = List.of(turnInput);
-                batchReason = TurnBatchingPolicy.BatchReason.IMMEDIATE_MODE;
-            } else if (mode == ModeType.CONTINUOUS) {
-                context.appendContinuousTurn(turnInput);
-                TurnBatchingPolicy.BatchDecision decision = sessionState.decideFeedbackBatchOnTurn(completedGroupThisTurn);
-                batchReason = decision.reason();
-                if (decision.emitFeedback()) {
-                    feedbackInputs = context.pollAllContinuousTurns();
-                } else {
-                    context.send("feedback.skipped", Map.of(
-                            "sessionId", context.sessionId,
-                            "turnId", turnId,
-                            "reason", decision.reason().name()
-                    ));
-                }
-            }
-
-            if (!feedbackInputs.isEmpty()) {
-                List<FeedbackItem> feedbackItems = generateFeedbackItems(settings, context.sessionId, feedbackApiKey, feedbackInputs);
-                if (!context.closed.get() && !context.forcedStopped.get() && !isCancelled(context, turnId)) {
-                    context.send("feedback.final", feedbackPayload(
-                            context.sessionId,
-                            turnId,
-                            mode,
-                            mode == ModeType.CONTINUOUS ? sessionState.getContinuousBatchSize() : 1,
-                            batchReason,
-                            residualBatch,
-                            feedbackItems,
-                            nextAction
-                    ));
-                    if (mode != ModeType.CONTINUOUS) {
-                        streamSpeech(context, turnId, toTtsText(feedbackItems));
-                    }
-                }
-            }
-
-            if (sessionState.shouldGenerateResidualContinuousFeedback(questionExhausted, !feedbackInputs.isEmpty())) {
-                List<TurnInput> remainingContinuousTurns = context.pollAllContinuousTurns();
-                if (!remainingContinuousTurns.isEmpty()) {
-                    residualBatch = true;
-                    List<FeedbackItem> remainingItems = generateFeedbackItems(settings, context.sessionId, feedbackApiKey, remainingContinuousTurns);
-                    if (!context.closed.get() && !context.forcedStopped.get() && !isCancelled(context, turnId)) {
-                        context.send("feedback.final", feedbackPayload(
-                                context.sessionId,
-                                turnId,
-                                mode,
-                                sessionState.getContinuousBatchSize(),
-                                TurnBatchingPolicy.BatchReason.EXHAUSTED_WITH_REMAINDER,
-                                residualBatch,
-                                remainingItems,
-                                nextAction
-                        ));
-                        if (mode != ModeType.CONTINUOUS) {
-                            streamSpeech(context, turnId, toTtsText(remainingItems));
-                        }
-                    }
-                }
-            }
-
-            if (nextQuestion != null && !questionExhausted && !isBlank(nextQuestion.getText()) && !isCancelled(context, turnId)) {
-                streamSpeech(context, turnId, nextQuestion.getText());
-            }
-
-            if (nextAction.type() == SessionFlowPolicy.NextActionType.AUTO_STOP) {
-                context.requestAutoStop(turnId, nextAction.reason().code());
-            }
-
-        } catch (Exception e) {
-            context.send("error", Map.of(
-                    "sessionId", context.sessionId,
-                    "turnId", turnId,
-                    "message", defaultMessage(e.getMessage())
-            ));
-        } finally {
-            context.markTurnProcessingDone(turnId);
-            metrics.recordRealtimeTurnLatency(Duration.between(startedAt, Instant.now()));
+        if (isTurnInactive(context, turnId)) {
+            return;
         }
+        runTurnProcessing(context, turnId, turnInput, startedAt, settings);
+    }
+
+    private void runTurnProcessing(RuntimeContext context,
+                                   long turnId,
+                                   TurnInput turnInput,
+                                   Instant startedAt,
+                                   RuntimeSettings settings) {
+        try {
+            executeTurn(context, turnId, turnInput, settings);
+        } catch (Exception e) {
+            sendTurnError(context, turnId, e);
+        } finally {
+            finishTurn(context, turnId, startedAt);
+        }
+    }
+
+    private void executeTurn(RuntimeContext context, long turnId, TurnInput turnInput, RuntimeSettings settings) {
+        TurnState state = prepareTurnState(context, turnId, turnInput, settings);
+        emitMainFeedback(context, turnId, settings, state);
+        emitResidualFeedback(context, turnId, settings, state);
+        streamNextQuestion(context, turnId, state.questionSelection());
+        requestAutoStopIfNeeded(context, turnId, state.questionSelection().nextAction());
+    }
+
+    private void finishTurn(RuntimeContext context, long turnId, Instant startedAt) {
+        context.markTurnProcessingDone(turnId);
+        metrics.recordRealtimeTurnLatency(Duration.between(startedAt, Instant.now()));
+    }
+
+    private TurnState prepareTurnState(RuntimeContext context,
+                                       long turnId,
+                                       TurnInput turnInput,
+                                       RuntimeSettings settings) {
+        SessionState sessionState = sessionUseCase.getOrCreate(context.sessionId);
+        ModeType mode = sessionState.getMode();
+        sessionState.setFeedbackLanguage(FeedbackLanguage.of(settings.feedbackLanguage));
+        String feedbackApiKey = firstNonBlank(settings.feedbackApiKey, context.apiKey);
+        QuestionSelection selection = selectQuestionForTurn(context, turnId, sessionState, mode);
+        FeedbackPlan feedbackPlan = resolveFeedbackPlan(context, turnId, turnInput, sessionState, mode, selection);
+        return new TurnState(sessionState, mode, feedbackApiKey, selection, feedbackPlan);
+    }
+
+    private QuestionSelection selectQuestionForTurn(RuntimeContext context,
+                                                    long turnId,
+                                                    SessionState sessionState,
+                                                    ModeType mode) {
+        if (!shouldPromptNextQuestion(mode) || isContextInactive(context)) {
+            return QuestionSelection.none();
+        }
+        NextQuestion nextQuestion = requestNextQuestion(context, turnId, sessionState);
+        boolean exhausted = isQuestionExhausted(nextQuestion);
+        SessionFlowPolicy.SessionAction nextAction = SessionFlowPolicy.decideAfterQuestionSelection(exhausted);
+        return new QuestionSelection(nextQuestion, exhausted, nextAction);
+    }
+
+    private FeedbackPlan resolveFeedbackPlan(RuntimeContext context,
+                                             long turnId,
+                                             TurnInput turnInput,
+                                             SessionState sessionState,
+                                             ModeType mode,
+                                             QuestionSelection selection) {
+        if (mode == ModeType.IMMEDIATE) {
+            return new FeedbackPlan(List.of(turnInput), TurnBatchingPolicy.BatchReason.IMMEDIATE_MODE);
+        }
+        if (mode != ModeType.CONTINUOUS) {
+            return new FeedbackPlan(List.of(), TurnBatchingPolicy.BatchReason.IMMEDIATE_MODE);
+        }
+        return continuousFeedbackPlan(context, turnId, turnInput, sessionState, selection);
+    }
+
+    private FeedbackPlan continuousFeedbackPlan(RuntimeContext context,
+                                                long turnId,
+                                                TurnInput turnInput,
+                                                SessionState sessionState,
+                                                QuestionSelection selection) {
+        context.appendContinuousTurn(turnInput);
+        boolean completedGroup = isContinuousGroupCompleted(turnInput, selection.nextQuestion(), selection.questionExhausted());
+        TurnBatchingPolicy.BatchDecision decision = sessionState.decideFeedbackBatchOnTurn(completedGroup);
+        if (!decision.emitFeedback()) {
+            sendFeedbackSkipped(context, turnId, decision.reason());
+            return new FeedbackPlan(List.of(), decision.reason());
+        }
+        return new FeedbackPlan(context.pollAllContinuousTurns(), decision.reason());
+    }
+
+    private void sendFeedbackSkipped(RuntimeContext context, long turnId, TurnBatchingPolicy.BatchReason reason) {
+        context.send("feedback.skipped", Map.of(
+                "sessionId", context.sessionId,
+                "turnId", turnId,
+                "reason", reason.name()
+        ));
+    }
+
+    private void emitMainFeedback(RuntimeContext context, long turnId, RuntimeSettings settings, TurnState state) {
+        if (state.feedbackPlan().inputs().isEmpty()) {
+            return;
+        }
+        List<FeedbackItem> items = generateFeedbackItems(settings, context.sessionId, state.feedbackApiKey(), state.feedbackPlan().inputs());
+        if (isTurnInactive(context, turnId)) {
+            return;
+        }
+        sendFeedbackFinal(context, turnId, state, state.feedbackPlan().reason(), false, items);
+        streamFeedbackSpeech(context, turnId, state.mode(), items);
+    }
+
+    private void emitResidualFeedback(RuntimeContext context, long turnId, RuntimeSettings settings, TurnState state) {
+        if (!shouldEmitResidualFeedback(state)) {
+            return;
+        }
+        List<TurnInput> turns = context.pollAllContinuousTurns();
+        if (turns.isEmpty()) {
+            return;
+        }
+        List<FeedbackItem> items = generateFeedbackItems(settings, context.sessionId, state.feedbackApiKey(), turns);
+        if (isTurnInactive(context, turnId)) {
+            return;
+        }
+        sendFeedbackFinal(context, turnId, state, TurnBatchingPolicy.BatchReason.EXHAUSTED_WITH_REMAINDER, true, items);
+        streamFeedbackSpeech(context, turnId, state.mode(), items);
+    }
+
+    private boolean shouldEmitResidualFeedback(TurnState state) {
+        return state.sessionState().shouldGenerateResidualContinuousFeedback(
+                state.questionSelection().questionExhausted(),
+                !state.feedbackPlan().inputs().isEmpty()
+        );
+    }
+
+    private void sendFeedbackFinal(RuntimeContext context,
+                                   long turnId,
+                                   TurnState state,
+                                   TurnBatchingPolicy.BatchReason reason,
+                                   boolean residual,
+                                   List<FeedbackItem> items) {
+        context.send("feedback.final", feedbackPayload(
+                context.sessionId,
+                turnId,
+                state.mode(),
+                feedbackBatchSize(state),
+                reason,
+                residual,
+                items,
+                state.questionSelection().nextAction()
+        ));
+    }
+
+    private int feedbackBatchSize(TurnState state) {
+        if (state.mode() == ModeType.CONTINUOUS) {
+            return state.sessionState().getContinuousBatchSize();
+        }
+        return 1;
+    }
+
+    private void streamFeedbackSpeech(RuntimeContext context, long turnId, ModeType mode, List<FeedbackItem> items) {
+        if (mode != ModeType.CONTINUOUS) {
+            streamSpeech(context, turnId, toTtsText(items));
+        }
+    }
+
+    private void streamNextQuestion(RuntimeContext context, long turnId, QuestionSelection selection) {
+        NextQuestion nextQuestion = selection.nextQuestion();
+        if (nextQuestion == null || selection.questionExhausted()) {
+            return;
+        }
+        streamSpeech(context, turnId, nextQuestion.getText());
+    }
+
+    private void requestAutoStopIfNeeded(RuntimeContext context, long turnId, SessionFlowPolicy.SessionAction nextAction) {
+        if (nextAction.type() == SessionFlowPolicy.NextActionType.AUTO_STOP) {
+            context.requestAutoStop(turnId, nextAction.reason().code());
+        }
+    }
+
+    private void sendTurnError(RuntimeContext context, long turnId, Exception e) {
+        context.send("error", Map.of(
+                "sessionId", context.sessionId,
+                "turnId", turnId,
+                "message", defaultMessage(e.getMessage())
+        ));
     }
 
     private boolean shouldPromptNextQuestion(ModeType mode) {
@@ -347,15 +430,18 @@ public class RealtimeVoiceUseCase {
         payload.put("sessionId", sessionId);
         payload.put("turnId", turnId);
         payload.put("question", questionNode(question, exhausted));
+        payload.put("selection", selectionPayload(mode, exhausted, question));
+        return payload;
+    }
 
+    private Map<String, Object> selectionPayload(ModeType mode, boolean exhausted, NextQuestion question) {
         Map<String, Object> selection = new LinkedHashMap<>();
         selection.put("mode", mode == null ? ModeType.IMMEDIATE.name() : mode.name());
         selection.put("exhausted", exhausted);
         if (exhausted) {
             selection.put("reason", resolveExhaustedReason(question));
         }
-        payload.put("selection", selection);
-        return payload;
+        return selection;
     }
 
     private Map<String, Object> questionNode(NextQuestion question, boolean exhausted) {
@@ -418,31 +504,38 @@ public class RealtimeVoiceUseCase {
     }
 
     private void streamSpeech(RuntimeContext context, long turnId, String speechText) {
-        if (isBlank(speechText) || context.closed.get() || context.forcedStopped.get() || isCancelled(context, turnId)) {
+        if (!canStreamSpeech(context, turnId, speechText)) {
             return;
         }
         RealtimeAudioSession audioSession = context.audioSession;
         if (audioSession == null) {
-            metrics.incrementTtsError();
-            context.send("tts.error", Map.of(
-                    "sessionId", context.sessionId,
-                    "turnId", turnId,
-                    "message", "Realtime audio session is not available"
-            ));
+            sendMissingAudioSession(context, turnId);
             return;
         }
         context.registerSpeech(turnId);
+        speakSpeech(context, turnId, speechText, audioSession);
+    }
+
+    private boolean canStreamSpeech(RuntimeContext context, long turnId, String speechText) {
+        return !isBlank(speechText) && !isTurnInactive(context, turnId);
+    }
+
+    private void sendMissingAudioSession(RuntimeContext context, long turnId) {
+        metrics.incrementTtsError();
+        context.send("tts.error", ttsErrorPayload(context, turnId, "Realtime audio session is not available"));
+    }
+
+    private Map<String, Object> ttsErrorPayload(RuntimeContext context, long turnId, String message) {
+        return Map.of("sessionId", context.sessionId, "turnId", turnId, "message", message);
+    }
+
+    private void speakSpeech(RuntimeContext context, long turnId, String speechText, RealtimeAudioSession audioSession) {
         try {
-            RuntimeSettings settings = context.settings;
-            audioSession.speakText(turnId, speechText, settings.ttsVoice);
+            audioSession.speakText(turnId, speechText, context.settings.ttsVoice);
         } catch (Exception e) {
             context.completeSpeech(turnId);
             metrics.incrementTtsError();
-            context.send("tts.error", Map.of(
-                    "sessionId", context.sessionId,
-                    "turnId", turnId,
-                    "message", defaultMessage(e.getMessage())
-            ));
+            context.send("tts.error", ttsErrorPayload(context, turnId, defaultMessage(e.getMessage())));
         }
     }
 
@@ -461,20 +554,10 @@ public class RealtimeVoiceUseCase {
 
     private String toTtsText(Feedback feedback) {
         StringBuilder sb = new StringBuilder();
-        if (!isBlank(feedback.getSummary())) {
-            sb.append(feedback.getSummary()).append('\n');
-        }
-        if (!feedback.getCorrectionPoints().isEmpty()) {
-            sb.append(String.join("\n", feedback.getCorrectionPoints())).append('\n');
-        }
-        if (!isBlank(feedback.getExampleAnswer())) {
-            sb.append(feedback.getExampleAnswer());
-        }
-        String text = sb.toString().trim();
-        if (text.isEmpty()) {
-            return "No feedback available.";
-        }
-        return text;
+        appendSummary(sb, feedback);
+        appendCorrectionPoints(sb, feedback);
+        appendExampleAnswer(sb, feedback);
+        return fallbackIfEmpty(sb.toString().trim());
     }
 
     private String toTtsText(List<FeedbackItem> items) {
@@ -484,24 +567,117 @@ public class RealtimeVoiceUseCase {
         if (items.size() == 1) {
             return toTtsText(items.get(0).feedback());
         }
+        return buildMultiFeedbackTts(items);
+    }
+
+    private String buildMultiFeedbackTts(List<FeedbackItem> items) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < items.size(); i++) {
-            FeedbackItem item = items.get(i);
-            sb.append("Feedback ").append(i + 1).append('\n');
-            if (!isBlank(item.questionText())) {
-                sb.append(item.questionText()).append('\n');
-            }
-            sb.append(toTtsText(item.feedback())).append('\n');
+            appendFeedbackItem(sb, items.get(i), i + 1);
         }
         return sb.toString().trim();
+    }
+
+    private void appendSummary(StringBuilder sb, Feedback feedback) {
+        if (!isBlank(feedback.getSummary())) {
+            sb.append(feedback.getSummary()).append('\n');
+        }
+    }
+
+    private void appendCorrectionPoints(StringBuilder sb, Feedback feedback) {
+        if (!feedback.getCorrectionPoints().isEmpty()) {
+            sb.append(String.join("\n", feedback.getCorrectionPoints())).append('\n');
+        }
+    }
+
+    private void appendExampleAnswer(StringBuilder sb, Feedback feedback) {
+        if (!isBlank(feedback.getExampleAnswer())) {
+            sb.append(feedback.getExampleAnswer());
+        }
+    }
+
+    private String fallbackIfEmpty(String text) {
+        return text.isEmpty() ? "No feedback available." : text;
+    }
+
+    private void appendFeedbackItem(StringBuilder sb, FeedbackItem item, int index) {
+        sb.append("Feedback ").append(index).append('\n');
+        if (!isBlank(item.questionText())) {
+            sb.append(item.questionText()).append('\n');
+        }
+        sb.append(toTtsText(item.feedback())).append('\n');
     }
 
     private boolean isCancelled(RuntimeContext context, long turnId) {
         return context.cancelledThroughTurn.get() >= turnId;
     }
 
+    private boolean isContextInactive(RuntimeContext context) {
+        return context.closed.get() || context.forcedStopped.get();
+    }
+
+    private boolean isTurnInactive(RuntimeContext context, long turnId) {
+        return isContextInactive(context) || isCancelled(context, turnId);
+    }
+
     private String defaultMessage(String message) {
         return isBlank(message) ? "Unknown realtime error" : message;
+    }
+
+    private record QuestionSelection(NextQuestion nextQuestion,
+                                     boolean questionExhausted,
+                                     SessionFlowPolicy.SessionAction nextAction) {
+        private static QuestionSelection none() {
+            return new QuestionSelection(null, false, SessionFlowPolicy.SessionAction.askNext());
+        }
+    }
+
+    private record FeedbackPlan(List<TurnInput> inputs, TurnBatchingPolicy.BatchReason reason) {
+    }
+
+    private record TurnState(SessionState sessionState,
+                             ModeType mode,
+                             String feedbackApiKey,
+                             QuestionSelection questionSelection,
+                             FeedbackPlan feedbackPlan) {
+    }
+
+    private final class GatewayAudioListener implements RealtimeAudioEventListener {
+        private final RuntimeContext context;
+
+        private GatewayAudioListener(RuntimeContext context) {
+            this.context = context;
+        }
+
+        @Override
+        public void onPartialTranscript(String delta) {
+            handlePartialTranscript(context, delta);
+        }
+
+        @Override
+        public void onFinalTranscript(String text) {
+            handleFinalTranscriptEvent(context, text);
+        }
+
+        @Override
+        public void onAssistantAudioChunk(long turnId, String base64Audio) {
+            handleAssistantAudioChunk(context, turnId, base64Audio);
+        }
+
+        @Override
+        public void onAssistantAudioCompleted(long turnId) {
+            context.completeSpeech(turnId);
+        }
+
+        @Override
+        public void onAssistantAudioFailed(long turnId, String message) {
+            handleAssistantAudioFailed(context, turnId, message);
+        }
+
+        @Override
+        public void onError(String message) {
+            handleRealtimeError(context, message);
+        }
     }
 
     private record TurnInput(String questionId,
@@ -672,34 +848,55 @@ public class RealtimeVoiceUseCase {
         }
 
         private void tryCompleteTurn(long turnId) {
-            if (closed.get() || !turnsReadyForCompletion.contains(turnId)) {
+            if (!canCompleteTurn(turnId)) {
                 return;
+            }
+            publishTurnCompletion(turnId);
+            maybeAutoStop(turnId);
+        }
+
+        private boolean canCompleteTurn(long turnId) {
+            if (closed.get() || !turnsReadyForCompletion.contains(turnId)) {
+                return false;
             }
             AtomicLong pending = pendingSpeechCounts.get(turnId);
             if (pending != null && pending.get() > 0) {
-                return;
+                return false;
             }
-            if (!completedTurns.add(turnId)) {
-                return;
-            }
+            return completedTurns.add(turnId);
+        }
+
+        private void publishTurnCompletion(long turnId) {
             turnsReadyForCompletion.remove(turnId);
             send("turn.completed", Map.of(
                     "sessionId", sessionId,
                     "turnId", turnId,
                     "cancelled", cancelledThroughTurn.get() >= turnId
             ));
+        }
 
+        private void maybeAutoStop(long turnId) {
             long stopAfter = autoStopAfterTurn.get();
-            if (autoStopPending.get() && stopAfter > 0L && turnId >= stopAfter) {
-                if (autoStopPending.compareAndSet(true, false) && !closed.get()) {
-                    Map<String, Object> payload = new LinkedHashMap<>();
-                    payload.put("sessionId", sessionId);
-                    payload.put("forced", false);
-                    payload.put("reason", autoStopReason == null ? "" : autoStopReason);
-                    send("session.stopped", payload);
-                    close();
-                }
+            if (!shouldAutoStop(turnId, stopAfter)) {
+                return;
             }
+            send("session.stopped", autoStopPayload());
+            close();
+        }
+
+        private boolean shouldAutoStop(long turnId, long stopAfter) {
+            if (!autoStopPending.get() || stopAfter <= 0L || turnId < stopAfter) {
+                return false;
+            }
+            return autoStopPending.compareAndSet(true, false) && !closed.get();
+        }
+
+        private Map<String, Object> autoStopPayload() {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("sessionId", sessionId);
+            payload.put("forced", false);
+            payload.put("reason", autoStopReason == null ? "" : autoStopReason);
+            return payload;
         }
 
         @Override
@@ -739,6 +936,10 @@ public class RealtimeVoiceUseCase {
                 return;
             }
             settings = settings.apply(command);
+            send("session.updated", sessionUpdatedPayload());
+        }
+
+        private Map<String, Object> sessionUpdatedPayload() {
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("sessionId", sessionId);
             payload.put("conversationModel", settings.conversationModel);
@@ -747,7 +948,7 @@ public class RealtimeVoiceUseCase {
             payload.put("feedbackModel", settings.feedbackModel);
             payload.put("feedbackLanguage", settings.feedbackLanguage);
             payload.put("ttsVoice", settings.ttsVoice);
-            send("session.updated", payload);
+            return payload;
         }
 
         @Override
@@ -755,21 +956,34 @@ public class RealtimeVoiceUseCase {
             if (closed.get()) {
                 return;
             }
+            markForcedStop(forced);
+            cancelAudioResponse();
+            send("session.stopped", stopPayload(forced, reason));
+            close();
+        }
+
+        private void markForcedStop(boolean forced) {
             if (forced) {
                 forcedStopped.set(true);
             }
-            if (audioSession != null) {
-                try {
-                    audioSession.cancelResponse();
-                } catch (Exception ignored) {
-                }
+        }
+
+        private void cancelAudioResponse() {
+            if (audioSession == null) {
+                return;
             }
+            try {
+                audioSession.cancelResponse();
+            } catch (Exception ignored) {
+            }
+        }
+
+        private Map<String, Object> stopPayload(boolean forced, String reason) {
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("sessionId", sessionId);
             payload.put("forced", forced);
             payload.put("reason", reason == null ? "" : reason);
-            send("session.stopped", payload);
-            close();
+            return payload;
         }
 
         @Override
