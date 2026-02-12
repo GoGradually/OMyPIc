@@ -1,13 +1,13 @@
 package me.go_gradually.omypic.application.session.usecase;
 
-import me.go_gradually.omypic.application.question.port.QuestionListPort;
+import me.go_gradually.omypic.application.question.port.QuestionGroupPort;
+import me.go_gradually.omypic.application.session.model.InvalidGroupTagsException;
 import me.go_gradually.omypic.application.session.model.ModeUpdateCommand;
 import me.go_gradually.omypic.application.session.port.SessionStorePort;
-import me.go_gradually.omypic.domain.question.QuestionGroup;
+import me.go_gradually.omypic.domain.question.QuestionGroupAggregate;
+import me.go_gradually.omypic.domain.question.QuestionGroupId;
 import me.go_gradually.omypic.domain.question.QuestionItem;
 import me.go_gradually.omypic.domain.question.QuestionItemId;
-import me.go_gradually.omypic.domain.question.QuestionList;
-import me.go_gradually.omypic.domain.question.QuestionListId;
 import me.go_gradually.omypic.domain.session.ModeType;
 import me.go_gradually.omypic.domain.session.SessionId;
 import me.go_gradually.omypic.domain.session.SessionState;
@@ -19,11 +19,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.Optional;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -34,89 +31,109 @@ class SessionUseCaseTest {
     @Mock
     private SessionStorePort sessionStore;
     @Mock
-    private QuestionListPort questionListPort;
+    private QuestionGroupPort questionGroupPort;
 
     private SessionUseCase useCase;
 
-    private static ModeUpdateCommand command(
-            String sessionId,
-            String listId,
-            ModeType mode,
-            Integer batch
-    ) {
-        ModeUpdateCommand command = new ModeUpdateCommand();
-        command.setSessionId(sessionId);
-        command.setListId(listId);
-        command.setMode(mode);
-        command.setContinuousBatchSize(batch);
-        return command;
-    }
-
     @BeforeEach
     void setUp() {
-        useCase = new SessionUseCase(sessionStore, questionListPort);
+        useCase = new SessionUseCase(sessionStore, questionGroupPort);
     }
 
     @Test
     void updateMode_clampsContinuousBatchSizeBetweenOneAndTen() {
         SessionState state = new SessionState(SessionId.of("s1"));
         when(sessionStore.getOrCreate(SessionId.of("s1"))).thenReturn(state);
+        when(questionGroupPort.findAll()).thenReturn(List.of(group("g1", List.of("travel"), true)));
 
-        ModeUpdateCommand upper = command("s1", null, ModeType.CONTINUOUS, 100);
+        ModeUpdateCommand upper = command("s1", ModeType.CONTINUOUS, 100, List.of("travel"));
         useCase.updateMode(upper);
         assertEquals(10, state.getContinuousBatchSize());
 
-        ModeUpdateCommand lower = command("s1", null, ModeType.CONTINUOUS, 0);
+        ModeUpdateCommand lower = command("s1", ModeType.CONTINUOUS, 0, List.of("travel"));
         useCase.updateMode(lower);
         assertEquals(1, state.getContinuousBatchSize());
     }
 
     @Test
-    void updateMode_withList_setsActiveListAndResetsSequentialProgress() {
+    void updateMode_configuresCandidateGroupsForSelectedTags() {
         SessionState state = new SessionState(SessionId.of("s2"));
-        QuestionList list = QuestionList.rehydrate(
-                QuestionListId.of("list-1"),
-                "list",
-                List.of(
-                        QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A")),
-                        QuestionItem.rehydrate(QuestionItemId.of("q2"), "Q2", QuestionGroup.of("B"))
-                ),
-                Instant.parse("2026-01-01T00:00:00Z"),
-                Instant.parse("2026-01-01T00:00:00Z")
-        );
-        state.nextQuestion(list);
-        state.nextQuestion(list);
-        assertTrue(state.nextQuestion(list).isEmpty());
-
         when(sessionStore.getOrCreate(SessionId.of("s2"))).thenReturn(state);
-        when(questionListPort.findById(QuestionListId.of("list-1"))).thenReturn(Optional.of(list));
+        when(questionGroupPort.findAll()).thenReturn(List.of(
+                group("g1", List.of("travel"), true),
+                group("g2", List.of("habit"), true),
+                group("g3", List.of("travel"), false)
+        ));
 
-        ModeUpdateCommand command = command("s2", "list-1", ModeType.IMMEDIATE, null);
-        SessionState updated = useCase.updateMode(command);
+        SessionState updated = useCase.updateMode(command("s2", ModeType.IMMEDIATE, null, List.of(" travel ")));
 
-        assertEquals("list-1", updated.getActiveQuestionListId());
-        assertTrue(updated.nextQuestion(list).isPresent());
+        assertEquals(java.util.Set.of("travel"), updated.getSelectedGroupTags());
+        assertEquals(1, updated.getCandidateGroupOrder().size());
+        assertEquals("g1", updated.getCandidateGroupOrder().get(0));
     }
 
     @Test
-    void updateMode_doesNotLookupList_whenListIdIsNull() {
+    void updateMode_throwsWhenSelectedTagsAreEmpty() {
         SessionState state = new SessionState(SessionId.of("s3"));
         when(sessionStore.getOrCreate(SessionId.of("s3"))).thenReturn(state);
 
-        ModeUpdateCommand command = command("s3", null, ModeType.IMMEDIATE, null);
-        useCase.updateMode(command);
+        InvalidGroupTagsException error = assertThrows(
+                InvalidGroupTagsException.class,
+                () -> useCase.updateMode(command("s3", ModeType.IMMEDIATE, null, List.of()))
+        );
 
-        verify(questionListPort, never()).findById(any());
+        assertEquals(List.of(), error.getInvalidTags());
+        verify(questionGroupPort, never()).findAll();
+    }
+
+    @Test
+    void updateMode_throwsWhenUnknownTagsAreIncluded() {
+        SessionState state = new SessionState(SessionId.of("s4"));
+        when(sessionStore.getOrCreate(SessionId.of("s4"))).thenReturn(state);
+        when(questionGroupPort.findAll()).thenReturn(List.of(group("g1", List.of("travel"), true)));
+
+        InvalidGroupTagsException error = assertThrows(
+                InvalidGroupTagsException.class,
+                () -> useCase.updateMode(command("s4", ModeType.IMMEDIATE, null, List.of("travel", "unknown")))
+        );
+
+        assertEquals(List.of("unknown"), error.getInvalidTags());
     }
 
     @Test
     void appendSegment_appendsTextToSession() {
-        SessionState state = new SessionState(SessionId.of("s4"));
-        when(sessionStore.getOrCreate(SessionId.of("s4"))).thenReturn(state);
+        SessionState state = new SessionState(SessionId.of("s5"));
+        when(sessionStore.getOrCreate(SessionId.of("s5"))).thenReturn(state);
 
-        useCase.appendSegment("s4", "hello");
+        useCase.appendSegment("s5", "hello");
 
         assertEquals(1, state.getSttSegments().size());
         assertEquals("hello", state.getSttSegments().get(0));
+    }
+
+    private static ModeUpdateCommand command(String sessionId,
+                                             ModeType mode,
+                                             Integer batch,
+                                             List<String> selectedTags) {
+        ModeUpdateCommand command = new ModeUpdateCommand();
+        command.setSessionId(sessionId);
+        command.setMode(mode);
+        command.setContinuousBatchSize(batch);
+        command.setSelectedGroupTags(selectedTags);
+        return command;
+    }
+
+    private QuestionGroupAggregate group(String id, List<String> tags, boolean withQuestions) {
+        List<QuestionItem> questions = withQuestions
+                ? List.of(QuestionItem.rehydrate(QuestionItemId.of("q-" + id), "Q", null))
+                : List.of();
+        return QuestionGroupAggregate.rehydrate(
+                QuestionGroupId.of(id),
+                id,
+                tags,
+                questions,
+                Instant.parse("2026-01-01T00:00:00Z"),
+                Instant.parse("2026-01-01T00:00:00Z")
+        );
     }
 }
