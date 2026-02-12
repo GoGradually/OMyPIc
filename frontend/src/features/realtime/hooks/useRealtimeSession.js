@@ -484,8 +484,7 @@ export function useRealtimeSession({
                         text: questionNode?.text || '',
                         group: questionNode?.group || '',
                         exhausted: Boolean(selection?.exhausted),
-                        selectionReason: selection?.reason || '',
-                        mockExamCompleted: Boolean(selection?.exhausted && selection?.mode === 'MOCK_EXAM')
+                        selectionReason: selection?.reason || ''
                     }
                     if (questionPromptRef.current) {
                         questionPromptRef.current(normalizedQuestion)

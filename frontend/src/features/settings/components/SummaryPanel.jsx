@@ -6,7 +6,6 @@ export function SummaryPanel({
                                  realtimeConversationModel,
                                  realtimeSttModel,
                                  feedbackModel,
-                                 mockFinalModel,
                                  enabledRulebookCount,
                                  questionListCount,
                                  onOpenSettings
@@ -34,10 +33,6 @@ export function SummaryPanel({
                 <li>
                     <span>실시간 피드백 모델</span>
                     <strong>{feedbackModel}</strong>
-                </li>
-                <li>
-                    <span>모의고사 최종 모델</span>
-                    <strong>{mockFinalModel}</strong>
                 </li>
                 <li>
                     <span>활성 룰북</span>

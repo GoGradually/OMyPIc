@@ -3,7 +3,6 @@ import {getApiKey, setApiKey, verifyApiKey} from '../shared/api/http.js'
 import {
     FEEDBACK_MODELS,
     getModeSummary,
-    MOCK_FINAL_MODELS,
     PANEL_TITLES,
     REALTIME_CONVERSATION_MODELS,
     REALTIME_STT_MODELS,
@@ -40,7 +39,6 @@ export default function App() {
     const [feedbackModel, setFeedbackModel] = useState(FEEDBACK_MODELS.openai[0])
     const [realtimeConversationModel, setRealtimeConversationModel] = useState(REALTIME_CONVERSATION_MODELS[0])
     const [realtimeSttModel, setRealtimeSttModel] = useState(REALTIME_STT_MODELS[0])
-    const [mockFinalModel, setMockFinalModel] = useState(MOCK_FINAL_MODELS.openai[0])
 
     const [apiKeyInput, setApiKeyInput] = useState('')
     const [statusMessage, setStatusMessage] = useState('')
@@ -85,10 +83,6 @@ export default function App() {
         setMode,
         batchSize,
         setBatchSize,
-        mockOrder,
-        setMockOrder,
-        mockCounts,
-        setMockCounts,
         currentQuestion,
         refreshQuestionLists,
         createList,
@@ -103,12 +97,7 @@ export default function App() {
         setCurrentQuestion
     } = useQuestionLists({
         sessionId,
-        provider,
-        mockFinalModel,
-        feedbackLang,
-        onFeedback: setFeedback,
-        onStatus: setStatusMessage,
-        refreshWrongNotes
+        onStatus: setStatusMessage
     })
 
     const {
@@ -148,7 +137,6 @@ export default function App() {
 
     useEffect(() => {
         setFeedbackModel(FEEDBACK_MODELS[provider][0])
-        setMockFinalModel(MOCK_FINAL_MODELS[provider][0])
         getApiKey(provider).then((key) => setApiKeyInput(key || ''))
         setStatusMessage('')
     }, [provider])
@@ -220,8 +208,7 @@ export default function App() {
         audioInputCount: audioDeviceStatus.inputCount,
         realtimeConversationModel,
         realtimeSttModel,
-        feedbackModel,
-        mockFinalModel
+        feedbackModel
     }
 
     let overlayContent = null
@@ -243,10 +230,6 @@ export default function App() {
                 setMode={setMode}
                 batchSize={batchSize}
                 setBatchSize={setBatchSize}
-                mockOrder={mockOrder}
-                setMockOrder={setMockOrder}
-                mockCounts={mockCounts}
-                setMockCounts={setMockCounts}
                 updateMode={updateMode}
                 nextQuestion={nextQuestion}
                 activeListId={activeListId}
@@ -295,8 +278,6 @@ export default function App() {
                 setRealtimeSttModel={setRealtimeSttModel}
                 feedbackModel={feedbackModel}
                 setFeedbackModel={setFeedbackModel}
-                mockFinalModel={mockFinalModel}
-                setMockFinalModel={setMockFinalModel}
                 apiKeyInput={apiKeyInput}
                 setApiKeyInput={setApiKeyInput}
                 voice={voice}
@@ -350,7 +331,6 @@ export default function App() {
                         realtimeConversationModel={realtimeConversationModel}
                         realtimeSttModel={realtimeSttModel}
                         feedbackModel={feedbackModel}
-                        mockFinalModel={mockFinalModel}
                         enabledRulebookCount={enabledRulebookCount}
                         questionListCount={questionLists.length}
                         onOpenSettings={() => setActivePanel('model')}

@@ -6,10 +6,6 @@ export function QuestionsOverlay({
                                      setMode,
                                      batchSize,
                                      setBatchSize,
-                                     mockOrder,
-                                     setMockOrder,
-                                     mockCounts,
-                                     setMockCounts,
                                      updateMode,
                                      nextQuestion,
                                      activeListId,
@@ -62,27 +58,6 @@ export function QuestionsOverlay({
                         />
                     </div>
                 )}
-
-                {mode === 'MOCK_EXAM' && (
-                    <>
-                        <div className="field-block">
-                            <label>그룹 순서 (쉼표 구분)</label>
-                            <input
-                                value={mockOrder}
-                                onChange={(event) => setMockOrder(event.target.value)}
-                                placeholder="A,B,C"
-                            />
-                        </div>
-                        <div className="field-block">
-                            <label>그룹별 횟수 (JSON)</label>
-                            <input
-                                value={mockCounts}
-                                onChange={(event) => setMockCounts(event.target.value)}
-                                placeholder='{"A":2,"B":3}'
-                            />
-                        </div>
-                    </>
-                )}
             </div>
 
             <div className="action-row">
@@ -129,7 +104,7 @@ export function QuestionsOverlay({
                     />
                 </div>
                 <div className="field-block">
-                    <label>그룹 (모의고사)</label>
+                    <label>그룹</label>
                     <input
                         value={newGroup}
                         onChange={(event) => setNewGroup(event.target.value)}

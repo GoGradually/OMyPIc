@@ -33,7 +33,6 @@ export function StatusBar({
                     <span>실시간 대화 모델 {statusDetails.realtimeConversationModel}</span>
                     <span>실시간 STT 모델 {statusDetails.realtimeSttModel}</span>
                     <span>실시간 피드백 모델 {statusDetails.feedbackModel}</span>
-                    <span>모의고사 모델 {statusDetails.mockFinalModel}</span>
                 </div>
             )}
         </>

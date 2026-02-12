@@ -1,7 +1,6 @@
 import React from 'react'
 import {
     FEEDBACK_MODELS,
-    MOCK_FINAL_MODELS,
     REALTIME_CONVERSATION_MODELS,
     REALTIME_STT_MODELS,
     VOICES
@@ -16,8 +15,6 @@ export function ModelSettingsOverlay({
                                          setRealtimeSttModel,
                                          feedbackModel,
                                          setFeedbackModel,
-                                         mockFinalModel,
-                                         setMockFinalModel,
                                          apiKeyInput,
                                          setApiKeyInput,
                                          voice,
@@ -59,14 +56,6 @@ export function ModelSettingsOverlay({
                     <label>실시간 피드백 모델</label>
                     <select value={feedbackModel} onChange={(event) => setFeedbackModel(event.target.value)}>
                         {FEEDBACK_MODELS[provider].map((item) => (
-                            <option key={item} value={item}>{item}</option>
-                        ))}
-                    </select>
-                </div>
-                <div className="field-block">
-                    <label>모의고사 최종 피드백 모델</label>
-                    <select value={mockFinalModel} onChange={(event) => setMockFinalModel(event.target.value)}>
-                        {MOCK_FINAL_MODELS[provider].map((item) => (
                             <option key={item} value={item}>{item}</option>
                         ))}
                     </select>

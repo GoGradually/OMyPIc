@@ -4,12 +4,7 @@ import {buildModePayload} from '../../../shared/utils/mode.js'
 
 export function useQuestionLists({
                                      sessionId,
-                                     provider,
-                                     mockFinalModel,
-                                     feedbackLang,
-                                     onFeedback,
-                                     onStatus,
-                                     refreshWrongNotes
+                                     onStatus
                                  }) {
     const [questionLists, setQuestionLists] = useState([])
     const [activeListId, setActiveListId] = useState('')
@@ -23,9 +18,6 @@ export function useQuestionLists({
 
     const [mode, setMode] = useState('IMMEDIATE')
     const [batchSize, setBatchSize] = useState(3)
-    const [mockOrder, setMockOrder] = useState('')
-    const [mockCounts, setMockCounts] = useState('{}')
-    const [mockFinalRequested, setMockFinalRequested] = useState(false)
 
     const [currentQuestion, setCurrentQuestion] = useState(null)
 
@@ -74,7 +66,6 @@ export function useQuestionLists({
         }
         await callApi(`/api/questions/${activeListId}`, {method: 'DELETE'})
         setCurrentQuestion(null)
-        setMockFinalRequested(false)
         await refreshQuestionLists()
     }, [activeListId, refreshQuestionLists])
 
@@ -129,24 +120,6 @@ export function useQuestionLists({
         await refreshQuestionLists()
     }, [activeListId, editingQuestionId, cancelEditQuestion, refreshQuestionLists])
 
-    const requestMockFinalFeedback = useCallback(async () => {
-        const response = await callApi('/api/feedback/mock-final', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                sessionId,
-                provider,
-                model: mockFinalModel,
-                feedbackLanguage: feedbackLang
-            })
-        }, provider)
-        const envelope = await response.json()
-        if (envelope.generated && envelope.feedback) {
-            onFeedback(envelope.feedback)
-            await refreshWrongNotes()
-        }
-    }, [sessionId, provider, mockFinalModel, feedbackLang, onFeedback, refreshWrongNotes])
-
     const nextQuestion = useCallback(async () => {
         if (!activeListId) {
             return
@@ -156,35 +129,16 @@ export function useQuestionLists({
         setCurrentQuestion({
             ...data,
             exhausted: Boolean(data?.skipped),
-            selectionReason: data?.mockExamCompletionReason || ''
+            selectionReason: ''
         })
-
-        if (data.mockExamCompleted && !mockFinalRequested) {
-            setMockFinalRequested(true)
-            try {
-                await requestMockFinalFeedback()
-                onStatus('모의고사 최종 피드백을 생성했습니다.')
-            } catch (error) {
-                setMockFinalRequested(false)
-                onStatus(`모의고사 최종 피드백 실패: ${error.message}`)
-            }
-        }
-    }, [
-        activeListId,
-        sessionId,
-        mockFinalRequested,
-        requestMockFinalFeedback,
-        onStatus
-    ])
+    }, [activeListId, sessionId])
 
     const updateMode = useCallback(async () => {
         const payload = buildModePayload({
             sessionId,
             listId: activeListId,
             mode,
-            batchSize,
-            mockOrder,
-            mockCounts
+            batchSize
         })
 
         await callApi('/api/modes', {
@@ -193,19 +147,8 @@ export function useQuestionLists({
             body: JSON.stringify(payload)
         })
 
-        setMockFinalRequested(false)
         onStatus('학습 모드를 적용했습니다.')
-    }, [sessionId, activeListId, mode, batchSize, mockOrder, mockCounts, onStatus])
-
-    useEffect(() => {
-        if (mode !== 'MOCK_EXAM') {
-            setMockFinalRequested(false)
-        }
-    }, [mode])
-
-    useEffect(() => {
-        setMockFinalRequested(false)
-    }, [activeListId])
+    }, [sessionId, activeListId, mode, batchSize, onStatus])
 
     useEffect(() => {
         cancelEditQuestion()
@@ -234,10 +177,6 @@ export function useQuestionLists({
         setMode,
         batchSize,
         setBatchSize,
-        mockOrder,
-        setMockOrder,
-        mockCounts,
-        setMockCounts,
 
         currentQuestion,
         refreshQuestionLists,
