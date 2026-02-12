@@ -4,6 +4,7 @@ import me.go_gradually.omypic.application.question.model.NextQuestion;
 import me.go_gradually.omypic.application.question.port.QuestionListPort;
 import me.go_gradually.omypic.application.session.port.SessionStorePort;
 import me.go_gradually.omypic.application.shared.port.MetricsPort;
+import me.go_gradually.omypic.domain.question.QuestionGroup;
 import me.go_gradually.omypic.domain.question.QuestionItem;
 import me.go_gradually.omypic.domain.question.QuestionItemId;
 import me.go_gradually.omypic.domain.question.QuestionList;
@@ -92,7 +93,7 @@ class QuestionUseCaseTest {
     @Test
     void addUpdateDeleteQuestion_updatesListAndSaves() {
         QuestionListId listId = QuestionListId.of("list-1");
-        QuestionItem existing = QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", "A");
+        QuestionItem existing = QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A"));
         QuestionList list = QuestionList.rehydrate(
                 listId,
                 "list",
@@ -112,14 +113,14 @@ class QuestionUseCaseTest {
     }
 
     @Test
-    void nextQuestion_cyclesThroughListInOrder() {
+    void nextQuestion_returnsSkippedWhenSequentialQuestionsAreExhausted() {
         QuestionListId listId = QuestionListId.of("list-1");
         QuestionList list = QuestionList.rehydrate(
                 listId,
                 "list",
                 List.of(
-                        QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", "A"),
-                        QuestionItem.rehydrate(QuestionItemId.of("q2"), "Q2", "B")
+                        QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A")),
+                        QuestionItem.rehydrate(QuestionItemId.of("q2"), "Q2", QuestionGroup.of("B"))
                 ),
                 Instant.parse("2026-01-01T00:00:00Z"),
                 Instant.parse("2026-01-01T00:00:00Z")
@@ -134,7 +135,8 @@ class QuestionUseCaseTest {
 
         assertEquals("q1", first.getQuestionId());
         assertEquals("q2", second.getQuestionId());
-        assertEquals("q1", third.getQuestionId());
+        assertTrue(third.isSkipped());
+        assertNull(third.getQuestionId());
         verify(metrics, times(3)).recordQuestionNextLatency(any());
     }
 
@@ -166,13 +168,13 @@ class QuestionUseCaseTest {
         QuestionList list = QuestionList.rehydrate(
                 listId,
                 "mock",
-                List.of(QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", "A")),
+                List.of(QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A"))),
                 Instant.parse("2026-01-01T00:00:00Z"),
                 Instant.parse("2026-01-01T00:00:00Z")
         );
         SessionState state = new SessionState(SessionId.of("s-mock"));
         state.applyModeUpdate(ModeType.MOCK_EXAM, null);
-        state.configureMockExam(list, List.of("A"), java.util.Map.of("A", 1));
+        state.configureMockExam(list, List.of(QuestionGroup.of("A")), java.util.Map.of(QuestionGroup.of("A"), 1));
         when(repository.findById(listId)).thenReturn(Optional.of(list));
         when(sessionStore.getOrCreate(SessionId.of("s-mock"))).thenReturn(state);
 

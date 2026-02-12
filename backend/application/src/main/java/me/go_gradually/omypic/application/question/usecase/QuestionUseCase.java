@@ -5,6 +5,7 @@ import me.go_gradually.omypic.application.question.port.QuestionListPort;
 import me.go_gradually.omypic.application.session.port.SessionStorePort;
 import me.go_gradually.omypic.application.shared.port.MetricsPort;
 import me.go_gradually.omypic.domain.question.QuestionItem;
+import me.go_gradually.omypic.domain.question.QuestionGroup;
 import me.go_gradually.omypic.domain.question.QuestionItemId;
 import me.go_gradually.omypic.domain.question.QuestionList;
 import me.go_gradually.omypic.domain.question.QuestionListId;
@@ -50,13 +51,13 @@ public class QuestionUseCase {
 
     public QuestionList addQuestion(String listId, String text, String group) {
         QuestionList doc = repository.findById(QuestionListId.of(listId)).orElseThrow();
-        doc.addQuestion(text, group, Instant.now());
+        doc.addQuestion(text, QuestionGroup.fromNullable(group), Instant.now());
         return repository.save(doc);
     }
 
     public QuestionList updateQuestion(String listId, String itemId, String text, String group) {
         QuestionList doc = repository.findById(QuestionListId.of(listId)).orElseThrow();
-        doc.updateQuestion(QuestionItemId.of(itemId), text, group, Instant.now());
+        doc.updateQuestion(QuestionItemId.of(itemId), text, QuestionGroup.fromNullable(group), Instant.now());
         return repository.save(doc);
     }
 
@@ -78,7 +79,7 @@ public class QuestionUseCase {
             NextQuestion next = new NextQuestion();
             next.setQuestionId(item.getId().value());
             next.setText(item.getText());
-            next.setGroup(item.getGroup());
+            next.setGroup(item.getGroup() == null ? null : item.getGroup().value());
             return next;
         }).orElseGet(NextQuestion::skipped);
         response.setMockExamCompleted(session.isMockExamCompleted());
