@@ -207,11 +207,11 @@ public class OpenAiRealtimeGateway implements RealtimeAudioGateway {
             Map<String, Object> response = new LinkedHashMap<>();
             // TTS 전용 응답이므로 대화 히스토리에 누적하지 않도록 conversation을 none으로 고정한다.
             response.put("conversation", "none");
-            response.put("output_modalities", List.of("audio"));
+            response.put("modalities", List.of("audio", "text"));
+            response.put("voice", resolvedVoice(voice));
             response.put("instructions", "Read the provided text exactly as written. Do not add or remove words.");
             response.put("metadata", metadataPayload(turnId));
             response.put("input", inputPayload(text));
-            response.put("audio", audioPayload(voice));
             return response;
         }
 
@@ -228,11 +228,8 @@ public class OpenAiRealtimeGateway implements RealtimeAudioGateway {
             ));
         }
 
-        private Map<String, Object> audioPayload(String voice) {
-            return Map.of("output", Map.of(
-                    "voice", isBlank(voice) ? DEFAULT_TTS_VOICE : voice,
-                    "format", Map.of("type", "audio/pcm")
-            ));
+        private String resolvedVoice(String voice) {
+            return isBlank(voice) ? DEFAULT_TTS_VOICE : voice;
         }
     }
 
