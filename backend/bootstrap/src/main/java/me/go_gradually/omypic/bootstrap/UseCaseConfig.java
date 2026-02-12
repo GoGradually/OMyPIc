@@ -5,7 +5,7 @@ import me.go_gradually.omypic.application.apikey.usecase.ApiKeyVerifyUseCase;
 import me.go_gradually.omypic.application.feedback.policy.FeedbackPolicy;
 import me.go_gradually.omypic.application.feedback.port.LlmClient;
 import me.go_gradually.omypic.application.feedback.usecase.FeedbackUseCase;
-import me.go_gradually.omypic.application.question.port.QuestionListPort;
+import me.go_gradually.omypic.application.question.port.QuestionGroupPort;
 import me.go_gradually.omypic.application.question.usecase.QuestionUseCase;
 import me.go_gradually.omypic.application.realtime.policy.RealtimePolicy;
 import me.go_gradually.omypic.application.realtime.port.RealtimeAudioGateway;
@@ -47,16 +47,16 @@ public class UseCaseConfig {
     }
 
     @Bean
-    public QuestionUseCase questionUseCase(QuestionListPort questionListPort,
+    public QuestionUseCase questionUseCase(QuestionGroupPort questionGroupPort,
                                            SessionStorePort sessionStore,
                                            MetricsPort metricsPort) {
-        return new QuestionUseCase(questionListPort, sessionStore, metricsPort);
+        return new QuestionUseCase(questionGroupPort, sessionStore, metricsPort);
     }
 
     @Bean
     public SessionUseCase sessionUseCase(SessionStorePort sessionStore,
-                                         QuestionListPort questionListPort) {
-        return new SessionUseCase(sessionStore, questionListPort);
+                                         QuestionGroupPort questionGroupPort) {
+        return new SessionUseCase(sessionStore, questionGroupPort);
     }
 
     @Bean
