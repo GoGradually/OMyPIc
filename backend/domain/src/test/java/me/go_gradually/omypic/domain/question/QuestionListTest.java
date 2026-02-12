@@ -15,7 +15,7 @@ class QuestionListTest {
         QuestionList list = QuestionList.create("list", Instant.parse("2026-01-01T00:00:00Z"));
 
         for (int i = 0; i < 200; i++) {
-            list.addQuestion("question-" + i, "group", Instant.now());
+            list.addQuestion("question-" + i, QuestionGroup.of("group"), Instant.now());
         }
 
         assertEquals(200, list.getQuestions().size());
@@ -25,11 +25,11 @@ class QuestionListTest {
     void addQuestion_throwsWhenOver200Items() {
         QuestionList list = QuestionList.create("list", Instant.parse("2026-01-01T00:00:00Z"));
         for (int i = 0; i < 200; i++) {
-            list.addQuestion("question-" + i, "group", Instant.now());
+            list.addQuestion("question-" + i, QuestionGroup.of("group"), Instant.now());
         }
 
         assertThrows(IllegalArgumentException.class,
-                () -> list.addQuestion("overflow", "group", Instant.now()));
+                () -> list.addQuestion("overflow", QuestionGroup.of("group"), Instant.now()));
     }
 
     @Test
@@ -45,7 +45,7 @@ class QuestionListTest {
 
     @Test
     void updateQuestion_updatesMatchingItem() {
-        QuestionItem item = QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", "A");
+        QuestionItem item = QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A"));
         QuestionList list = QuestionList.rehydrate(
                 QuestionListId.of("list-1"),
                 "list",
@@ -54,15 +54,15 @@ class QuestionListTest {
                 Instant.parse("2026-01-01T00:00:00Z")
         );
 
-        list.updateQuestion(QuestionItemId.of("q1"), "Q1 updated", "B", Instant.parse("2026-01-01T02:00:00Z"));
+        list.updateQuestion(QuestionItemId.of("q1"), "Q1 updated", QuestionGroup.of("B"), Instant.parse("2026-01-01T02:00:00Z"));
 
         assertEquals("Q1 updated", list.getQuestions().get(0).getText());
-        assertEquals("B", list.getQuestions().get(0).getGroup());
+        assertEquals(QuestionGroup.of("B"), list.getQuestions().get(0).getGroup());
     }
 
     @Test
     void updateQuestion_withNullId_keepsQuestionsUntouched() {
-        QuestionItem item = QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", "A");
+        QuestionItem item = QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A"));
         QuestionList list = QuestionList.rehydrate(
                 QuestionListId.of("list-1"),
                 "list",
@@ -71,16 +71,16 @@ class QuestionListTest {
                 Instant.parse("2026-01-01T00:00:00Z")
         );
 
-        list.updateQuestion(null, "Q1 updated", "B", Instant.parse("2026-01-01T02:00:00Z"));
+        list.updateQuestion(null, "Q1 updated", QuestionGroup.of("B"), Instant.parse("2026-01-01T02:00:00Z"));
 
         assertEquals("Q1", list.getQuestions().get(0).getText());
-        assertEquals("A", list.getQuestions().get(0).getGroup());
+        assertEquals(QuestionGroup.of("A"), list.getQuestions().get(0).getGroup());
     }
 
     @Test
     void removeQuestion_removesMatchingItem() {
-        QuestionItem item1 = QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", "A");
-        QuestionItem item2 = QuestionItem.rehydrate(QuestionItemId.of("q2"), "Q2", "B");
+        QuestionItem item1 = QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A"));
+        QuestionItem item2 = QuestionItem.rehydrate(QuestionItemId.of("q2"), "Q2", QuestionGroup.of("B"));
         QuestionList list = QuestionList.rehydrate(
                 QuestionListId.of("list-1"),
                 "list",
@@ -97,7 +97,7 @@ class QuestionListTest {
 
     @Test
     void removeQuestion_throwsWhenRemovingLastQuestion() {
-        QuestionItem item = QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", "A");
+        QuestionItem item = QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A"));
         QuestionList list = QuestionList.rehydrate(
                 QuestionListId.of("list-1"),
                 "list",
@@ -116,18 +116,18 @@ class QuestionListTest {
                 QuestionListId.of("list-1"),
                 "list",
                 List.of(
-                        QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", "A"),
-                        QuestionItem.rehydrate(QuestionItemId.of("q2"), "Q2", "A"),
+                        QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A")),
+                        QuestionItem.rehydrate(QuestionItemId.of("q2"), "Q2", QuestionGroup.of("A")),
                         QuestionItem.rehydrate(QuestionItemId.of("q3"), "Q3", null)
                 ),
                 Instant.parse("2026-01-01T00:00:00Z"),
                 Instant.parse("2026-01-01T00:00:00Z")
         );
 
-        Map<String, List<QuestionItemId>> grouped = list.groupQuestionIdsByGroup();
+        Map<QuestionGroup, List<QuestionItemId>> grouped = list.groupQuestionIdsByGroup();
 
         assertEquals(1, grouped.size());
-        assertEquals(2, grouped.get("A").size());
-        assertTrue(grouped.containsKey("A"));
+        assertEquals(2, grouped.get(QuestionGroup.of("A")).size());
+        assertTrue(grouped.containsKey(QuestionGroup.of("A")));
     }
 }
