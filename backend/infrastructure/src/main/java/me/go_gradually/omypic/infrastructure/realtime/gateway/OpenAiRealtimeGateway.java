@@ -46,54 +46,79 @@ public class OpenAiRealtimeGateway implements RealtimeAudioGateway {
     public RealtimeAudioSession open(RealtimeAudioOpenCommand command, RealtimeAudioEventListener listener) {
         URI realtimeUri = toRealtimeUri(properties.getIntegrations().getOpenai().getBaseUrl(), command.conversationModel());
         RealtimeSpeechTracker speechTracker = new RealtimeSpeechTracker(listener);
-        OpenAiWebSocketListener webSocketListener = new OpenAiWebSocketListener(listener, speechTracker, objectMapper);
-        WebSocket webSocket;
-        try {
-            webSocket = httpClient.newWebSocketBuilder()
-                    .header("Authorization", "Bearer " + command.apiKey())
-                    // 현재 구현은 beta 이벤트 스키마와 함께 동작하도록 유지한다.
-                    .header("OpenAI-Beta", "realtime=v1")
-                    .buildAsync(realtimeUri, webSocketListener)
-                    .join();
-            // 연결 직후 session.update를 보내 입력 오디오/전사(VAD 포함) 동작을 명시적으로 초기화한다.
-            sendSessionUpdate(webSocket, command.sttModel());
-        } catch (Exception e) {
-            throw new IllegalStateException("Failed to connect OpenAI realtime", e);
-        }
+        WebSocket webSocket = connect(command, listener, speechTracker, realtimeUri);
         return new OpenAiRealtimeAudioSession(webSocket, objectMapper, speechTracker);
     }
 
+    private WebSocket connect(RealtimeAudioOpenCommand command,
+                              RealtimeAudioEventListener listener,
+                              RealtimeSpeechTracker speechTracker,
+                              URI realtimeUri) {
+        OpenAiWebSocketListener webSocketListener = new OpenAiWebSocketListener(listener, speechTracker, objectMapper);
+        try {
+            WebSocket webSocket = openWebSocket(command, realtimeUri, webSocketListener);
+            sendSessionUpdate(webSocket, command.sttModel());
+            return webSocket;
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to connect OpenAI realtime", e);
+        }
+    }
+
+    private WebSocket openWebSocket(RealtimeAudioOpenCommand command,
+                                    URI realtimeUri,
+                                    OpenAiWebSocketListener webSocketListener) {
+        return httpClient.newWebSocketBuilder()
+                .header("Authorization", "Bearer " + command.apiKey())
+                // 현재 구현은 beta 이벤트 스키마와 함께 동작하도록 유지한다.
+                .header("OpenAI-Beta", "realtime=v1")
+                .buildAsync(realtimeUri, webSocketListener)
+                .join();
+    }
+
     private void sendSessionUpdate(WebSocket webSocket, String model) throws Exception {
+        webSocket.sendText(objectMapper.writeValueAsString(sessionUpdatePayload(model)), true).join();
+    }
+
+    private Map<String, Object> sessionUpdatePayload(String model) {
         Map<String, Object> root = new LinkedHashMap<>();
         root.put("type", "session.update");
+        root.put("session", sessionPayload(model));
+        return root;
+    }
+
+    private Map<String, Object> sessionPayload(String model) {
         Map<String, Object> session = new LinkedHashMap<>();
         session.put("input_audio_format", "pcm16");
-        // 서버 VAD로 턴 종료를 감지하되 자동 응답 생성은 막고(=false), 기존 응답은 인터럽트 가능하게 둔다.
-        session.put("turn_detection", Map.of(
-                "type", "server_vad",
-                "create_response", false,
-                "interrupt_response", true
-        ));
+        session.put("turn_detection", turnDetectionPayload());
         session.put("input_audio_transcription", Map.of("model", model));
-        root.put("session", session);
-        webSocket.sendText(objectMapper.writeValueAsString(root), true).join();
+        return session;
+    }
+
+    private Map<String, Object> turnDetectionPayload() {
+        // 서버 VAD로 턴 종료를 감지하되 자동 응답 생성은 막고(=false), 기존 응답은 인터럽트 가능하게 둔다.
+        return Map.of("type", "server_vad", "create_response", false, "interrupt_response", true);
     }
 
     private URI toRealtimeUri(String baseUrl, String model) {
         URI baseUri = URI.create(baseUrl);
-        // OpenAI REST base URL(https://...)을 Realtime websocket URL(wss://.../v1/realtime?model=...)로 변환한다.
-        String scheme = "https".equalsIgnoreCase(baseUri.getScheme()) ? "wss" : "ws";
-        String path = baseUri.getPath() == null ? "" : baseUri.getPath();
-        if (path.endsWith("/")) {
-            path = path.substring(0, path.length() - 1);
-        }
-        String realtimePath = path + "/v1/realtime";
+        String scheme = websocketScheme(baseUri);
+        String realtimePath = realtimePath(baseUri);
         String query = "model=" + URLEncoder.encode(model, StandardCharsets.UTF_8);
         try {
             return new URI(scheme, null, baseUri.getHost(), baseUri.getPort(), realtimePath, query, null);
         } catch (Exception e) {
             throw new IllegalArgumentException("Invalid OpenAI base URL: " + baseUrl, e);
         }
+    }
+
+    private String websocketScheme(URI baseUri) {
+        // OpenAI REST base URL(https://...)을 Realtime websocket URL(wss://.../v1/realtime?model=...)로 변환한다.
+        return "https".equalsIgnoreCase(baseUri.getScheme()) ? "wss" : "ws";
+    }
+
+    private String realtimePath(URI baseUri) {
+        String path = baseUri.getPath() == null ? "" : baseUri.getPath();
+        return path.endsWith("/") ? path.substring(0, path.length() - 1) + "/v1/realtime" : path + "/v1/realtime";
     }
 
     private static final class OpenAiRealtimeAudioSession implements RealtimeAudioSession {
@@ -174,28 +199,40 @@ public class OpenAiRealtimeGateway implements RealtimeAudioGateway {
             Map<String, Object> root = new LinkedHashMap<>();
             root.put("type", "response.create");
             root.put("event_id", eventId);
+            root.put("response", responsePayload(turnId, text, voice));
+            return root;
+        }
 
+        private Map<String, Object> responsePayload(long turnId, String text, String voice) {
             Map<String, Object> response = new LinkedHashMap<>();
             // TTS 전용 응답이므로 대화 히스토리에 누적하지 않도록 conversation을 none으로 고정한다.
             response.put("conversation", "none");
             response.put("output_modalities", List.of("audio"));
             response.put("instructions", "Read the provided text exactly as written. Do not add or remove words.");
+            response.put("metadata", metadataPayload(turnId));
+            response.put("input", inputPayload(text));
+            response.put("audio", audioPayload(voice));
+            return response;
+        }
+
+        private Map<String, Object> metadataPayload(long turnId) {
             // response.created 이후 responseId와 매칭하기 위해 turnId를 metadata에 넣어 둔다.
-            response.put("metadata", Map.of("turnId", Long.toString(turnId)));
-            response.put("input", List.of(Map.of(
+            return Map.of("turnId", Long.toString(turnId));
+        }
+
+        private List<Map<String, Object>> inputPayload(String text) {
+            return List.of(Map.of(
                     "type", "message",
                     "role", "user",
                     "content", List.of(Map.of("type", "input_text", "text", text))
-            )));
-            response.put("audio", Map.of(
-                    "output", Map.of(
-                            "voice", isBlank(voice) ? DEFAULT_TTS_VOICE : voice,
-                            "format", Map.of("type", "audio/pcm")
-                    )
             ));
+        }
 
-            root.put("response", response);
-            return root;
+        private Map<String, Object> audioPayload(String voice) {
+            return Map.of("output", Map.of(
+                    "voice", isBlank(voice) ? DEFAULT_TTS_VOICE : voice,
+                    "format", Map.of("type", "audio/pcm")
+            ));
         }
     }
 
@@ -249,43 +286,104 @@ public class OpenAiRealtimeGateway implements RealtimeAudioGateway {
             try {
                 JsonNode root = objectMapper.readTree(payload);
                 String type = root.path("type").asText("");
-                switch (type) {
-                    case "conversation.item.input_audio_transcription.delta" -> {
-                        String delta = root.path("delta").asText("");
-                        if (!delta.isBlank()) {
-                            listener.onPartialTranscript(delta);
-                        }
-                    }
-                    case "conversation.item.input_audio_transcription.completed" -> {
-                        String finalText = root.path("transcript").asText("");
-                        if (!finalText.isBlank()) {
-                            listener.onFinalTranscript(finalText);
-                        }
-                    }
-                    case "response.created" -> {
-                        String responseId = root.path("response").path("id").asText("");
-                        String eventId = root.path("event_id").asText("");
-                        JsonNode metadata = root.path("response").path("metadata");
-                        speechTracker.bindResponse(eventId, responseId, metadata);
-                    }
-                    // GA(output_audio.*)와 beta(audio.*) 이벤트명을 모두 수용한다.
-                    case "response.output_audio.delta", "response.audio.delta" -> {
-                        String responseId = extractResponseId(root);
-                        String delta = root.path("delta").asText("");
-                        speechTracker.emitAudioChunk(responseId, delta);
-                    }
-                    case "response.output_audio.done", "response.audio.done" -> {
-                        speechTracker.completeSpeechByResponseId(extractResponseId(root));
-                    }
-                    case "response.done" -> handleResponseDone(root);
-                    case "error" -> handleErrorEvent(root);
-                    default -> {
-                        // Ignore other realtime events.
-                    }
-                }
+                routeEvent(type, root);
             } catch (Exception e) {
                 listener.onError("Failed to parse realtime event");
             }
+        }
+
+        private void routeEvent(String type, JsonNode root) {
+            if (handleStreamingEvent(type, root)) {
+                return;
+            }
+            handleTerminalEvent(type, root);
+        }
+
+        private boolean handleStreamingEvent(String type, JsonNode root) {
+            if (handleTranscriptDelta(type, root)) {
+                return true;
+            }
+            if (handleTranscriptCompleted(type, root)) {
+                return true;
+            }
+            if (handleResponseCreated(type, root)) {
+                return true;
+            }
+            if (handleAudioDelta(type, root)) {
+                return true;
+            }
+            return handleAudioDone(type, root);
+        }
+
+        private void handleTerminalEvent(String type, JsonNode root) {
+            if ("response.done".equals(type)) {
+                handleResponseDone(root);
+            } else if ("error".equals(type)) {
+                handleErrorEvent(root);
+            }
+        }
+
+        private boolean handleTranscriptDelta(String type, JsonNode root) {
+            if (!"conversation.item.input_audio_transcription.delta".equals(type)) {
+                return false;
+            }
+            String delta = root.path("delta").asText("");
+            if (!delta.isBlank()) {
+                listener.onPartialTranscript(delta);
+            }
+            return true;
+        }
+
+        private boolean handleTranscriptCompleted(String type, JsonNode root) {
+            if (!"conversation.item.input_audio_transcription.completed".equals(type)) {
+                return false;
+            }
+            String finalText = root.path("transcript").asText("");
+            if (!finalText.isBlank()) {
+                listener.onFinalTranscript(finalText);
+            }
+            return true;
+        }
+
+        private boolean handleResponseCreated(String type, JsonNode root) {
+            if (!"response.created".equals(type)) {
+                return false;
+            }
+            speechTracker.bindResponse(createdEventId(root), createdResponseId(root), root.path("response").path("metadata"));
+            return true;
+        }
+
+        private boolean handleAudioDelta(String type, JsonNode root) {
+            if (!isAudioDeltaEvent(type)) {
+                return false;
+            }
+            speechTracker.emitAudioChunk(extractResponseId(root), root.path("delta").asText(""));
+            return true;
+        }
+
+        private boolean handleAudioDone(String type, JsonNode root) {
+            if (!isAudioDoneEvent(type)) {
+                return false;
+            }
+            speechTracker.completeSpeechByResponseId(extractResponseId(root));
+            return true;
+        }
+
+        private boolean isAudioDeltaEvent(String type) {
+            // GA(output_audio.*)와 beta(audio.*) 이벤트명을 모두 수용한다.
+            return "response.output_audio.delta".equals(type) || "response.audio.delta".equals(type);
+        }
+
+        private boolean isAudioDoneEvent(String type) {
+            return "response.output_audio.done".equals(type) || "response.audio.done".equals(type);
+        }
+
+        private String createdResponseId(JsonNode root) {
+            return root.path("response").path("id").asText("");
+        }
+
+        private String createdEventId(JsonNode root) {
+            return root.path("event_id").asText("");
         }
 
         private void handleResponseDone(JsonNode root) {
@@ -302,23 +400,36 @@ public class OpenAiRealtimeGateway implements RealtimeAudioGateway {
         }
 
         private void handleErrorEvent(JsonNode root) {
-            JsonNode error = root.path("error");
-            String message = error.path("message").asText(root.path("message").asText("Realtime error"));
+            String message = errorMessage(root);
             if (isIgnorableRealtimeError(message)) {
                 return;
             }
-            String responseId = firstNonBlank(error.path("response_id").asText(""), root.path("response_id").asText(""));
-            String eventId = firstNonBlank(error.path("event_id").asText(""), root.path("event_id").asText(""));
-            boolean matched = false;
-            if (!isBlank(responseId)) {
-                matched = speechTracker.failSpeechByResponseId(responseId, message);
-            }
-            if (!matched && !isBlank(eventId)) {
-                matched = speechTracker.failSpeechByEventId(eventId, message);
-            }
+            boolean matched = failMatchedSpeech(message, errorResponseId(root), errorEventId(root));
             if (!matched) {
                 listener.onError(message);
             }
+        }
+
+        private String errorMessage(JsonNode root) {
+            JsonNode error = root.path("error");
+            return error.path("message").asText(root.path("message").asText("Realtime error"));
+        }
+
+        private String errorResponseId(JsonNode root) {
+            JsonNode error = root.path("error");
+            return firstNonBlank(error.path("response_id").asText(""), root.path("response_id").asText(""));
+        }
+
+        private String errorEventId(JsonNode root) {
+            JsonNode error = root.path("error");
+            return firstNonBlank(error.path("event_id").asText(""), root.path("event_id").asText(""));
+        }
+
+        private boolean failMatchedSpeech(String message, String responseId, String eventId) {
+            if (!isBlank(responseId) && speechTracker.failSpeechByResponseId(responseId, message)) {
+                return true;
+            }
+            return !isBlank(eventId) && speechTracker.failSpeechByEventId(eventId, message);
         }
 
         private String extractResponseId(JsonNode root) {
@@ -358,21 +469,37 @@ public class OpenAiRealtimeGateway implements RealtimeAudioGateway {
             if (isBlank(responseId)) {
                 return;
             }
+            Long turnId = resolveTurnId(eventId, metadata);
+            if (turnId != null) {
+                speechTurnByResponseId.put(responseId, turnId);
+            }
+        }
+
+        private Long resolveTurnId(String eventId, JsonNode metadata) {
             // event_id/metadata(turnId)로 응답과 턴을 매칭해 이후 오디오 chunk를 정확한 턴으로 라우팅한다.
             Long turnId = parseTurnId(metadata);
-            if (turnId == null && !isBlank(eventId)) {
-                turnId = speechTurnByEventId.remove(eventId);
+            if (turnId == null) {
+                turnId = fromEventId(eventId);
             }
             if (turnId != null) {
                 pendingTurns.removeFirstOccurrence(turnId);
             } else {
                 turnId = pendingTurns.pollFirst();
             }
+            removeEventId(eventId);
+            return turnId;
+        }
+
+        private Long fromEventId(String eventId) {
+            if (isBlank(eventId)) {
+                return null;
+            }
+            return speechTurnByEventId.remove(eventId);
+        }
+
+        private void removeEventId(String eventId) {
             if (!isBlank(eventId)) {
                 speechTurnByEventId.remove(eventId);
-            }
-            if (turnId != null) {
-                speechTurnByResponseId.put(responseId, turnId);
             }
         }
 
@@ -449,22 +576,31 @@ public class OpenAiRealtimeGateway implements RealtimeAudioGateway {
             if (metadata == null || metadata.isMissingNode() || metadata.isNull()) {
                 return null;
             }
+            JsonNode node = metadataTurnNode(metadata);
+            if (node.isIntegralNumber()) {
+                return node.longValue();
+            }
+            if (node.isTextual()) {
+                return parseLong(node.asText());
+            }
+            return null;
+        }
+
+        private JsonNode metadataTurnNode(JsonNode metadata) {
             // turnId/turn_id 두 표기를 모두 허용해 provider별 metadata 직렬화 차이를 흡수한다.
             JsonNode node = metadata.path("turnId");
             if (node.isMissingNode() || node.isNull()) {
                 node = metadata.path("turn_id");
             }
-            if (node.isIntegralNumber()) {
-                return node.longValue();
+            return node;
+        }
+
+        private Long parseLong(String value) {
+            try {
+                return Long.parseLong(value.trim());
+            } catch (NumberFormatException ignored) {
+                return null;
             }
-            if (node.isTextual()) {
-                try {
-                    return Long.parseLong(node.asText().trim());
-                } catch (NumberFormatException ignored) {
-                    return null;
-                }
-            }
-            return null;
         }
     }
 

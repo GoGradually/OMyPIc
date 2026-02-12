@@ -28,6 +28,19 @@ public class OpenAiSttGateway implements SttGateway {
     }
 
     private String callOpenAi(byte[] fileBytes, String model, String apiKey, boolean translate, VadSettings vadSettings) {
+        MultipartBodyBuilder builder = multipartBody(fileBytes, model, vadSettings);
+        String endpoint = endpoint(translate);
+        return webClient.post()
+                .uri(endpoint)
+                .header("Authorization", "Bearer " + apiKey)
+                .contentType(MediaType.MULTIPART_FORM_DATA)
+                .body(BodyInserters.fromMultipartData(builder.build()))
+                .retrieve()
+                .bodyToMono(String.class)
+                .block();
+    }
+
+    private MultipartBodyBuilder multipartBody(byte[] fileBytes, String model, VadSettings vadSettings) {
         MultipartBodyBuilder builder = new MultipartBodyBuilder();
         builder.part("file", fileBytes)
                 .header("Content-Disposition", "form-data; name=file; filename=audio.webm")
@@ -37,17 +50,10 @@ public class OpenAiSttGateway implements SttGateway {
         builder.part("prefix_padding_ms", String.valueOf(vadSettings.prefixPaddingMs()));
         builder.part("silence_duration_ms", String.valueOf(vadSettings.silenceDurationMs()));
         builder.part("threshold", String.valueOf(vadSettings.threshold()));
+        return builder;
+    }
 
-        String endpoint = translate
-                ? "/v1/audio/translations"
-                : "/v1/audio/transcriptions";
-        return webClient.post()
-                .uri(endpoint)
-                .header("Authorization", "Bearer " + apiKey)
-                .contentType(MediaType.MULTIPART_FORM_DATA)
-                .body(BodyInserters.fromMultipartData(builder.build()))
-                .retrieve()
-                .bodyToMono(String.class)
-                .block();
+    private String endpoint(boolean translate) {
+        return translate ? "/v1/audio/translations" : "/v1/audio/transcriptions";
     }
 }

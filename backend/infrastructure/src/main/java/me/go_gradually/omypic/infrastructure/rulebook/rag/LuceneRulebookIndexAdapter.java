@@ -42,19 +42,8 @@ public class LuceneRulebookIndexAdapter implements RulebookIndexPort {
 
     @Override
     public void indexRulebookChunks(RulebookId rulebookId, String filename, List<String> chunks) throws IOException {
-        Directory directory = FSDirectory.open(indexPath);
-        IndexWriterConfig config = new IndexWriterConfig(new StandardAnalyzer());
-        config.setOpenMode(IndexWriterConfig.OpenMode.CREATE_OR_APPEND);
-        try (IndexWriter writer = new IndexWriter(directory, config)) {
-            for (String chunk : chunks) {
-                float[] vector = embeddingService.embed(chunk);
-                Document doc = new Document();
-                doc.add(new StringField("rulebookId", rulebookId.value(), Field.Store.YES));
-                doc.add(new StringField("filename", filename, Field.Store.YES));
-                doc.add(new StoredField("text", chunk));
-                doc.add(new KnnVectorField("embedding", vector));
-                writer.addDocument(doc);
-            }
+        try (IndexWriter writer = createWriter()) {
+            addChunks(writer, rulebookId, filename, chunks);
             writer.commit();
         }
     }
@@ -64,33 +53,73 @@ public class LuceneRulebookIndexAdapter implements RulebookIndexPort {
         if (enabledRulebookIds.isEmpty()) {
             return List.of();
         }
-        Directory directory = FSDirectory.open(indexPath);
-        if (!DirectoryReader.indexExists(directory)) {
-            return List.of();
-        }
         Set<String> enabledIds = enabledRulebookIds.stream()
                 .map(RulebookId::value)
                 .collect(java.util.stream.Collectors.toSet());
         float[] queryVector = embeddingService.embed(query);
-        try (DirectoryReader reader = DirectoryReader.open(directory)) {
-            IndexSearcher searcher = new IndexSearcher(reader);
-            KnnVectorQuery vectorQuery = new KnnVectorQuery("embedding", queryVector, topK * 3);
-            TopDocs topDocs = searcher.search(vectorQuery, topK * 3);
-            List<RulebookContext> results = new ArrayList<>();
-            for (ScoreDoc scoreDoc : topDocs.scoreDocs) {
-                Document doc = searcher.doc(scoreDoc.doc);
-                String rulebookId = doc.get("rulebookId");
-                if (!enabledIds.contains(rulebookId)) {
-                    continue;
-                }
-                String filename = doc.get("filename");
-                String text = doc.get("text");
-                results.add(new RulebookContext(RulebookId.of(rulebookId), filename, text));
-                if (results.size() >= topK) {
-                    break;
-                }
-            }
-            return results;
+        return searchEnabledContexts(enabledIds, queryVector, topK);
+    }
+
+    private IndexWriter createWriter() throws IOException {
+        Directory directory = FSDirectory.open(indexPath);
+        IndexWriterConfig config = new IndexWriterConfig(new StandardAnalyzer());
+        config.setOpenMode(IndexWriterConfig.OpenMode.CREATE_OR_APPEND);
+        return new IndexWriter(directory, config);
+    }
+
+    private void addChunks(IndexWriter writer, RulebookId rulebookId, String filename, List<String> chunks) throws IOException {
+        for (String chunk : chunks) {
+            writer.addDocument(toDocument(rulebookId, filename, chunk));
         }
+    }
+
+    private Document toDocument(RulebookId rulebookId, String filename, String chunk) {
+        Document doc = new Document();
+        doc.add(new StringField("rulebookId", rulebookId.value(), Field.Store.YES));
+        doc.add(new StringField("filename", filename, Field.Store.YES));
+        doc.add(new StoredField("text", chunk));
+        doc.add(new KnnVectorField("embedding", embeddingService.embed(chunk)));
+        return doc;
+    }
+
+    private List<RulebookContext> searchEnabledContexts(Set<String> enabledIds, float[] queryVector, int topK) throws IOException {
+        Directory directory = FSDirectory.open(indexPath);
+        if (!DirectoryReader.indexExists(directory)) {
+            return List.of();
+        }
+        try (DirectoryReader reader = DirectoryReader.open(directory)) {
+            return collectSearchResults(reader, enabledIds, queryVector, topK);
+        }
+    }
+
+    private List<RulebookContext> collectSearchResults(DirectoryReader reader,
+                                                       Set<String> enabledIds,
+                                                       float[] queryVector,
+                                                       int topK) throws IOException {
+        IndexSearcher searcher = new IndexSearcher(reader);
+        TopDocs topDocs = searcher.search(new KnnVectorQuery("embedding", queryVector, topK * 3), topK * 3);
+        return toRulebookContexts(searcher, topDocs.scoreDocs, enabledIds, topK);
+    }
+
+    private List<RulebookContext> toRulebookContexts(IndexSearcher searcher,
+                                                     ScoreDoc[] scoreDocs,
+                                                     Set<String> enabledIds,
+                                                     int topK) throws IOException {
+        List<RulebookContext> results = new ArrayList<>();
+        for (ScoreDoc scoreDoc : scoreDocs) {
+            if (appendIfEnabled(results, searcher.doc(scoreDoc.doc), enabledIds) && results.size() >= topK) {
+                return results;
+            }
+        }
+        return results;
+    }
+
+    private boolean appendIfEnabled(List<RulebookContext> results, Document doc, Set<String> enabledIds) {
+        String rulebookId = doc.get("rulebookId");
+        if (!enabledIds.contains(rulebookId)) {
+            return false;
+        }
+        results.add(new RulebookContext(RulebookId.of(rulebookId), doc.get("filename"), doc.get("text")));
+        return true;
     }
 }

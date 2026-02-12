@@ -21,17 +21,23 @@ public class LocalHashEmbeddingAdapter implements EmbeddingPort {
         if (text == null || text.isBlank()) {
             return vector;
         }
-        String normalized = text.toLowerCase(Locale.ROOT);
-        String[] tokens = normalized.split("\\s+");
-        for (String token : tokens) {
-            if (token.isBlank()) {
-                continue;
-            }
-            int bucket = Math.floorMod(hash(token), dimension);
-            vector[bucket] += 1.0f;
+        for (String token : tokenize(text)) {
+            addToken(vector, token);
         }
         normalize(vector);
         return vector;
+    }
+
+    private String[] tokenize(String text) {
+        return text.toLowerCase(Locale.ROOT).split("\\s+");
+    }
+
+    private void addToken(float[] vector, String token) {
+        if (token.isBlank()) {
+            return;
+        }
+        int bucket = Math.floorMod(hash(token), dimension);
+        vector[bucket] += 1.0f;
     }
 
     @Override

@@ -28,22 +28,30 @@ public class WebClientConfig {
     }
 
     private WebClient createWebClient(String baseUrl) {
-        ConnectionProvider provider = ConnectionProvider.builder("omypic-http")
-                .maxConnections(50)
-                .pendingAcquireTimeout(Duration.ofSeconds(30))
-                .build();
-
-        HttpClient httpClient = HttpClient.create(provider)
-                .responseTimeout(Duration.ofSeconds(60));
-
-        ExchangeStrategies strategies = ExchangeStrategies.builder()
-                .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(20 * 1024 * 1024))
-                .build();
-
+        ConnectionProvider provider = createConnectionProvider();
+        HttpClient httpClient = createHttpClient(provider);
+        ExchangeStrategies strategies = createExchangeStrategies();
         return WebClient.builder()
                 .baseUrl(baseUrl)
                 .clientConnector(new ReactorClientHttpConnector(httpClient))
                 .exchangeStrategies(strategies)
+                .build();
+    }
+
+    private ConnectionProvider createConnectionProvider() {
+        return ConnectionProvider.builder("omypic-http")
+                .maxConnections(50)
+                .pendingAcquireTimeout(Duration.ofSeconds(30))
+                .build();
+    }
+
+    private HttpClient createHttpClient(ConnectionProvider provider) {
+        return HttpClient.create(provider).responseTimeout(Duration.ofSeconds(60));
+    }
+
+    private ExchangeStrategies createExchangeStrategies() {
+        return ExchangeStrategies.builder()
+                .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(20 * 1024 * 1024))
                 .build();
     }
 }

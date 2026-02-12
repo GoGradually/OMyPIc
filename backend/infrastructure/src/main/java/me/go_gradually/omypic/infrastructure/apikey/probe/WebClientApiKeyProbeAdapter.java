@@ -24,30 +24,49 @@ public class WebClientApiKeyProbeAdapter implements ApiKeyProbePort {
     @Override
     public void probe(String provider, String apiKey, String model) throws Exception {
         try {
-            switch (provider) {
-                case "openai" -> openAiWebClient.get()
-                        .uri("/v1/models")
-                        .header("Authorization", "Bearer " + apiKey)
-                        .retrieve()
-                        .toBodilessEntity()
-                        .block();
-                case "gemini" -> geminiWebClient.get()
-                        .uri("/v1beta/models?key=" + apiKey)
-                        .retrieve()
-                        .toBodilessEntity()
-                        .block();
-                case "anthropic" -> anthropicWebClient.get()
-                        .uri("/v1/models")
-                        .header("x-api-key", apiKey)
-                        .header("anthropic-version", "2023-06-01")
-                        .retrieve()
-                        .toBodilessEntity()
-                        .block();
-                default -> throw new IllegalArgumentException("Unsupported provider");
-            }
+            probeProvider(provider, apiKey);
         } catch (WebClientResponseException ex) {
-            HttpStatusCode status = ex.getStatusCode();
-            throw new IllegalStateException("Verification failed with status " + status.value());
+            throw verificationFailed(ex.getStatusCode());
         }
+    }
+
+    private void probeProvider(String provider, String apiKey) {
+        switch (provider) {
+            case "openai" -> probeOpenAi(apiKey);
+            case "gemini" -> probeGemini(apiKey);
+            case "anthropic" -> probeAnthropic(apiKey);
+            default -> throw new IllegalArgumentException("Unsupported provider");
+        }
+    }
+
+    private void probeOpenAi(String apiKey) {
+        openAiWebClient.get()
+                .uri("/v1/models")
+                .header("Authorization", "Bearer " + apiKey)
+                .retrieve()
+                .toBodilessEntity()
+                .block();
+    }
+
+    private void probeGemini(String apiKey) {
+        geminiWebClient.get()
+                .uri("/v1beta/models?key=" + apiKey)
+                .retrieve()
+                .toBodilessEntity()
+                .block();
+    }
+
+    private void probeAnthropic(String apiKey) {
+        anthropicWebClient.get()
+                .uri("/v1/models")
+                .header("x-api-key", apiKey)
+                .header("anthropic-version", "2023-06-01")
+                .retrieve()
+                .toBodilessEntity()
+                .block();
+    }
+
+    private IllegalStateException verificationFailed(HttpStatusCode status) {
+        return new IllegalStateException("Verification failed with status " + status.value());
     }
 }

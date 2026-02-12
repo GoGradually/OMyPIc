@@ -56,15 +56,13 @@ public class QuestionGroupMongoAdapter implements QuestionGroupPort {
 
     private QuestionGroupAggregate toDomain(QuestionGroupDocument doc) {
         List<QuestionItemDocument> items = doc.getQuestions() == null ? List.of() : doc.getQuestions();
+        List<QuestionItem> questions = items.stream().map(this::toDomainItem).collect(Collectors.toList());
+        return rehydrate(doc, questions);
+    }
+
+    private QuestionGroupAggregate rehydrate(QuestionGroupDocument doc, List<QuestionItem> questions) {
         return QuestionGroupAggregate.rehydrate(
-                QuestionGroupId.of(doc.getId()),
-                doc.getName(),
-                doc.getTags(),
-                items.stream()
-                        .map(this::toDomainItem)
-                        .collect(Collectors.toList()),
-                doc.getCreatedAt(),
-                doc.getUpdatedAt()
+                QuestionGroupId.of(doc.getId()), doc.getName(), doc.getTags(), questions, doc.getCreatedAt(), doc.getUpdatedAt()
         );
     }
 

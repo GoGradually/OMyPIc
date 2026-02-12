@@ -27,6 +27,22 @@ public class OpenAiLlmClient implements LlmClient {
 
     @Override
     public String generate(String apiKey, String model, String systemPrompt, String userPrompt) throws Exception {
+        String response = requestOpenAi(apiKey, model, systemPrompt, userPrompt);
+        return extractContent(response);
+    }
+
+    private String requestOpenAi(String apiKey, String model, String systemPrompt, String userPrompt) {
+        Map<String, Object> payload = requestPayload(model, systemPrompt, userPrompt);
+        return webClient.post()
+                .uri("/v1/chat/completions")
+                .header("Authorization", "Bearer " + apiKey)
+                .bodyValue(payload)
+                .retrieve()
+                .bodyToMono(String.class)
+                .block();
+    }
+
+    private Map<String, Object> requestPayload(String model, String systemPrompt, String userPrompt) {
         Map<String, Object> payload = new HashMap<>();
         payload.put("model", model);
         payload.put("temperature", 0.2);
@@ -35,15 +51,10 @@ public class OpenAiLlmClient implements LlmClient {
                 Map.of("role", "system", "content", systemPrompt),
                 Map.of("role", "user", "content", userPrompt)
         ));
+        return payload;
+    }
 
-        String response = webClient.post()
-                .uri("/v1/chat/completions")
-                .header("Authorization", "Bearer " + apiKey)
-                .bodyValue(payload)
-                .retrieve()
-                .bodyToMono(String.class)
-                .block();
-
+    private String extractContent(String response) throws Exception {
         JsonNode root = objectMapper.readTree(response);
         JsonNode content = root.path("choices").path(0).path("message").path("content");
         if (content.isMissingNode()) {

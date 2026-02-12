@@ -27,13 +27,13 @@ public class AnthropicLlmClient implements LlmClient {
 
     @Override
     public String generate(String apiKey, String model, String systemPrompt, String userPrompt) throws Exception {
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("model", model);
-        payload.put("max_tokens", 1024);
-        payload.put("system", systemPrompt);
-        payload.put("messages", List.of(Map.of("role", "user", "content", userPrompt)));
+        String response = requestAnthropic(apiKey, model, systemPrompt, userPrompt);
+        return extractContent(response);
+    }
 
-        String response = webClient.post()
+    private String requestAnthropic(String apiKey, String model, String systemPrompt, String userPrompt) {
+        Map<String, Object> payload = requestPayload(model, systemPrompt, userPrompt);
+        return webClient.post()
                 .uri("/v1/messages")
                 .header("x-api-key", apiKey)
                 .header("anthropic-version", "2023-06-01")
@@ -41,7 +41,18 @@ public class AnthropicLlmClient implements LlmClient {
                 .retrieve()
                 .bodyToMono(String.class)
                 .block();
+    }
 
+    private Map<String, Object> requestPayload(String model, String systemPrompt, String userPrompt) {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("model", model);
+        payload.put("max_tokens", 1024);
+        payload.put("system", systemPrompt);
+        payload.put("messages", List.of(Map.of("role", "user", "content", userPrompt)));
+        return payload;
+    }
+
+    private String extractContent(String response) throws Exception {
         JsonNode root = objectMapper.readTree(response);
         JsonNode content = root.path("content").path(0).path("text");
         if (content.isMissingNode()) {

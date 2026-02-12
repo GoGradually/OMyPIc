@@ -27,6 +27,21 @@ public class GeminiLlmClient implements LlmClient {
 
     @Override
     public String generate(String apiKey, String model, String systemPrompt, String userPrompt) throws Exception {
+        String response = requestGemini(apiKey, model, systemPrompt, userPrompt);
+        return extractContent(response);
+    }
+
+    private String requestGemini(String apiKey, String model, String systemPrompt, String userPrompt) {
+        Map<String, Object> payload = requestPayload(systemPrompt, userPrompt);
+        return webClient.post()
+                .uri("/v1beta/models/" + model + ":generateContent?key=" + apiKey)
+                .bodyValue(payload)
+                .retrieve()
+                .bodyToMono(String.class)
+                .block();
+    }
+
+    private Map<String, Object> requestPayload(String systemPrompt, String userPrompt) {
         Map<String, Object> payload = new HashMap<>();
         String combined = systemPrompt + "\n\n" + userPrompt;
         payload.put("contents", List.of(Map.of(
@@ -34,14 +49,10 @@ public class GeminiLlmClient implements LlmClient {
                 "parts", List.of(Map.of("text", combined))
         )));
         payload.put("generationConfig", Map.of("temperature", 0.2));
+        return payload;
+    }
 
-        String response = webClient.post()
-                .uri("/v1beta/models/" + model + ":generateContent?key=" + apiKey)
-                .bodyValue(payload)
-                .retrieve()
-                .bodyToMono(String.class)
-                .block();
-
+    private String extractContent(String response) throws Exception {
         JsonNode root = objectMapper.readTree(response);
         JsonNode content = root.path("candidates").path(0).path("content").path("parts").path(0).path("text");
         if (content.isMissingNode()) {
