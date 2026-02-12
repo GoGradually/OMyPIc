@@ -1,7 +1,9 @@
 package me.go_gradually.omypic.infrastructure.rulebook.persistence.mongo;
 
+import me.go_gradually.omypic.domain.question.QuestionGroup;
 import me.go_gradually.omypic.domain.rulebook.Rulebook;
 import me.go_gradually.omypic.domain.rulebook.RulebookId;
+import me.go_gradually.omypic.domain.rulebook.RulebookScope;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -41,6 +43,8 @@ class RulebookMongoAdapterTest {
         assertEquals(1, result.size());
         assertEquals("r1", result.get(0).getId().value());
         assertEquals("rules.md", result.get(0).getFilename());
+        assertEquals(RulebookScope.QUESTION, result.get(0).getScope());
+        assertEquals(QuestionGroup.of("A"), result.get(0).getQuestionGroup());
         assertTrue(result.get(0).isEnabled());
     }
 
@@ -60,6 +64,8 @@ class RulebookMongoAdapterTest {
                 RulebookId.of("r1"),
                 "rules.md",
                 "/tmp/rules.md",
+                RulebookScope.QUESTION,
+                QuestionGroup.of("A"),
                 true,
                 Instant.parse("2026-02-01T00:00:00Z"),
                 Instant.parse("2026-02-01T00:00:00Z")
@@ -73,6 +79,8 @@ class RulebookMongoAdapterTest {
         assertEquals("r1", captor.getValue().getId());
         assertEquals("rules.md", captor.getValue().getFilename());
         assertEquals("/tmp/rules.md", captor.getValue().getPath());
+        assertEquals(RulebookScope.QUESTION, captor.getValue().getScope());
+        assertEquals("A", captor.getValue().getQuestionGroup());
 
         assertEquals("r1", saved.getId().value());
         assertTrue(saved.isEnabled());
@@ -90,6 +98,8 @@ class RulebookMongoAdapterTest {
         doc.setId("r1");
         doc.setFilename("rules.md");
         doc.setPath("/tmp/rules.md");
+        doc.setScope(RulebookScope.QUESTION);
+        doc.setQuestionGroup("A");
         doc.setEnabled(true);
         doc.setCreatedAt(Instant.parse("2026-02-01T00:00:00Z"));
         doc.setUpdatedAt(Instant.parse("2026-02-01T00:00:00Z"));

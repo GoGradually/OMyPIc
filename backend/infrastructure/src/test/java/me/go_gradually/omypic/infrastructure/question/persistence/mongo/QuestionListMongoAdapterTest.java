@@ -1,6 +1,7 @@
 package me.go_gradually.omypic.infrastructure.question.persistence.mongo;
 
 import me.go_gradually.omypic.domain.question.QuestionItem;
+import me.go_gradually.omypic.domain.question.QuestionGroup;
 import me.go_gradually.omypic.domain.question.QuestionItemId;
 import me.go_gradually.omypic.domain.question.QuestionList;
 import me.go_gradually.omypic.domain.question.QuestionListId;
@@ -72,7 +73,7 @@ class QuestionListMongoAdapterTest {
         QuestionList list = QuestionList.rehydrate(
                 QuestionListId.of("l1"),
                 "List",
-                List.of(QuestionItem.rehydrate(QuestionItemId.of("q1"), "Question", "A")),
+                List.of(QuestionItem.rehydrate(QuestionItemId.of("q1"), "Question", QuestionGroup.of("A"))),
                 Instant.parse("2026-02-01T00:00:00Z"),
                 Instant.parse("2026-02-01T00:00:00Z")
         );

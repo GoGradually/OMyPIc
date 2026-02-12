@@ -26,6 +26,7 @@ class AppPropertiesTest {
         properties.getFeedback().setExampleMinRatio(0.7);
         properties.getFeedback().setExampleMaxRatio(1.5);
         properties.getFeedback().setWrongnoteSummaryMaxChars(88);
+        properties.getFeedback().setWrongnoteWindowSize(33);
         properties.getIntegrations().getOpenai().setBaseUrl("http://openai.local");
         properties.getIntegrations().getGemini().setBaseUrl("http://gemini.local");
         properties.getIntegrations().getAnthropic().setBaseUrl("http://anthropic.local");
@@ -50,6 +51,7 @@ class AppPropertiesTest {
         assertEquals(0.7, properties.getExampleMinRatio());
         assertEquals(1.5, properties.getExampleMaxRatio());
         assertEquals(88, properties.getWrongnoteSummaryMaxChars());
+        assertEquals(33, properties.getWrongnoteWindowSize());
         assertEquals("http://openai.local", properties.getIntegrations().getOpenai().getBaseUrl());
         assertEquals("http://gemini.local", properties.getIntegrations().getGemini().getBaseUrl());
         assertEquals("http://anthropic.local", properties.getIntegrations().getAnthropic().getBaseUrl());
