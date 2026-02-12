@@ -182,27 +182,6 @@ public class RealtimeVoiceUseCase {
             sessionState.setFeedbackLanguage(FeedbackLanguage.of(settings.feedbackLanguage));
             String feedbackApiKey = firstNonBlank(settings.feedbackApiKey, context.apiKey);
 
-            List<TurnInput> feedbackInputs = List.of();
-            TurnBatchingPolicy.BatchReason batchReason = TurnBatchingPolicy.BatchReason.IMMEDIATE_MODE;
-            boolean residualBatch = false;
-            if (mode == ModeType.IMMEDIATE) {
-                feedbackInputs = List.of(turnInput);
-                batchReason = TurnBatchingPolicy.BatchReason.IMMEDIATE_MODE;
-            } else if (mode == ModeType.CONTINUOUS) {
-                context.appendContinuousTurn(turnInput);
-                TurnBatchingPolicy.BatchDecision decision = sessionState.decideFeedbackBatchOnAnswer();
-                batchReason = decision.reason();
-                if (decision.emitFeedback()) {
-                    feedbackInputs = context.pollContinuousTurns(sessionState.getContinuousBatchSize());
-                } else {
-                    context.send("feedback.skipped", Map.of(
-                            "sessionId", context.sessionId,
-                            "turnId", turnId,
-                            "reason", decision.reason().name()
-                    ));
-                }
-            }
-
             NextQuestion nextQuestion = null;
             boolean questionExhausted = false;
             SessionFlowPolicy.SessionAction nextAction = SessionFlowPolicy.SessionAction.askNext();
@@ -212,6 +191,30 @@ public class RealtimeVoiceUseCase {
                 nextAction = SessionFlowPolicy.decideAfterQuestionSelection(questionExhausted);
             }
 
+            boolean completedGroupThisTurn = mode == ModeType.CONTINUOUS
+                    && isContinuousGroupCompleted(turnInput, nextQuestion, questionExhausted);
+
+            List<TurnInput> feedbackInputs = List.of();
+            TurnBatchingPolicy.BatchReason batchReason = TurnBatchingPolicy.BatchReason.IMMEDIATE_MODE;
+            boolean residualBatch = false;
+            if (mode == ModeType.IMMEDIATE) {
+                feedbackInputs = List.of(turnInput);
+                batchReason = TurnBatchingPolicy.BatchReason.IMMEDIATE_MODE;
+            } else if (mode == ModeType.CONTINUOUS) {
+                context.appendContinuousTurn(turnInput);
+                TurnBatchingPolicy.BatchDecision decision = sessionState.decideFeedbackBatchOnTurn(completedGroupThisTurn);
+                batchReason = decision.reason();
+                if (decision.emitFeedback()) {
+                    feedbackInputs = context.pollAllContinuousTurns();
+                } else {
+                    context.send("feedback.skipped", Map.of(
+                            "sessionId", context.sessionId,
+                            "turnId", turnId,
+                            "reason", decision.reason().name()
+                    ));
+                }
+            }
+
             if (!feedbackInputs.isEmpty()) {
                 List<FeedbackItem> feedbackItems = generateFeedbackItems(settings, context.sessionId, feedbackApiKey, feedbackInputs);
                 if (!context.closed.get() && !context.forcedStopped.get() && !isCancelled(context, turnId)) {
@@ -219,7 +222,7 @@ public class RealtimeVoiceUseCase {
                             context.sessionId,
                             turnId,
                             mode,
-                            mode == ModeType.CONTINUOUS ? sessionState.getContinuousBatchSize() : feedbackItems.size(),
+                            mode == ModeType.CONTINUOUS ? sessionState.getContinuousBatchSize() : 1,
                             batchReason,
                             residualBatch,
                             feedbackItems,
@@ -283,19 +286,24 @@ public class RealtimeVoiceUseCase {
     }
 
     private NextQuestion requestNextQuestion(RuntimeContext context, long turnId, SessionState sessionState) {
-        String listId = resolveActiveQuestionListId(sessionState);
-        NextQuestion nextQuestion = questionUseCase.nextQuestion(listId, context.sessionId);
+        NextQuestion nextQuestion = questionUseCase.nextQuestion(context.sessionId);
         context.updateCurrentQuestion(nextQuestion);
         context.send("question.prompt", questionPayload(context.sessionId, turnId, sessionState.getMode(), nextQuestion));
         return nextQuestion;
     }
 
-    private String resolveActiveQuestionListId(SessionState state) {
-        String listId = state.getActiveQuestionListId();
-        if (isBlank(listId)) {
-            throw new IllegalStateException("질문 리스트를 먼저 선택하고 학습 모드를 적용해 주세요.");
+    private boolean isContinuousGroupCompleted(TurnInput turnInput, NextQuestion nextQuestion, boolean exhausted) {
+        if (turnInput == null || isBlank(turnInput.questionGroupId())) {
+            return false;
         }
-        return listId;
+        if (exhausted || nextQuestion == null || nextQuestion.isSkipped()) {
+            return true;
+        }
+        String nextGroupId = nextQuestion.getGroupId();
+        if (isBlank(nextGroupId)) {
+            return false;
+        }
+        return !turnInput.questionGroupId().equals(nextGroupId);
     }
 
     private FeedbackCommand feedbackCommand(RuntimeSettings settings, String sessionId, String text) {
@@ -364,7 +372,7 @@ public class RealtimeVoiceUseCase {
     private Map<String, Object> feedbackPayload(String sessionId,
                                                 long turnId,
                                                 ModeType mode,
-                                                int batchSize,
+                                                int groupBatchSize,
                                                 TurnBatchingPolicy.BatchReason reason,
                                                 boolean residual,
                                                 List<FeedbackItem> items,
@@ -372,16 +380,16 @@ public class RealtimeVoiceUseCase {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("sessionId", sessionId);
         payload.put("turnId", turnId);
-        payload.put("policy", feedbackPolicyPayload(mode, batchSize, reason));
+        payload.put("policy", feedbackPolicyPayload(mode, groupBatchSize, reason));
         payload.put("batch", feedbackBatchPayload(items, residual));
         payload.put("nextAction", nextActionPayload(nextAction));
         return payload;
     }
 
-    private Map<String, Object> feedbackPolicyPayload(ModeType mode, int batchSize, TurnBatchingPolicy.BatchReason reason) {
+    private Map<String, Object> feedbackPolicyPayload(ModeType mode, int groupBatchSize, TurnBatchingPolicy.BatchReason reason) {
         Map<String, Object> policy = new LinkedHashMap<>();
         policy.put("mode", mode == null ? ModeType.IMMEDIATE.name() : mode.name());
-        policy.put("batchSize", Math.max(1, batchSize));
+        policy.put("groupBatchSize", Math.max(1, groupBatchSize));
         policy.put("reason", reason == null ? "" : reason.name());
         return policy;
     }
@@ -496,7 +504,11 @@ public class RealtimeVoiceUseCase {
         return isBlank(message) ? "Unknown realtime error" : message;
     }
 
-    private record TurnInput(String questionId, String questionText, QuestionGroup questionGroup, String answerText) {
+    private record TurnInput(String questionId,
+                             String questionText,
+                             String questionGroupId,
+                             QuestionGroup questionGroup,
+                             String answerText) {
         private static TurnInput fromQuestion(NextQuestion question) {
             if (question == null) {
                 return empty();
@@ -504,13 +516,14 @@ public class RealtimeVoiceUseCase {
             return new TurnInput(
                     safe(question.getQuestionId()),
                     safe(question.getText()),
+                    safe(question.getGroupId()),
                     QuestionGroup.fromNullable(question.getGroup()),
                     ""
             );
         }
 
         private static TurnInput empty() {
-            return new TurnInput("", "", null, "");
+            return new TurnInput("", "", "", null, "");
         }
 
         private static String safe(String value) {
@@ -606,6 +619,7 @@ public class RealtimeVoiceUseCase {
             return new TurnInput(
                     question.questionId(),
                     question.questionText(),
+                    question.questionGroupId(),
                     question.questionGroup(),
                     answerText == null ? "" : answerText.trim()
             );
@@ -613,19 +627,6 @@ public class RealtimeVoiceUseCase {
 
         private void appendContinuousTurn(TurnInput turnInput) {
             continuousTurns.addLast(turnInput);
-        }
-
-        private List<TurnInput> pollContinuousTurns(int batchSize) {
-            int size = Math.max(1, batchSize);
-            List<TurnInput> batch = new ArrayList<>();
-            while (batch.size() < size) {
-                TurnInput item = continuousTurns.pollFirst();
-                if (item == null) {
-                    break;
-                }
-                batch.add(item);
-            }
-            return batch;
         }
 
         private List<TurnInput> pollAllContinuousTurns() {

@@ -11,6 +11,7 @@ import me.go_gradually.omypic.application.shared.port.AsyncExecutor;
 import me.go_gradually.omypic.application.shared.port.MetricsPort;
 import me.go_gradually.omypic.domain.feedback.Feedback;
 import me.go_gradually.omypic.domain.question.QuestionGroup;
+import me.go_gradually.omypic.domain.session.ModeType;
 import me.go_gradually.omypic.domain.session.SessionId;
 import me.go_gradually.omypic.domain.session.SessionState;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,11 +28,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -56,20 +53,14 @@ class RealtimeVoiceUseCaseTest {
 
     private RealtimeVoiceUseCase useCase;
     private RealtimeAudioEventListener listener;
+    private SessionState sessionState;
 
     @BeforeEach
     void setUp() {
-        SessionState sessionState = new SessionState(SessionId.of("s1"));
-        sessionState.setActiveQuestionListId("list-1");
+        sessionState = new SessionState(SessionId.of("s1"));
         when(sessionUseCase.getOrCreate("s1")).thenReturn(sessionState);
 
-        lenient().when(questionUseCase.nextQuestion("list-1", "s1")).thenAnswer(invocation -> {
-            me.go_gradually.omypic.application.question.model.NextQuestion next = new me.go_gradually.omypic.application.question.model.NextQuestion();
-            next.setQuestionId("q-1");
-            next.setText("first question");
-            next.setGroup("A");
-            return next;
-        });
+        lenient().when(questionUseCase.nextQuestion("s1")).thenAnswer(invocation -> question("q-1", "first question", "g-1", "A"));
 
         when(realtimePolicy.realtimeConversationModel()).thenReturn("gpt-realtime-mini");
         when(realtimePolicy.realtimeSttModel()).thenReturn("gpt-4o-mini-transcribe");
@@ -132,12 +123,10 @@ class RealtimeVoiceUseCaseTest {
         assertEquals("ko", captor.getValue().getFeedbackLanguage());
 
         Map<String, Object> firstFeedback = feedbackPayloads.get(0);
-        assertTrue(firstFeedback.containsKey("policy"));
-        assertTrue(firstFeedback.containsKey("batch"));
-        assertTrue(firstFeedback.containsKey("nextAction"));
         @SuppressWarnings("unchecked")
         Map<String, Object> policy = (Map<String, Object>) firstFeedback.get("policy");
         assertEquals("IMMEDIATE", policy.get("mode"));
+        assertTrue(policy.containsKey("groupBatchSize"));
 
         ArgumentCaptor<RealtimeAudioOpenCommand> openCaptor = ArgumentCaptor.forClass(RealtimeAudioOpenCommand.class);
         verify(realtimeAudioGateway).open(openCaptor.capture(), any());
@@ -250,8 +239,8 @@ class RealtimeVoiceUseCaseTest {
         stubRealtimeSpeechSuccess();
         Feedback feedback = Feedback.of("summary", List.of("p1", "p2", "p3"), "example", List.of());
         when(feedbackUseCase.generateFeedbackForTurn(anyString(), any(), anyString(), any(QuestionGroup.class), anyString(), anyInt())).thenReturn(feedback);
-        when(questionUseCase.nextQuestion("list-1", "s1"))
-                .thenReturn(question("q-1", "first question", "A"))
+        when(questionUseCase.nextQuestion("s1"))
+                .thenReturn(question("q-1", "first question", "g-1", "A"))
                 .thenReturn(skippedQuestion());
 
         List<String> eventTypes = new CopyOnWriteArrayList<>();
@@ -273,6 +262,43 @@ class RealtimeVoiceUseCaseTest {
         verify(realtimeAudioSession, atLeastOnce()).close();
     }
 
+    @Test
+    void continuousMode_emitsResidualBatchWhenQuestionExhaustsBeforeBatchBoundary() {
+        stubAsyncExecutorRunsInline();
+        stubRealtimeSpeechSuccess();
+        sessionState.applyModeUpdate(ModeType.CONTINUOUS, 2);
+
+        Feedback feedback = Feedback.of("summary", List.of("p1", "p2", "p3"), "example", List.of());
+        when(feedbackUseCase.generateFeedbackForTurn(anyString(), any(), anyString(), any(QuestionGroup.class), anyString(), anyInt()))
+                .thenReturn(feedback);
+        when(questionUseCase.nextQuestion("s1"))
+                .thenReturn(question("q-1", "first question", "g-1", "A"))
+                .thenReturn(question("q-2", "second question", "g-1", "A"))
+                .thenReturn(skippedQuestion());
+
+        List<Map<String, Object>> feedbackPayloads = new CopyOnWriteArrayList<>();
+        useCase.open(startCommand(), (event, payload) -> {
+            if ("feedback.final".equals(event) && payload instanceof Map<?, ?> map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> typed = (Map<String, Object>) map;
+                feedbackPayloads.add(typed);
+            }
+            return true;
+        });
+
+        listener.onFinalTranscript("answer-1");
+        listener.onFinalTranscript("answer-2");
+
+        assertEquals(1, feedbackPayloads.size(), "only residual feedback should be emitted at exhaustion");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> policy = (Map<String, Object>) feedbackPayloads.get(0).get("policy");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> batch = (Map<String, Object>) feedbackPayloads.get(0).get("batch");
+        assertEquals("EXHAUSTED_WITH_REMAINDER", policy.get("reason"));
+        assertEquals(Boolean.TRUE, batch.get("isResidual"));
+        assertEquals(2, batch.get("size"));
+    }
+
     private RealtimeStartCommand startCommand() {
         RealtimeStartCommand command = new RealtimeStartCommand();
         command.setSessionId("s1");
@@ -280,12 +306,16 @@ class RealtimeVoiceUseCaseTest {
         return command;
     }
 
-    private me.go_gradually.omypic.application.question.model.NextQuestion question(String questionId, String text, String group) {
+    private me.go_gradually.omypic.application.question.model.NextQuestion question(String questionId,
+                                                                                     String text,
+                                                                                     String groupId,
+                                                                                     String groupName) {
         me.go_gradually.omypic.application.question.model.NextQuestion next =
                 new me.go_gradually.omypic.application.question.model.NextQuestion();
         next.setQuestionId(questionId);
         next.setText(text);
-        next.setGroup(group);
+        next.setGroupId(groupId);
+        next.setGroup(groupName);
         return next;
     }
 
