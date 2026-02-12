@@ -1,7 +1,6 @@
 package me.go_gradually.omypic.application.realtime.usecase;
 
 import me.go_gradually.omypic.application.feedback.model.FeedbackCommand;
-import me.go_gradually.omypic.application.feedback.model.FeedbackResult;
 import me.go_gradually.omypic.application.feedback.usecase.FeedbackUseCase;
 import me.go_gradually.omypic.application.question.usecase.QuestionUseCase;
 import me.go_gradually.omypic.application.realtime.model.*;
@@ -11,6 +10,7 @@ import me.go_gradually.omypic.application.session.usecase.SessionUseCase;
 import me.go_gradually.omypic.application.shared.port.AsyncExecutor;
 import me.go_gradually.omypic.application.shared.port.MetricsPort;
 import me.go_gradually.omypic.domain.feedback.Feedback;
+import me.go_gradually.omypic.domain.question.QuestionGroup;
 import me.go_gradually.omypic.domain.session.SessionId;
 import me.go_gradually.omypic.domain.session.SessionState;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,13 +22,16 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -96,11 +99,17 @@ class RealtimeVoiceUseCaseTest {
         stubAsyncExecutorRunsInline();
         stubRealtimeSpeechSuccess();
         Feedback feedback = Feedback.of("summary", List.of("p1", "p2", "p3"), "example", List.of("[rule] evidence"));
-        when(feedbackUseCase.generateFeedback(anyString(), any())).thenReturn(FeedbackResult.generated(feedback));
+        when(feedbackUseCase.generateFeedbackForTurn(anyString(), any(), anyString(), any(QuestionGroup.class), anyString(), anyInt())).thenReturn(feedback);
 
         List<String> eventTypes = new CopyOnWriteArrayList<>();
+        List<Map<String, Object>> feedbackPayloads = new CopyOnWriteArrayList<>();
         RealtimeVoiceSession session = useCase.open(startCommand(), (event, payload) -> {
             eventTypes.add(event);
+            if ("feedback.final".equals(event) && payload instanceof Map<?, ?> map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> typed = (Map<String, Object>) map;
+                feedbackPayloads.add(typed);
+            }
             return true;
         });
 
@@ -117,10 +126,18 @@ class RealtimeVoiceUseCaseTest {
         verify(metrics).recordRealtimeTurnLatency(any());
 
         ArgumentCaptor<FeedbackCommand> captor = ArgumentCaptor.forClass(FeedbackCommand.class);
-        verify(feedbackUseCase).generateFeedback(eq("api-key"), captor.capture());
+        verify(feedbackUseCase).generateFeedbackForTurn(eq("api-key"), captor.capture(), anyString(), any(QuestionGroup.class), anyString(), eq(2));
         assertEquals("openai", captor.getValue().getProvider());
         assertEquals("gpt-realtime-mini", captor.getValue().getModel());
         assertEquals("ko", captor.getValue().getFeedbackLanguage());
+
+        Map<String, Object> firstFeedback = feedbackPayloads.get(0);
+        assertTrue(firstFeedback.containsKey("policy"));
+        assertTrue(firstFeedback.containsKey("batch"));
+        assertTrue(firstFeedback.containsKey("nextAction"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> policy = (Map<String, Object>) firstFeedback.get("policy");
+        assertEquals("IMMEDIATE", policy.get("mode"));
 
         ArgumentCaptor<RealtimeAudioOpenCommand> openCaptor = ArgumentCaptor.forClass(RealtimeAudioOpenCommand.class);
         verify(realtimeAudioGateway).open(openCaptor.capture(), any());
@@ -134,7 +151,7 @@ class RealtimeVoiceUseCaseTest {
         stubAsyncExecutorRunsInline();
         stubRealtimeSpeechSuccess();
         Feedback feedback = Feedback.of("summary", List.of("p1", "p2", "p3"), "example", List.of());
-        when(feedbackUseCase.generateFeedback(anyString(), any())).thenReturn(FeedbackResult.generated(feedback));
+        when(feedbackUseCase.generateFeedbackForTurn(anyString(), any(), anyString(), any(QuestionGroup.class), anyString(), anyInt())).thenReturn(feedback);
 
         List<String> eventTypes = new ArrayList<>();
         RealtimeVoiceSession session = useCase.open(startCommand(), (event, payload) -> {
@@ -155,7 +172,7 @@ class RealtimeVoiceUseCaseTest {
         listener.onFinalTranscript("answer");
 
         ArgumentCaptor<FeedbackCommand> feedbackCaptor = ArgumentCaptor.forClass(FeedbackCommand.class);
-        verify(feedbackUseCase).generateFeedback(eq("gemini-key"), feedbackCaptor.capture());
+        verify(feedbackUseCase).generateFeedbackForTurn(eq("gemini-key"), feedbackCaptor.capture(), anyString(), any(QuestionGroup.class), anyString(), eq(2));
         assertEquals("gemini", feedbackCaptor.getValue().getProvider());
         assertEquals("gemini-2.0-flash", feedbackCaptor.getValue().getModel());
         assertEquals("en", feedbackCaptor.getValue().getFeedbackLanguage());
@@ -186,7 +203,8 @@ class RealtimeVoiceUseCaseTest {
     void appendAudio_doesNotAutoCancelResponse() {
         stubAsyncExecutorRunsInline();
         stubRealtimeSpeechSuccess();
-        when(feedbackUseCase.generateFeedback(anyString(), any())).thenReturn(FeedbackResult.skipped());
+        when(feedbackUseCase.generateFeedbackForTurn(anyString(), any(), anyString(), any(QuestionGroup.class), anyString(), anyInt()))
+                .thenReturn(Feedback.of("summary", List.of("p1", "p2", "p3"), "example", List.of()));
         List<String> eventTypes = new CopyOnWriteArrayList<>();
         RealtimeVoiceSession session = useCase.open(startCommand(), (event, payload) -> {
             eventTypes.add(event);
@@ -211,7 +229,7 @@ class RealtimeVoiceUseCaseTest {
             return null;
         }).when(realtimeAudioSession).speakText(anyLong(), anyString(), anyString());
         Feedback feedback = Feedback.of("summary", List.of("p1", "p2", "p3"), "example", List.of());
-        when(feedbackUseCase.generateFeedback(anyString(), any())).thenReturn(FeedbackResult.generated(feedback));
+        when(feedbackUseCase.generateFeedbackForTurn(anyString(), any(), anyString(), any(QuestionGroup.class), anyString(), anyInt())).thenReturn(feedback);
 
         List<String> eventTypes = new CopyOnWriteArrayList<>();
         RealtimeVoiceSession session = useCase.open(startCommand(), (event, payload) -> {
@@ -226,11 +244,53 @@ class RealtimeVoiceUseCaseTest {
         session.close();
     }
 
+    @Test
+    void autoStopsSessionWhenQuestionsAreExhausted() {
+        stubAsyncExecutorRunsInline();
+        stubRealtimeSpeechSuccess();
+        Feedback feedback = Feedback.of("summary", List.of("p1", "p2", "p3"), "example", List.of());
+        when(feedbackUseCase.generateFeedbackForTurn(anyString(), any(), anyString(), any(QuestionGroup.class), anyString(), anyInt())).thenReturn(feedback);
+        when(questionUseCase.nextQuestion("list-1", "s1"))
+                .thenReturn(question("q-1", "first question", "A"))
+                .thenReturn(skippedQuestion());
+
+        List<String> eventTypes = new CopyOnWriteArrayList<>();
+        List<Map<String, Object>> stoppedPayloads = new CopyOnWriteArrayList<>();
+        useCase.open(startCommand(), (event, payload) -> {
+            eventTypes.add(event);
+            if ("session.stopped".equals(event) && payload instanceof Map<?, ?> map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> typed = (Map<String, Object>) map;
+                stoppedPayloads.add(typed);
+            }
+            return true;
+        });
+
+        listener.onFinalTranscript("answer");
+
+        assertTrue(eventTypes.contains("session.stopped"));
+        assertEquals("QUESTION_EXHAUSTED", stoppedPayloads.get(0).get("reason"));
+        verify(realtimeAudioSession, atLeastOnce()).close();
+    }
+
     private RealtimeStartCommand startCommand() {
         RealtimeStartCommand command = new RealtimeStartCommand();
         command.setSessionId("s1");
         command.setApiKey("api-key");
         return command;
+    }
+
+    private me.go_gradually.omypic.application.question.model.NextQuestion question(String questionId, String text, String group) {
+        me.go_gradually.omypic.application.question.model.NextQuestion next =
+                new me.go_gradually.omypic.application.question.model.NextQuestion();
+        next.setQuestionId(questionId);
+        next.setText(text);
+        next.setGroup(group);
+        return next;
+    }
+
+    private me.go_gradually.omypic.application.question.model.NextQuestion skippedQuestion() {
+        return me.go_gradually.omypic.application.question.model.NextQuestion.skipped();
     }
 
     private void stubAsyncExecutorRunsInline() {
