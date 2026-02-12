@@ -23,7 +23,6 @@ import me.go_gradually.omypic.application.wrongnote.port.WrongNoteRecentQueuePor
 import me.go_gradually.omypic.application.wrongnote.usecase.WrongNoteUseCase;
 import me.go_gradually.omypic.domain.rulebook.RulebookContext;
 import me.go_gradually.omypic.domain.rulebook.RulebookId;
-import me.go_gradually.omypic.domain.session.ModeType;
 import me.go_gradually.omypic.domain.session.SessionId;
 import me.go_gradually.omypic.domain.session.SessionState;
 import me.go_gradually.omypic.domain.wrongnote.WrongNote;
@@ -167,34 +166,6 @@ class VoiceChainIntegrationTest {
         assertEquals("STT failed", job.getError());
         assertTrue(sink.events.contains("error:STT failed"));
         assertEquals(1, metrics.sttErrorCount);
-    }
-
-    @Test
-    void feedback_skipsInMockExamMode_withoutCallingLlm() throws Exception {
-        TestMetrics metrics = new TestMetrics();
-        InMemorySessionStore sessionStore = new InMemorySessionStore();
-        WrongNoteUseCase wrongNoteUseCase = new WrongNoteUseCase(
-                new InMemoryWrongNotePort(),
-                new InMemoryWrongNoteRecentQueuePort(),
-                new FixedFeedbackPolicy()
-        );
-
-        when(llmClient.provider()).thenReturn("openai");
-
-        FeedbackUseCase feedbackUseCase = new FeedbackUseCase(
-                List.of(llmClient),
-                rulebookUseCase,
-                new FixedFeedbackPolicy(),
-                metrics,
-                sessionStore,
-                wrongNoteUseCase
-        );
-
-        sessionStore.getOrCreate(SessionId.of("s4")).applyModeUpdate(ModeType.MOCK_EXAM, null);
-        FeedbackResult result = feedbackUseCase.generateFeedback("key", feedbackCommand("s4", "openai", "ko", "답변"));
-
-        assertFalse(result.isGenerated());
-        verify(llmClient, never()).generate(anyString(), anyString(), anyString(), anyString());
     }
 
     private record FixedSttPolicy(long maxBytes, int retryMax) implements SttPolicy {

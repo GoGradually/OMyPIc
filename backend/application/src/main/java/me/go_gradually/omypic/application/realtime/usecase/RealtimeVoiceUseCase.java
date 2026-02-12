@@ -201,9 +201,6 @@ public class RealtimeVoiceUseCase {
                             "reason", decision.reason().name()
                     ));
                 }
-            } else if (mode == ModeType.MOCK_EXAM) {
-                context.appendMockTurn(turnInput);
-                batchReason = TurnBatchingPolicy.BatchReason.WAITING_FOR_MOCK_EXAM_COMPLETION;
             }
 
             NextQuestion nextQuestion = null;
@@ -228,30 +225,9 @@ public class RealtimeVoiceUseCase {
                             feedbackItems,
                             nextAction
                     ));
-                    streamSpeech(context, turnId, toTtsText(feedbackItems));
-                }
-            }
-
-            if (mode == ModeType.MOCK_EXAM && nextQuestion != null && nextQuestion.isMockExamCompleted() && !context.forcedStopped.get()) {
-                if (!sessionState.isMockFinalFeedbackGenerated()) {
-                    List<TurnInput> mockTurns = context.pollMockTurns();
-                    if (!mockTurns.isEmpty()) {
-                        List<FeedbackItem> mockFinalItems = generateFeedbackItems(settings, context.sessionId, feedbackApiKey, mockTurns);
-                        if (!isCancelled(context, turnId) && !context.closed.get() && !context.forcedStopped.get()) {
-                            context.send("feedback.final", feedbackPayload(
-                                    context.sessionId,
-                                    turnId,
-                                    mode,
-                                    mockFinalItems.size(),
-                                    TurnBatchingPolicy.BatchReason.MOCK_EXAM_FINAL,
-                                    false,
-                                    mockFinalItems,
-                                    nextAction
-                            ));
-                            streamSpeech(context, turnId, toTtsText(mockFinalItems));
-                        }
+                    if (mode != ModeType.CONTINUOUS) {
+                        streamSpeech(context, turnId, toTtsText(feedbackItems));
                     }
-                    sessionState.markMockFinalFeedbackGenerated();
                 }
             }
 
@@ -271,7 +247,9 @@ public class RealtimeVoiceUseCase {
                                 remainingItems,
                                 nextAction
                         ));
-                        streamSpeech(context, turnId, toTtsText(remainingItems));
+                        if (mode != ModeType.CONTINUOUS) {
+                            streamSpeech(context, turnId, toTtsText(remainingItems));
+                        }
                     }
                 }
             }
@@ -297,13 +275,7 @@ public class RealtimeVoiceUseCase {
     }
 
     private boolean shouldPromptNextQuestion(ModeType mode) {
-        if (mode == ModeType.IMMEDIATE) {
-            return true;
-        }
-        if (mode == ModeType.CONTINUOUS) {
-            return true;
-        }
-        return mode == ModeType.MOCK_EXAM;
+        return mode == ModeType.IMMEDIATE || mode == ModeType.CONTINUOUS;
     }
 
     private boolean isQuestionExhausted(NextQuestion nextQuestion) {
@@ -434,9 +406,6 @@ public class RealtimeVoiceUseCase {
     }
 
     private String resolveExhaustedReason(NextQuestion question) {
-        if (question != null && !isBlank(question.getMockExamCompletionReason())) {
-            return question.getMockExamCompletionReason();
-        }
         return SessionStopReason.QUESTION_EXHAUSTED.code();
     }
 
@@ -606,7 +575,6 @@ public class RealtimeVoiceUseCase {
         private final AtomicLong cancelledThroughTurn = new AtomicLong(0);
         private final AtomicLong autoStopAfterTurn = new AtomicLong(-1L);
         private final Deque<TurnInput> continuousTurns = new ConcurrentLinkedDeque<>();
-        private final Deque<TurnInput> mockTurns = new ConcurrentLinkedDeque<>();
         private final Map<Long, AtomicLong> pendingSpeechCounts = new ConcurrentHashMap<>();
         private final Set<Long> turnsReadyForCompletion = ConcurrentHashMap.newKeySet();
         private final Set<Long> completedTurns = ConcurrentHashMap.newKeySet();
@@ -664,19 +632,6 @@ public class RealtimeVoiceUseCase {
             List<TurnInput> turns = new ArrayList<>();
             TurnInput item;
             while ((item = continuousTurns.pollFirst()) != null) {
-                turns.add(item);
-            }
-            return turns;
-        }
-
-        private void appendMockTurn(TurnInput turnInput) {
-            mockTurns.addLast(turnInput);
-        }
-
-        private List<TurnInput> pollMockTurns() {
-            List<TurnInput> turns = new ArrayList<>();
-            TurnInput item;
-            while ((item = mockTurns.pollFirst()) != null) {
                 turns.add(item);
             }
             return turns;
