@@ -8,4 +8,8 @@ public interface FeedbackPolicy {
     double getExampleMaxRatio();
 
     int getWrongnoteSummaryMaxChars();
+
+    default int getWrongnoteWindowSize() {
+        return 30;
+    }
 }

@@ -13,6 +13,7 @@ import me.go_gradually.omypic.application.wrongnote.usecase.WrongNoteUseCase;
 import me.go_gradually.omypic.domain.feedback.Feedback;
 import me.go_gradually.omypic.domain.feedback.FeedbackConstraints;
 import me.go_gradually.omypic.domain.feedback.FeedbackLanguage;
+import me.go_gradually.omypic.domain.question.QuestionGroup;
 import me.go_gradually.omypic.domain.rulebook.RulebookContext;
 import me.go_gradually.omypic.domain.session.SessionId;
 import me.go_gradually.omypic.domain.session.SessionState;
@@ -53,7 +54,8 @@ public class FeedbackUseCase {
             return FeedbackResult.skipped();
         }
         String inputText = state.resolveFeedbackInputText(command.getText());
-        return generateFeedbackInternal(apiKey, command, language, inputText);
+        List<RulebookContext> contexts = rulebookUseCase.searchContexts(inputText);
+        return FeedbackResult.generated(generateFeedbackInternal(apiKey, command, language, inputText, contexts));
     }
 
     public FeedbackResult generateMockExamFinalFeedback(String apiKey, FeedbackCommand command) {
@@ -67,19 +69,34 @@ public class FeedbackUseCase {
             throw new IllegalStateException("Mock final feedback already generated");
         }
         String inputText = state.buildMockFinalFeedbackInput();
-        FeedbackResult result = generateFeedbackInternal(apiKey, command, language, inputText);
+        List<RulebookContext> contexts = rulebookUseCase.searchContexts(inputText);
+        FeedbackResult result = FeedbackResult.generated(generateFeedbackInternal(apiKey, command, language, inputText, contexts));
         state.markMockFinalFeedbackGenerated();
         return result;
     }
 
-    private FeedbackResult generateFeedbackInternal(String apiKey,
-                                                    FeedbackCommand command,
-                                                    FeedbackLanguage language,
-                                                    String inputText) {
+    public Feedback generateFeedbackForTurn(String apiKey,
+                                            FeedbackCommand command,
+                                            String questionText,
+                                            QuestionGroup questionGroup,
+                                            String answerText,
+                                            int maxRulebookDocuments) {
+        FeedbackLanguage language = FeedbackLanguage.of(command.getFeedbackLanguage());
+        String query = buildTurnQuery(questionText, answerText);
+        List<RulebookContext> contexts = rulebookUseCase.searchContextsForTurn(questionGroup, query, maxRulebookDocuments);
+        String inputText = buildTurnInput(questionText, answerText, language.value());
+        return generateFeedbackInternal(apiKey, command, language, inputText, contexts);
+    }
+
+    private Feedback generateFeedbackInternal(String apiKey,
+                                              FeedbackCommand command,
+                                              FeedbackLanguage language,
+                                              String inputText,
+                                              List<RulebookContext> contexts) {
         String text = inputText == null ? "" : inputText;
+        List<RulebookContext> safeContexts = contexts == null ? List.of() : contexts;
         Instant start = Instant.now();
-        List<RulebookContext> contexts = rulebookUseCase.searchContexts(text);
-        String systemPrompt = buildSystemPrompt(language.value(), contexts);
+        String systemPrompt = buildSystemPrompt(language.value(), safeContexts);
         String userPrompt = buildUserPrompt(text, language.value());
 
         String provider = command.getProvider() == null ? "" : command.getProvider().toLowerCase(Locale.ROOT);
@@ -94,10 +111,10 @@ public class FeedbackUseCase {
                     feedbackPolicy.getExampleMinRatio(),
                     feedbackPolicy.getExampleMaxRatio()
             );
-            feedback = feedback.normalized(constraints, text, language, contexts);
+            feedback = feedback.normalized(constraints, text, language, safeContexts);
             metrics.recordFeedbackLatency(Duration.between(start, Instant.now()));
             wrongNoteUseCase.addFeedback(feedback);
-            return FeedbackResult.generated(feedback);
+            return feedback;
         } catch (Exception e) {
             metrics.incrementFeedbackError();
             throw new IllegalStateException("LLM feedback failed", e);
@@ -123,6 +140,32 @@ public class FeedbackUseCase {
     private String buildUserPrompt(String text, String language) {
         String label = "en".equalsIgnoreCase(language) ? "User answer" : "사용자 답변";
         return label + ":\n" + text;
+    }
+
+    private String buildTurnQuery(String questionText, String answerText) {
+        String q = questionText == null ? "" : questionText.trim();
+        String a = answerText == null ? "" : answerText.trim();
+        if (!q.isBlank() && !a.isBlank()) {
+            return q + "\n" + a;
+        }
+        if (!a.isBlank()) {
+            return a;
+        }
+        return q;
+    }
+
+    private String buildTurnInput(String questionText, String answerText, String language) {
+        boolean english = "en".equalsIgnoreCase(language);
+        String questionLabel = english ? "Question" : "질문";
+        String answerLabel = english ? "Answer" : "답변";
+        String safeQuestion = questionText == null ? "" : questionText.trim();
+        String safeAnswer = answerText == null ? "" : answerText.trim();
+        StringBuilder sb = new StringBuilder();
+        if (!safeQuestion.isBlank()) {
+            sb.append(questionLabel).append(":\n").append(safeQuestion).append('\n');
+        }
+        sb.append(answerLabel).append(":\n").append(safeAnswer);
+        return sb.toString().trim();
     }
 
     private Feedback parseFeedback(String raw) throws Exception {
