@@ -1,5 +1,6 @@
 package me.go_gradually.omypic.infrastructure.rulebook.persistence.mongo;
 
+import me.go_gradually.omypic.domain.rulebook.RulebookScope;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
 
@@ -11,6 +12,8 @@ public class RulebookDocument {
     private String id;
     private String filename;
     private String path;
+    private RulebookScope scope = RulebookScope.MAIN;
+    private String questionGroup;
     private boolean enabled = true;
     private Instant createdAt = Instant.now();
     private Instant updatedAt = Instant.now();
@@ -37,6 +40,22 @@ public class RulebookDocument {
 
     public void setPath(String path) {
         this.path = path;
+    }
+
+    public RulebookScope getScope() {
+        return scope;
+    }
+
+    public void setScope(RulebookScope scope) {
+        this.scope = scope;
+    }
+
+    public String getQuestionGroup() {
+        return questionGroup;
+    }
+
+    public void setQuestionGroup(String questionGroup) {
+        this.questionGroup = questionGroup;
     }
 
     public boolean isEnabled() {

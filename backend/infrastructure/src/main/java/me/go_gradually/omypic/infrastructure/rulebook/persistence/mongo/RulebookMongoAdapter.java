@@ -1,8 +1,10 @@
 package me.go_gradually.omypic.infrastructure.rulebook.persistence.mongo;
 
 import me.go_gradually.omypic.application.rulebook.port.RulebookPort;
+import me.go_gradually.omypic.domain.question.QuestionGroup;
 import me.go_gradually.omypic.domain.rulebook.Rulebook;
 import me.go_gradually.omypic.domain.rulebook.RulebookId;
+import me.go_gradually.omypic.domain.rulebook.RulebookScope;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -45,6 +47,8 @@ public class RulebookMongoAdapter implements RulebookPort {
                 RulebookId.of(doc.getId()),
                 doc.getFilename(),
                 doc.getPath(),
+                doc.getScope(),
+                QuestionGroup.fromNullable(doc.getQuestionGroup()),
                 doc.isEnabled(),
                 doc.getCreatedAt(),
                 doc.getUpdatedAt()
@@ -56,6 +60,8 @@ public class RulebookMongoAdapter implements RulebookPort {
         doc.setId(rulebook.getId().value());
         doc.setFilename(rulebook.getFilename());
         doc.setPath(rulebook.getPath());
+        doc.setScope(rulebook.getScope());
+        doc.setQuestionGroup(rulebook.getQuestionGroup() == null ? null : rulebook.getQuestionGroup().value());
         doc.setEnabled(rulebook.isEnabled());
         doc.setCreatedAt(rulebook.getCreatedAt());
         doc.setUpdatedAt(rulebook.getUpdatedAt());

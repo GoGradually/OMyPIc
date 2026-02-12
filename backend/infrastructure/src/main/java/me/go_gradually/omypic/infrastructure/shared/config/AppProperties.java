@@ -108,6 +108,11 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
     }
 
     @Override
+    public int getWrongnoteWindowSize() {
+        return feedback.getWrongnoteWindowSize();
+    }
+
+    @Override
     public String realtimeConversationModel() {
         return realtime.getConversationModel();
     }
@@ -232,6 +237,7 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
         private double exampleMinRatio = 0.8;
         private double exampleMaxRatio = 1.2;
         private int wrongnoteSummaryMaxChars = 255;
+        private int wrongnoteWindowSize = 30;
 
         public int getSummaryMaxChars() {
             return summaryMaxChars;
@@ -263,6 +269,14 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
 
         public void setWrongnoteSummaryMaxChars(int wrongnoteSummaryMaxChars) {
             this.wrongnoteSummaryMaxChars = wrongnoteSummaryMaxChars;
+        }
+
+        public int getWrongnoteWindowSize() {
+            return wrongnoteWindowSize;
+        }
+
+        public void setWrongnoteWindowSize(int wrongnoteWindowSize) {
+            this.wrongnoteWindowSize = wrongnoteWindowSize;
         }
     }
 

@@ -25,12 +25,14 @@ public class WrongNoteRecentQueueMongoAdapter implements WrongNoteRecentQueuePor
 
     @Override
     public void saveGlobalQueue(List<String> patterns) {
+        // WrongNoteWindow 복원
         WrongNoteRecentQueueDocument doc = repository.findById(GLOBAL_ID).orElseGet(() -> {
             WrongNoteRecentQueueDocument created = new WrongNoteRecentQueueDocument();
             created.setId(GLOBAL_ID);
             return created;
         });
 
+        // 최대 30개까지만 저장
         List<String> input = patterns == null ? List.of() : patterns;
         int fromIndex = Math.max(0, input.size() - 30);
         doc.setPatterns(new ArrayList<>(input.subList(fromIndex, input.size())));

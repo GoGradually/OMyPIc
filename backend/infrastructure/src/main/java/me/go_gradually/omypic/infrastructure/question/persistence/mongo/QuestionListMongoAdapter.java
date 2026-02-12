@@ -2,6 +2,7 @@ package me.go_gradually.omypic.infrastructure.question.persistence.mongo;
 
 import me.go_gradually.omypic.application.question.port.QuestionListPort;
 import me.go_gradually.omypic.domain.question.QuestionItem;
+import me.go_gradually.omypic.domain.question.QuestionGroup;
 import me.go_gradually.omypic.domain.question.QuestionItemId;
 import me.go_gradually.omypic.domain.question.QuestionList;
 import me.go_gradually.omypic.domain.question.QuestionListId;
@@ -71,7 +72,7 @@ public class QuestionListMongoAdapter implements QuestionListPort {
         return QuestionItem.rehydrate(
                 QuestionItemId.of(doc.getId()),
                 doc.getText(),
-                doc.getGroup()
+                QuestionGroup.fromNullable(doc.getGroup())
         );
     }
 
@@ -79,7 +80,7 @@ public class QuestionListMongoAdapter implements QuestionListPort {
         QuestionItemDocument doc = new QuestionItemDocument();
         doc.setId(item.getId().value());
         doc.setText(item.getText());
-        doc.setGroup(item.getGroup());
+        doc.setGroup(item.getGroup() == null ? null : item.getGroup().value());
         return doc;
     }
 }
