@@ -1,19 +1,21 @@
 package me.go_gradually.omypic.presentation.question.controller;
 
 import me.go_gradually.omypic.application.question.model.NextQuestion;
+import me.go_gradually.omypic.application.question.model.QuestionTagStat;
 import me.go_gradually.omypic.application.question.usecase.QuestionUseCase;
-import me.go_gradually.omypic.domain.question.QuestionList;
+import me.go_gradually.omypic.domain.question.QuestionGroupAggregate;
 import me.go_gradually.omypic.presentation.question.dto.NextQuestionResponse;
+import me.go_gradually.omypic.presentation.question.dto.QuestionGroupRequest;
+import me.go_gradually.omypic.presentation.question.dto.QuestionGroupResponse;
 import me.go_gradually.omypic.presentation.question.dto.QuestionItemRequest;
 import me.go_gradually.omypic.presentation.question.dto.QuestionItemResponse;
-import me.go_gradually.omypic.presentation.question.dto.QuestionListResponse;
+import me.go_gradually.omypic.presentation.question.dto.QuestionTagStatResponse;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
-import java.util.Map;
 
 @RestController
-@RequestMapping("/api/questions")
+@RequestMapping("/api/question-groups")
 public class QuestionController {
     private final QuestionUseCase service;
 
@@ -22,67 +24,88 @@ public class QuestionController {
     }
 
     @GetMapping
-    public List<QuestionListResponse> list() {
+    public List<QuestionGroupResponse> list() {
         return service.list().stream()
                 .map(this::toResponse)
                 .toList();
     }
 
     @PostMapping
-    public QuestionListResponse create(@RequestBody Map<String, String> body) {
-        return toResponse(service.create(body.getOrDefault("name", "Untitled")));
+    public QuestionGroupResponse create(@RequestBody QuestionGroupRequest body) {
+        return toResponse(service.createGroup(body.getName(), body.getTags()));
     }
 
-    @PutMapping("/{id}")
-    public QuestionListResponse rename(@PathVariable("id") String id, @RequestBody Map<String, String> body) {
-        return toResponse(service.updateName(id, body.getOrDefault("name", "Untitled")));
+    @PutMapping("/{groupId}")
+    public QuestionGroupResponse updateGroup(@PathVariable("groupId") String groupId,
+                                             @RequestBody QuestionGroupRequest body) {
+        return toResponse(service.updateGroup(groupId, body.getName(), body.getTags()));
     }
 
-    @DeleteMapping("/{id}")
-    public void delete(@PathVariable("id") String id) {
-        service.delete(id);
+    @DeleteMapping("/{groupId}")
+    public void deleteGroup(@PathVariable("groupId") String groupId) {
+        service.deleteGroup(groupId);
     }
 
-    @PostMapping("/{id}/items")
-    public QuestionListResponse addQuestion(@PathVariable("id") String id, @RequestBody QuestionItemRequest item) {
-        return toResponse(service.addQuestion(id, item.getText(), item.getGroup()));
+    @PostMapping("/{groupId}/items")
+    public QuestionGroupResponse addQuestion(@PathVariable("groupId") String groupId,
+                                             @RequestBody QuestionItemRequest item) {
+        return toResponse(service.addQuestion(groupId, item.getText(), item.getQuestionType()));
     }
 
-    @PutMapping("/{id}/items/{itemId}")
-    public QuestionListResponse updateQuestion(@PathVariable("id") String id,
-                                               @PathVariable("itemId") String itemId,
-                                               @RequestBody QuestionItemRequest item) {
-        return toResponse(service.updateQuestion(id, itemId, item.getText(), item.getGroup()));
+    @PutMapping("/{groupId}/items/{itemId}")
+    public QuestionGroupResponse updateQuestion(@PathVariable("groupId") String groupId,
+                                                @PathVariable("itemId") String itemId,
+                                                @RequestBody QuestionItemRequest item) {
+        return toResponse(service.updateQuestion(groupId, itemId, item.getText(), item.getQuestionType()));
     }
 
-    @DeleteMapping("/{id}/items/{itemId}")
-    public QuestionListResponse deleteQuestion(@PathVariable("id") String id, @PathVariable("itemId") String itemId) {
-        return toResponse(service.deleteQuestion(id, itemId));
+    @DeleteMapping("/{groupId}/items/{itemId}")
+    public QuestionGroupResponse deleteQuestion(@PathVariable("groupId") String groupId,
+                                                @PathVariable("itemId") String itemId) {
+        return toResponse(service.deleteQuestion(groupId, itemId));
     }
 
-    @GetMapping("/{id}/next")
-    public NextQuestionResponse nextQuestion(@PathVariable("id") String id, @RequestParam("sessionId") String sessionId) {
-        return toResponse(service.nextQuestion(id, sessionId));
+    @GetMapping("/next")
+    public NextQuestionResponse nextQuestion(@RequestParam("sessionId") String sessionId) {
+        return toResponse(service.nextQuestion(sessionId));
+    }
+
+    @GetMapping("/tags/stats")
+    public List<QuestionTagStatResponse> tagStats() {
+        return service.listTagStats().stream()
+                .map(this::toResponse)
+                .toList();
     }
 
     private NextQuestionResponse toResponse(NextQuestion result) {
         NextQuestionResponse response = new NextQuestionResponse();
         response.setQuestionId(result.getQuestionId());
         response.setText(result.getText());
+        response.setGroupId(result.getGroupId());
         response.setGroup(result.getGroup());
+        response.setQuestionType(result.getQuestionType());
         response.setSkipped(result.isSkipped());
         return response;
     }
 
-    private QuestionListResponse toResponse(QuestionList list) {
-        QuestionListResponse response = new QuestionListResponse();
-        response.setId(list.getId().value());
-        response.setName(list.getName());
-        response.setQuestions(list.getQuestions().stream()
+    private QuestionTagStatResponse toResponse(QuestionTagStat stat) {
+        QuestionTagStatResponse response = new QuestionTagStatResponse();
+        response.setTag(stat.tag());
+        response.setGroupCount(stat.groupCount());
+        response.setSelectable(stat.selectable());
+        return response;
+    }
+
+    private QuestionGroupResponse toResponse(QuestionGroupAggregate group) {
+        QuestionGroupResponse response = new QuestionGroupResponse();
+        response.setId(group.getId().value());
+        response.setName(group.getName());
+        response.setTags(group.getTags().stream().sorted().toList());
+        response.setQuestions(group.getQuestions().stream()
                 .map(this::toResponse)
                 .toList());
-        response.setCreatedAt(list.getCreatedAt());
-        response.setUpdatedAt(list.getUpdatedAt());
+        response.setCreatedAt(group.getCreatedAt());
+        response.setUpdatedAt(group.getUpdatedAt());
         return response;
     }
 
@@ -90,7 +113,7 @@ public class QuestionController {
         QuestionItemResponse response = new QuestionItemResponse();
         response.setId(item.getId().value());
         response.setText(item.getText());
-        response.setGroup(item.getGroup() == null ? null : item.getGroup().value());
+        response.setQuestionType(item.getQuestionType());
         return response;
     }
 }

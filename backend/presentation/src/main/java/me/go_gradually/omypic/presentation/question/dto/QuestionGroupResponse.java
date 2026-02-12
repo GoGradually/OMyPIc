@@ -3,9 +3,10 @@ package me.go_gradually.omypic.presentation.question.dto;
 import java.time.Instant;
 import java.util.List;
 
-public class QuestionListResponse {
+public class QuestionGroupResponse {
     private String id;
     private String name;
+    private List<String> tags;
     private List<QuestionItemResponse> questions;
     private Instant createdAt;
     private Instant updatedAt;
@@ -24,6 +25,14 @@ public class QuestionListResponse {
 
     public void setName(String name) {
         this.name = name;
+    }
+
+    public List<String> getTags() {
+        return tags;
+    }
+
+    public void setTags(List<String> tags) {
+        this.tags = tags;
     }
 
     public List<QuestionItemResponse> getQuestions() {

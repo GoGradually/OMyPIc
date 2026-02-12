@@ -2,12 +2,12 @@ package me.go_gradually.omypic.presentation.question.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import me.go_gradually.omypic.application.question.model.NextQuestion;
+import me.go_gradually.omypic.application.question.model.QuestionTagStat;
 import me.go_gradually.omypic.application.question.usecase.QuestionUseCase;
+import me.go_gradually.omypic.domain.question.QuestionGroupAggregate;
+import me.go_gradually.omypic.domain.question.QuestionGroupId;
 import me.go_gradually.omypic.domain.question.QuestionItem;
-import me.go_gradually.omypic.domain.question.QuestionGroup;
 import me.go_gradually.omypic.domain.question.QuestionItemId;
-import me.go_gradually.omypic.domain.question.QuestionList;
-import me.go_gradually.omypic.domain.question.QuestionListId;
 import me.go_gradually.omypic.presentation.TestBootApplication;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -45,61 +45,44 @@ class QuestionControllerTest {
 
     @Test
     void list_returnsMappedResponse() throws Exception {
-        QuestionList list = QuestionList.rehydrate(
-                QuestionListId.of("l1"),
-                "My List",
-                List.of(QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", QuestionGroup.of("A"))),
+        QuestionGroupAggregate group = QuestionGroupAggregate.rehydrate(
+                QuestionGroupId.of("g1"),
+                "Travel",
+                List.of("travel", "habit"),
+                List.of(QuestionItem.rehydrate(QuestionItemId.of("q1"), "Q1", "habit")),
                 Instant.parse("2026-02-01T00:00:00Z"),
                 Instant.parse("2026-02-01T00:00:00Z")
         );
-        when(questionUseCase.list()).thenReturn(List.of(list));
+        when(questionUseCase.list()).thenReturn(List.of(group));
 
-        mockMvc.perform(get("/api/questions"))
+        mockMvc.perform(get("/api/question-groups"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].id").value("l1"))
-                .andExpect(jsonPath("$[0].name").value("My List"))
+                .andExpect(jsonPath("$[0].id").value("g1"))
+                .andExpect(jsonPath("$[0].name").value("Travel"))
+                .andExpect(jsonPath("$[0].tags[0]").value("habit"))
                 .andExpect(jsonPath("$[0].questions[0].id").value("q1"));
     }
 
     @Test
-    void create_usesUntitledDefault_whenNameMissing() throws Exception {
-        QuestionList created = QuestionList.rehydrate(
-                QuestionListId.of("l2"),
-                "Untitled",
+    void create_passesNameAndTagsToUseCase() throws Exception {
+        QuestionGroupAggregate created = QuestionGroupAggregate.rehydrate(
+                QuestionGroupId.of("g2"),
+                "New Group",
+                List.of("travel"),
                 List.of(),
                 Instant.parse("2026-02-02T00:00:00Z"),
                 Instant.parse("2026-02-02T00:00:00Z")
         );
-        when(questionUseCase.create("Untitled")).thenReturn(created);
+        when(questionUseCase.createGroup(eq("New Group"), eq(List.of("travel")))).thenReturn(created);
 
-        mockMvc.perform(post("/api/questions")
+        mockMvc.perform(post("/api/question-groups")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(Map.of())))
+                        .content(objectMapper.writeValueAsString(Map.of("name", "New Group", "tags", List.of("travel")))))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.id").value("l2"))
-                .andExpect(jsonPath("$.name").value("Untitled"));
+                .andExpect(jsonPath("$.id").value("g2"))
+                .andExpect(jsonPath("$.name").value("New Group"));
 
-        verify(questionUseCase).create("Untitled");
-    }
-
-    @Test
-    void rename_usesUntitledDefault_whenNameMissing() throws Exception {
-        QuestionList renamed = QuestionList.rehydrate(
-                QuestionListId.of("l3"),
-                "Untitled",
-                List.of(),
-                Instant.parse("2026-02-03T00:00:00Z"),
-                Instant.parse("2026-02-03T00:00:00Z")
-        );
-        when(questionUseCase.updateName("l3", "Untitled")).thenReturn(renamed);
-
-        mockMvc.perform(put("/api/questions/l3")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(Map.of())))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.name").value("Untitled"));
-
-        verify(questionUseCase).updateName("l3", "Untitled");
+        verify(questionUseCase).createGroup("New Group", List.of("travel"));
     }
 
     @Test
@@ -107,41 +90,58 @@ class QuestionControllerTest {
         NextQuestion next = new NextQuestion();
         next.setQuestionId("q9");
         next.setText("What?");
-        next.setGroup("B");
+        next.setGroupId("g9");
+        next.setGroup("Travel");
+        next.setQuestionType("habit");
         next.setSkipped(false);
-        when(questionUseCase.nextQuestion("list-1", "s1")).thenReturn(next);
+        when(questionUseCase.nextQuestion("s1")).thenReturn(next);
 
-        mockMvc.perform(get("/api/questions/list-1/next").param("sessionId", "s1"))
+        mockMvc.perform(get("/api/question-groups/next").param("sessionId", "s1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.questionId").value("q9"))
                 .andExpect(jsonPath("$.text").value("What?"))
-                .andExpect(jsonPath("$.group").value("B"))
-                .andExpect(jsonPath("$.skipped").value(false))
-                .andExpect(jsonPath("$.mockExamCompleted").doesNotExist())
-                .andExpect(jsonPath("$.mockExamCompletionReason").doesNotExist());
+                .andExpect(jsonPath("$.groupId").value("g9"))
+                .andExpect(jsonPath("$.group").value("Travel"))
+                .andExpect(jsonPath("$.questionType").value("habit"))
+                .andExpect(jsonPath("$.skipped").value(false));
     }
 
     @Test
     void addQuestion_passesBodyToUseCase() throws Exception {
-        QuestionList updated = QuestionList.rehydrate(
-                QuestionListId.of("l4"),
-                "List",
-                List.of(QuestionItem.rehydrate(QuestionItemId.of("q2"), "new question", QuestionGroup.of("G"))),
+        QuestionGroupAggregate updated = QuestionGroupAggregate.rehydrate(
+                QuestionGroupId.of("g4"),
+                "Group",
+                List.of("travel"),
+                List.of(QuestionItem.rehydrate(QuestionItemId.of("q2"), "new question", "compare")),
                 Instant.parse("2026-02-04T00:00:00Z"),
                 Instant.parse("2026-02-04T00:00:00Z")
         );
-        when(questionUseCase.addQuestion(eq("l4"), eq("new question"), eq("G"))).thenReturn(updated);
+        when(questionUseCase.addQuestion(eq("g4"), eq("new question"), eq("compare"))).thenReturn(updated);
 
-        mockMvc.perform(post("/api/questions/l4/items")
+        mockMvc.perform(post("/api/question-groups/g4/items")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(Map.of("text", "new question", "group", "G"))))
+                        .content(objectMapper.writeValueAsString(Map.of("text", "new question", "questionType", "compare"))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.questions[0].id").value("q2"));
 
         ArgumentCaptor<String> textCaptor = ArgumentCaptor.forClass(String.class);
-        ArgumentCaptor<String> groupCaptor = ArgumentCaptor.forClass(String.class);
-        verify(questionUseCase).addQuestion(eq("l4"), textCaptor.capture(), groupCaptor.capture());
+        ArgumentCaptor<String> typeCaptor = ArgumentCaptor.forClass(String.class);
+        verify(questionUseCase).addQuestion(eq("g4"), textCaptor.capture(), typeCaptor.capture());
         assertEquals("new question", textCaptor.getValue());
-        assertEquals("G", groupCaptor.getValue());
+        assertEquals("compare", typeCaptor.getValue());
+    }
+
+    @Test
+    void tagStats_mapsUseCaseResponse() throws Exception {
+        when(questionUseCase.listTagStats()).thenReturn(List.of(
+                new QuestionTagStat("habit", 1, true),
+                new QuestionTagStat("travel", 2, true)
+        ));
+
+        mockMvc.perform(get("/api/question-groups/tags/stats"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].tag").value("habit"))
+                .andExpect(jsonPath("$[0].groupCount").value(1))
+                .andExpect(jsonPath("$[0].selectable").value(true));
     }
 }
