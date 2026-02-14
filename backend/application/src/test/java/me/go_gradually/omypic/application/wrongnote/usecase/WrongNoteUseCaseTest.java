@@ -3,7 +3,11 @@ package me.go_gradually.omypic.application.wrongnote.usecase;
 import me.go_gradually.omypic.application.feedback.policy.FeedbackPolicy;
 import me.go_gradually.omypic.application.wrongnote.port.WrongNotePort;
 import me.go_gradually.omypic.application.wrongnote.port.WrongNoteRecentQueuePort;
+import me.go_gradually.omypic.domain.feedback.CorrectionDetail;
+import me.go_gradually.omypic.domain.feedback.Corrections;
 import me.go_gradually.omypic.domain.feedback.Feedback;
+import me.go_gradually.omypic.domain.feedback.RecommendationDetail;
+import me.go_gradually.omypic.domain.feedback.Recommendations;
 import me.go_gradually.omypic.domain.wrongnote.WrongNote;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -43,7 +47,8 @@ class WrongNoteUseCaseTest {
     @Test
     void addFeedback_incrementsDuplicatePatternCount() {
         stubAddFeedbackDependencies();
-        useCase.addFeedback(Feedback.of("summary", List.of("Grammar: tense", "Grammar: tense"), "", List.of()));
+        useCase.addFeedback(feedbackWithSinglePattern("tense"));
+        useCase.addFeedback(feedbackWithSinglePattern("tense"));
 
         WrongNote note = storage.get("Grammar: tense");
         assertEquals(2, note.getCount());
@@ -54,7 +59,7 @@ class WrongNoteUseCaseTest {
         stubAddFeedbackDependencies();
         String longPoint = "x".repeat(150);
 
-        useCase.addFeedback(Feedback.of("summary", List.of(longPoint), "", List.of()));
+        useCase.addFeedback(feedbackWithSinglePattern(longPoint));
 
         String savedPattern = storage.keySet().iterator().next();
         assertEquals(119, savedPattern.length());
@@ -65,10 +70,10 @@ class WrongNoteUseCaseTest {
         stubAddFeedbackDependencies();
         stubDeleteByIdFromStorage();
         for (int i = 0; i < 101; i++) {
-            useCase.addFeedback(Feedback.of("summary", List.of("pattern-" + i), "", List.of()));
+            useCase.addFeedback(feedbackWithSinglePattern("pattern-" + i));
         }
 
-        assertNull(storage.get("pattern-0"));
+        assertNull(storage.get("Grammar: pattern-0"));
         assertEquals(100, storage.size());
     }
 
@@ -78,24 +83,24 @@ class WrongNoteUseCaseTest {
         when(feedbackPolicy.getWrongnoteWindowSize()).thenReturn(2);
         stubDeleteByIdFromStorage();
 
-        useCase.addFeedback(Feedback.of("summary", List.of("A"), "", List.of()));
-        useCase.addFeedback(Feedback.of("summary", List.of("B"), "", List.of()));
-        useCase.addFeedback(Feedback.of("summary", List.of("C"), "", List.of()));
+        useCase.addFeedback(feedbackWithSinglePattern("A"));
+        useCase.addFeedback(feedbackWithSinglePattern("B"));
+        useCase.addFeedback(feedbackWithSinglePattern("C"));
 
-        assertEquals(List.of("B", "C"), queueStorage);
-        assertNull(storage.get("A"));
+        assertEquals(List.of("Grammar: B", "Grammar: C"), queueStorage);
+        assertNull(storage.get("Grammar: A"));
     }
 
     @Test
     void addFeedback_decrementsExistingCountWhenEvictedFromQueue() {
         stubAddFeedbackDependencies();
-        useCase.addFeedback(Feedback.of("summary", List.of("A"), "", List.of()));
-        useCase.addFeedback(Feedback.of("summary", List.of("A"), "", List.of()));
+        useCase.addFeedback(feedbackWithSinglePattern("A"));
+        useCase.addFeedback(feedbackWithSinglePattern("A"));
         for (int i = 0; i < 99; i++) {
-            useCase.addFeedback(Feedback.of("summary", List.of("B-" + i), "", List.of()));
+            useCase.addFeedback(feedbackWithSinglePattern("B-" + i));
         }
 
-        WrongNote note = storage.get("A");
+        WrongNote note = storage.get("Grammar: A");
         assertEquals(1, note.getCount());
     }
 
@@ -103,14 +108,14 @@ class WrongNoteUseCaseTest {
     void list_returnsDescendingByCount() {
         stubAddFeedbackDependencies();
         stubFindAllFromStorage();
-        useCase.addFeedback(Feedback.of("summary", List.of("A"), "", List.of()));
-        useCase.addFeedback(Feedback.of("summary", List.of("A"), "", List.of()));
-        useCase.addFeedback(Feedback.of("summary", List.of("A"), "", List.of()));
-        useCase.addFeedback(Feedback.of("summary", List.of("B"), "", List.of()));
+        useCase.addFeedback(feedbackWithSinglePattern("A"));
+        useCase.addFeedback(feedbackWithSinglePattern("A"));
+        useCase.addFeedback(feedbackWithSinglePattern("A"));
+        useCase.addFeedback(feedbackWithSinglePattern("B"));
 
         List<WrongNote> notes = useCase.list();
 
-        assertEquals("A", notes.get(0).getPattern());
+        assertEquals("Grammar: A", notes.get(0).getPattern());
         assertEquals(3, notes.get(0).getCount());
         assertEquals(1, notes.get(1).getCount());
     }
@@ -118,7 +123,7 @@ class WrongNoteUseCaseTest {
     @Test
     void addFeedback_savesQueueState() {
         stubAddFeedbackDependencies();
-        useCase.addFeedback(Feedback.of("summary", List.of("A"), "", List.of()));
+        useCase.addFeedback(feedbackWithSinglePattern("A"));
 
         verify(recentQueueStore).saveGlobalQueue(any());
     }
@@ -151,6 +156,24 @@ class WrongNoteUseCaseTest {
         assertEquals(1, fillerNote.getCount());
         assertEquals(1, adjectiveNote.getCount());
         assertEquals(1, adverbNote.getCount());
+    }
+
+    private Feedback feedbackWithSinglePattern(String issue) {
+        return Feedback.of(
+                "summary",
+                new Corrections(
+                        new CorrectionDetail(issue, ""),
+                        new CorrectionDetail("", ""),
+                        new CorrectionDetail("", "")
+                ),
+                new Recommendations(
+                        new RecommendationDetail("", ""),
+                        new RecommendationDetail("", ""),
+                        new RecommendationDetail("", "")
+                ),
+                "",
+                List.of()
+        );
     }
 
     private void stubAddFeedbackDependencies() {

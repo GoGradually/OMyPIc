@@ -28,8 +28,16 @@ describe('voiceEvent', () => {
                         questionGroup: 'A',
                         answerText: '답변',
                         summary: '요약',
-                        correctionPoints: ['a', 'b'],
-                        recommendation: ['c']
+                        corrections: {
+                            grammar: {issue: 'a', fix: 'b'},
+                            expression: {issue: 'c', fix: 'd'},
+                            logic: {issue: 'e', fix: 'f'}
+                        },
+                        recommendations: {
+                            filler: {term: 'Well', usage: 'u1'},
+                            adjective: {term: 'vivid', usage: 'u2'},
+                            adverb: {term: 'definitely', usage: 'u3'}
+                        }
                     }
                 ]
             },
@@ -58,15 +66,31 @@ describe('voiceEvent', () => {
                     questionGroup: 'A',
                     answerText: '답변',
                     summary: '요약',
-                    correctionPoints: ['a', 'b'],
-                    recommendation: ['c'],
+                    corrections: {
+                        grammar: {issue: 'a', fix: 'b'},
+                        expression: {issue: 'c', fix: 'd'},
+                        logic: {issue: 'e', fix: 'f'}
+                    },
+                    recommendations: {
+                        filler: {term: 'Well', usage: 'u1'},
+                        adjective: {term: 'vivid', usage: 'u2'},
+                        adverb: {term: 'definitely', usage: 'u3'}
+                    },
                     exampleAnswer: '',
                     rulebookEvidence: []
                 }
             ],
             summary: '요약',
-            correctionPoints: ['a', 'b'],
-            recommendation: ['c'],
+            corrections: {
+                grammar: {issue: 'a', fix: 'b'},
+                expression: {issue: 'c', fix: 'd'},
+                logic: {issue: 'e', fix: 'f'}
+            },
+            recommendations: {
+                filler: {term: 'Well', usage: 'u1'},
+                adjective: {term: 'vivid', usage: 'u2'},
+                adverb: {term: 'definitely', usage: 'u3'}
+            },
             exampleAnswer: '',
             rulebookEvidence: []
         })

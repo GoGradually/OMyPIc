@@ -3,6 +3,8 @@ package me.go_gradually.omypic.application.wrongnote.usecase;
 import me.go_gradually.omypic.application.feedback.policy.FeedbackPolicy;
 import me.go_gradually.omypic.application.wrongnote.port.WrongNotePort;
 import me.go_gradually.omypic.application.wrongnote.port.WrongNoteRecentQueuePort;
+import me.go_gradually.omypic.domain.feedback.CorrectionDetail;
+import me.go_gradually.omypic.domain.feedback.RecommendationDetail;
 import me.go_gradually.omypic.domain.feedback.Feedback;
 import me.go_gradually.omypic.domain.shared.util.TextUtils;
 import me.go_gradually.omypic.domain.wrongnote.WrongNote;
@@ -27,13 +29,50 @@ public class WrongNoteUseCase {
 
     public synchronized void addFeedback(Feedback response) {
         WrongNoteWindow window = loadWindow();
-        for (String point : response.getCorrectionPoints()) {
-            applyCorrectionPoint(window, point);
-        }
-        for (String point : response.getRecommendation()) {
-            applyCorrectionPoint(window, point);
-        }
+        applyIfPresent(window, correctionPoint("Grammar", response.getCorrections().grammar()));
+        applyIfPresent(window, correctionPoint("Expression", response.getCorrections().expression()));
+        applyIfPresent(window, correctionPoint("Logic", response.getCorrections().logic()));
+        applyIfPresent(window, recommendationPoint("Filler", response.getRecommendations().filler()));
+        applyIfPresent(window, recommendationPoint("Adjective", response.getRecommendations().adjective()));
+        applyIfPresent(window, recommendationPoint("Adverb", response.getRecommendations().adverb()));
         recentQueueStore.saveGlobalQueue(window.snapshot());
+    }
+
+    private void applyIfPresent(WrongNoteWindow window, String point) {
+        if (point == null || point.isBlank()) {
+            return;
+        }
+        applyCorrectionPoint(window, point);
+    }
+
+    private String correctionPoint(String category, CorrectionDetail detail) {
+        String issue = detail == null ? "" : detail.issue();
+        String fix = detail == null ? "" : detail.fix();
+        if (!issue.isBlank() && !fix.isBlank()) {
+            return category + ": " + issue + " | " + fix;
+        }
+        if (!issue.isBlank()) {
+            return category + ": " + issue;
+        }
+        if (!fix.isBlank()) {
+            return category + ": " + fix;
+        }
+        return "";
+    }
+
+    private String recommendationPoint(String category, RecommendationDetail detail) {
+        String term = detail == null ? "" : detail.term();
+        String usage = detail == null ? "" : detail.usage();
+        if (!term.isBlank() && !usage.isBlank()) {
+            return category + ": " + term + " - " + usage;
+        }
+        if (!term.isBlank()) {
+            return category + ": " + term;
+        }
+        if (!usage.isBlank()) {
+            return category + ": " + usage;
+        }
+        return "";
     }
 
     private WrongNoteWindow loadWindow() {

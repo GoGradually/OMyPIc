@@ -4,6 +4,7 @@ import me.go_gradually.omypic.application.feedback.model.FeedbackCommand;
 import me.go_gradually.omypic.application.feedback.model.FeedbackResult;
 import me.go_gradually.omypic.application.feedback.policy.FeedbackPolicy;
 import me.go_gradually.omypic.application.feedback.port.LlmClient;
+import me.go_gradually.omypic.application.feedback.port.LlmGenerateResult;
 import me.go_gradually.omypic.application.feedback.usecase.FeedbackUseCase;
 import me.go_gradually.omypic.application.rulebook.usecase.RulebookUseCase;
 import me.go_gradually.omypic.application.session.port.SessionStorePort;
@@ -21,6 +22,7 @@ import me.go_gradually.omypic.application.stt.usecase.SttUseCase;
 import me.go_gradually.omypic.application.wrongnote.port.WrongNotePort;
 import me.go_gradually.omypic.application.wrongnote.port.WrongNoteRecentQueuePort;
 import me.go_gradually.omypic.application.wrongnote.usecase.WrongNoteUseCase;
+import me.go_gradually.omypic.domain.feedback.Feedback;
 import me.go_gradually.omypic.domain.rulebook.RulebookContext;
 import me.go_gradually.omypic.domain.rulebook.RulebookId;
 import me.go_gradually.omypic.domain.session.SessionId;
@@ -86,7 +88,16 @@ class VoiceChainIntegrationTest {
                 .thenReturn("This is my answer.");
         when(llmClient.provider()).thenReturn("openai");
         when(llmClient.generate(anyString(), anyString(), anyString(), anyString()))
-                .thenReturn("{\"summary\":\"summary\",\"correctionPoints\":[\"Grammar: tense\",\"Expression: clearer wording\",\"Logic: add one reason\"],\"recommendation\":[\"Filler: Well - Use it naturally.\",\"Adjective: vivid - Add detail.\",\"Adverb: definitely - Show confidence.\"],\"exampleAnswer\":\"tiny\",\"rulebookEvidence\":[]}");
+                .thenReturn(new LlmGenerateResult(
+                        Feedback.of(
+                                "summary",
+                                List.of("Grammar: tense", "Expression: clearer wording", "Logic: add one reason"),
+                                List.of("Filler: Well - Use it naturally.", "Adjective: vivid - Add detail.", "Adverb: definitely - Show confidence."),
+                                "tiny",
+                                List.of()
+                        ),
+                        List.of()
+                ));
         when(rulebookUseCase.searchContexts(anyString()))
                 .thenReturn(List.of(RulebookContext.of(RulebookId.of("r1"), "rulebook.md", "keep tense consistent")));
 

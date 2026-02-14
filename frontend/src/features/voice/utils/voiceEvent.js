@@ -6,15 +6,39 @@ export function parseVoiceEnvelope(raw) {
     }
 }
 
+function normalizeCorrection(detail = {}) {
+    return {
+        issue: detail.issue || '',
+        fix: detail.fix || ''
+    }
+}
+
+function normalizeRecommendation(detail = {}) {
+    return {
+        term: detail.term || '',
+        usage: detail.usage || ''
+    }
+}
+
 function normalizeItem(item = {}) {
+    const corrections = item.corrections || {}
+    const recommendations = item.recommendations || {}
     return {
         questionId: item.questionId || '',
         questionText: item.questionText || '',
         questionGroup: item.questionGroup || '',
         answerText: item.answerText || '',
         summary: item.summary || '',
-        correctionPoints: item.correctionPoints || [],
-        recommendation: item.recommendation || [],
+        corrections: {
+            grammar: normalizeCorrection(corrections.grammar),
+            expression: normalizeCorrection(corrections.expression),
+            logic: normalizeCorrection(corrections.logic)
+        },
+        recommendations: {
+            filler: normalizeRecommendation(recommendations.filler),
+            adjective: normalizeRecommendation(recommendations.adjective),
+            adverb: normalizeRecommendation(recommendations.adverb)
+        },
         exampleAnswer: item.exampleAnswer || '',
         rulebookEvidence: item.rulebookEvidence || []
     }
@@ -43,8 +67,8 @@ export function buildFeedbackFromVoice(data) {
         },
         items,
         summary: primary.summary,
-        correctionPoints: primary.correctionPoints,
-        recommendation: primary.recommendation,
+        corrections: primary.corrections,
+        recommendations: primary.recommendations,
         exampleAnswer: primary.exampleAnswer,
         rulebookEvidence: primary.rulebookEvidence
     }

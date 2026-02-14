@@ -1,19 +1,16 @@
 package me.go_gradually.omypic.infrastructure.voice.gateway;
 
 import me.go_gradually.omypic.application.voice.port.TtsGateway;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.http.MediaType;
+import me.go_gradually.omypic.infrastructure.shared.config.AppProperties;
+import org.springframework.ai.openai.api.OpenAiAudioApi;
 import org.springframework.stereotype.Component;
-import org.springframework.web.reactive.function.client.WebClient;
-
-import java.util.Map;
 
 @Component
 public class OpenAiTtsGateway implements TtsGateway {
-    private final WebClient webClient;
+    private final String baseUrl;
 
-    public OpenAiTtsGateway(@Qualifier("openAiWebClient") WebClient webClient) {
-        this.webClient = webClient;
+    public OpenAiTtsGateway(AppProperties properties) {
+        this.baseUrl = properties.getIntegrations().getOpenai().getBaseUrl();
     }
 
     @Override
@@ -21,27 +18,21 @@ public class OpenAiTtsGateway implements TtsGateway {
         if (text == null || text.isBlank()) {
             return new byte[0];
         }
-        return requestAudio(apiKey, payload(model, voice, text));
-    }
-
-    private byte[] requestAudio(String apiKey, Map<String, Object> requestBody) {
-        return webClient.post()
-                .uri("/v1/audio/speech")
-                .header("Authorization", "Bearer " + apiKey)
-                .contentType(MediaType.APPLICATION_JSON)
-                .accept(MediaType.APPLICATION_OCTET_STREAM)
-                .bodyValue(requestBody)
-                .retrieve()
-                .bodyToMono(byte[].class)
-                .block();
-    }
-
-    private Map<String, Object> payload(String model, String voice, String text) {
-        return Map.of(
-                "model", model,
-                "voice", voice,
-                "input", text,
-                "response_format", "wav"
+        OpenAiAudioApi.SpeechRequest request = new OpenAiAudioApi.SpeechRequest(
+                model,
+                text,
+                voice,
+                OpenAiAudioApi.SpeechRequest.AudioResponseFormat.WAV,
+                null
         );
+        byte[] body = audioApi(apiKey).createSpeech(request).getBody();
+        return body == null ? new byte[0] : body;
+    }
+
+    private OpenAiAudioApi audioApi(String apiKey) {
+        return OpenAiAudioApi.builder()
+                .baseUrl(baseUrl)
+                .apiKey(apiKey)
+                .build();
     }
 }

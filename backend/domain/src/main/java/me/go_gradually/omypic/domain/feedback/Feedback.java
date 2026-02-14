@@ -15,21 +15,29 @@ import java.util.stream.Collectors;
 public final class Feedback {
     private static final List<String> CATEGORY_ORDER = List.of("Grammar", "Expression", "Logic");
     private final String summary;
-    private final List<String> correctionPoints;
-    private final List<String> recommendation;
+    private final Corrections corrections;
+    private final Recommendations recommendations;
     private final String exampleAnswer;
     private final List<String> rulebookEvidence;
 
     private Feedback(String summary,
-                     List<String> correctionPoints,
-                     List<String> recommendation,
+                     Corrections corrections,
+                     Recommendations recommendations,
                      String exampleAnswer,
                      List<String> rulebookEvidence) {
         this.summary = summary == null ? "" : summary;
-        this.correctionPoints = List.copyOf(correctionPoints == null ? List.of() : correctionPoints);
-        this.recommendation = List.copyOf(recommendation == null ? List.of() : recommendation);
+        this.corrections = corrections == null ? new Corrections(null, null, null) : corrections;
+        this.recommendations = recommendations == null ? new Recommendations(null, null, null) : recommendations;
         this.exampleAnswer = exampleAnswer == null ? "" : exampleAnswer;
         this.rulebookEvidence = List.copyOf(rulebookEvidence == null ? List.of() : rulebookEvidence);
+    }
+
+    public static Feedback of(String summary,
+                              Corrections corrections,
+                              Recommendations recommendations,
+                              String exampleAnswer,
+                              List<String> rulebookEvidence) {
+        return new Feedback(summary, corrections, recommendations, exampleAnswer, rulebookEvidence);
     }
 
     public static Feedback of(String summary,
@@ -37,14 +45,21 @@ public final class Feedback {
                               List<String> recommendation,
                               String exampleAnswer,
                               List<String> rulebookEvidence) {
-        return new Feedback(summary, correctionPoints, recommendation, exampleAnswer, rulebookEvidence);
+        List<String> mergedRecommendationSources = mergePoints(correctionPoints, recommendation);
+        return new Feedback(
+                summary,
+                toCorrections(correctionPoints),
+                toRecommendations(mergedRecommendationSources),
+                exampleAnswer,
+                rulebookEvidence
+        );
     }
 
     public static Feedback of(String summary,
                               List<String> correctionPoints,
                               String exampleAnswer,
                               List<String> rulebookEvidence) {
-        return new Feedback(summary, correctionPoints, List.of(), exampleAnswer, rulebookEvidence);
+        return new Feedback(summary, toCorrections(correctionPoints), toRecommendations(correctionPoints), exampleAnswer, rulebookEvidence);
     }
 
     public Feedback normalized(FeedbackConstraints constraints,
@@ -53,10 +68,16 @@ public final class Feedback {
                                List<RulebookContext> contexts) {
         String normalizedSummary = normalizeSummary(language, constraints.summaryMaxChars());
         List<String> points = normalizeCorrectionPoints(language);
-        List<String> recommendations = normalizeRecommendationPoints(language);
+        List<String> recommendationPoints = normalizeRecommendationPoints(language);
         String example = normalizeExampleAnswer(userText, language, constraints.exampleMinRatio(), constraints.exampleMaxRatio());
         List<String> evidence = normalizeRulebookEvidence(contexts);
-        return Feedback.of(normalizedSummary, points, recommendations, example, evidence);
+        return Feedback.of(
+                normalizedSummary,
+                toCorrections(points),
+                toRecommendations(recommendationPoints),
+                example,
+                evidence
+        );
     }
 
     private String normalizeSummary(FeedbackLanguage language, int summaryMaxChars) {
@@ -120,11 +141,11 @@ public final class Feedback {
 
     private List<String> collectRawPoints() {
         List<String> rawPoints = new ArrayList<>();
-        correctionPoints.stream()
+        getCorrectionPoints().stream()
                 .filter(p -> p != null && !p.isBlank())
                 .map(String::trim)
                 .forEach(rawPoints::add);
-        recommendation.stream()
+        getRecommendation().stream()
                 .filter(p -> p != null && !p.isBlank())
                 .map(String::trim)
                 .forEach(rawPoints::add);
@@ -439,16 +460,182 @@ public final class Feedback {
         };
     }
 
+    private static Corrections toCorrections(List<String> points) {
+        List<String> safe = points == null ? List.of() : points;
+        return new Corrections(
+                toCorrectionDetail(resolvePointForCategory(safe, "Grammar", 0), "Grammar"),
+                toCorrectionDetail(resolvePointForCategory(safe, "Expression", 1), "Expression"),
+                toCorrectionDetail(resolvePointForCategory(safe, "Logic", 2), "Logic")
+        );
+    }
+
+    private static Recommendations toRecommendations(List<String> points) {
+        List<String> safe = points == null ? List.of() : points;
+        return new Recommendations(
+                toRecommendationDetail(resolvePointForCategory(safe, "Filler", 0), "Filler"),
+                toRecommendationDetail(resolvePointForCategory(safe, "Adjective", 1), "Adjective"),
+                toRecommendationDetail(resolvePointForCategory(safe, "Adverb", 2), "Adverb")
+        );
+    }
+
+    private static List<String> mergePoints(List<String> first, List<String> second) {
+        List<String> merged = new ArrayList<>();
+        if (first != null) {
+            merged.addAll(first);
+        }
+        if (second != null) {
+            merged.addAll(second);
+        }
+        return merged;
+    }
+
+    private static String resolvePointForCategory(List<String> points, String category, int fallbackIndex) {
+        String matched = findCategoryPoint(points, category);
+        if (!matched.isBlank()) {
+            return matched;
+        }
+        if (fallbackIndex >= 0 && fallbackIndex < points.size()) {
+            String fallback = points.get(fallbackIndex);
+            return fallback == null ? "" : fallback;
+        }
+        return "";
+    }
+
+    private static String findCategoryPoint(List<String> points, String category) {
+        for (String point : points) {
+            if (matchesCategory(point, category)) {
+                return point;
+            }
+        }
+        return "";
+    }
+
+    private static boolean matchesCategory(String point, String category) {
+        if (point == null || category == null) {
+            return false;
+        }
+        String lowered = point.toLowerCase(Locale.ROOT);
+        return switch (category) {
+            case "Grammar" -> lowered.contains("grammar") || lowered.contains("문법");
+            case "Expression" -> lowered.contains("expression") || lowered.contains("표현");
+            case "Logic" -> lowered.contains("logic") || lowered.contains("논리");
+            case "Filler" -> lowered.contains("filler") || lowered.contains("필러");
+            case "Adjective" -> lowered.contains("adjective") || lowered.contains("형용사");
+            case "Adverb" -> lowered.contains("adverb") || lowered.contains("부사");
+            default -> false;
+        };
+    }
+
+    private static CorrectionDetail toCorrectionDetail(String point, String category) {
+        String body = stripCategoryPrefix(point, category);
+        String[] parts = splitByDelimiter(body);
+        String issue = parts[0].trim();
+        String fix = parts.length > 1 ? parts[1].trim() : "";
+        return new CorrectionDetail(issue, fix);
+    }
+
+    private static RecommendationDetail toRecommendationDetail(String point, String category) {
+        String body = stripCategoryPrefix(point, category);
+        String[] parts = splitByDelimiter(body);
+        String term = parts[0].trim();
+        String usage = parts.length > 1 ? parts[1].trim() : "";
+        return new RecommendationDetail(term, usage);
+    }
+
+    private static String stripCategoryPrefix(String text, String category) {
+        if (text == null) {
+            return "";
+        }
+        String trimmed = text.trim();
+        if (trimmed.isEmpty()) {
+            return "";
+        }
+        String prefix = category + ":";
+        if (trimmed.toLowerCase(Locale.ROOT).startsWith(prefix.toLowerCase(Locale.ROOT))) {
+            return trimmed.substring(prefix.length()).trim();
+        }
+        return trimmed;
+    }
+
+    private static String[] splitByDelimiter(String text) {
+        if (text == null || text.isBlank()) {
+            return new String[]{""};
+        }
+        int index = text.indexOf(" - ");
+        if (index > 0) {
+            return new String[]{text.substring(0, index), text.substring(index + 3)};
+        }
+        index = text.indexOf(" | ");
+        if (index > 0) {
+            return new String[]{text.substring(0, index), text.substring(index + 3)};
+        }
+        return new String[]{text};
+    }
+
+    private String formatCorrection(String category, CorrectionDetail detail) {
+        if (detail == null) {
+            return category + ":";
+        }
+        String issue = detail.issue();
+        String fix = detail.fix();
+        if (!issue.isBlank() && !fix.isBlank()) {
+            return category + ": " + issue + " - " + fix;
+        }
+        if (!issue.isBlank()) {
+            return category + ": " + issue;
+        }
+        if (!fix.isBlank()) {
+            return category + ": " + fix;
+        }
+        return category + ":";
+    }
+
+    private String formatRecommendation(String category, RecommendationDetail detail) {
+        if (detail == null) {
+            return category + ":";
+        }
+        String term = detail.term();
+        String usage = detail.usage();
+        if (!term.isBlank() && !usage.isBlank()) {
+            return category + ": " + term + " - " + usage;
+        }
+        if (!term.isBlank()) {
+            return category + ": " + term;
+        }
+        if (!usage.isBlank()) {
+            return category + ": " + usage;
+        }
+        return category + ":";
+    }
+
     public String getSummary() {
         return summary;
     }
 
+    public Corrections getCorrections() {
+        return corrections;
+    }
+
+    public Recommendations getRecommendations() {
+        return recommendations;
+    }
+
     public List<String> getCorrectionPoints() {
-        return Collections.unmodifiableList(correctionPoints);
+        List<String> points = List.of(
+                formatCorrection("Grammar", corrections.grammar()),
+                formatCorrection("Expression", corrections.expression()),
+                formatCorrection("Logic", corrections.logic())
+        );
+        return Collections.unmodifiableList(points);
     }
 
     public List<String> getRecommendation() {
-        return Collections.unmodifiableList(recommendation);
+        List<String> points = List.of(
+                formatRecommendation("Filler", recommendations.filler()),
+                formatRecommendation("Adjective", recommendations.adjective()),
+                formatRecommendation("Adverb", recommendations.adverb())
+        );
+        return Collections.unmodifiableList(points);
     }
 
     public String getExampleAnswer() {

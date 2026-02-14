@@ -15,8 +15,12 @@ import me.go_gradually.omypic.application.voice.model.VoiceSessionOpenCommand;
 import me.go_gradually.omypic.application.voice.model.VoiceSessionStopCommand;
 import me.go_gradually.omypic.application.voice.policy.VoicePolicy;
 import me.go_gradually.omypic.application.voice.port.TtsGateway;
+import me.go_gradually.omypic.domain.feedback.CorrectionDetail;
+import me.go_gradually.omypic.domain.feedback.Corrections;
 import me.go_gradually.omypic.domain.feedback.Feedback;
 import me.go_gradually.omypic.domain.feedback.FeedbackLanguage;
+import me.go_gradually.omypic.domain.feedback.RecommendationDetail;
+import me.go_gradually.omypic.domain.feedback.Recommendations;
 import me.go_gradually.omypic.domain.question.QuestionGroup;
 import me.go_gradually.omypic.domain.session.ModeType;
 import me.go_gradually.omypic.domain.session.SessionFlowPolicy;
@@ -669,10 +673,44 @@ public class VoiceSessionUseCase {
 
     private void appendFeedbackItemContent(Map<String, Object> payload, Feedback feedback) {
         payload.put("summary", feedback.getSummary());
-        payload.put("correctionPoints", feedback.getCorrectionPoints());
-        payload.put("recommendation", feedback.getRecommendation());
+        payload.put("corrections", correctionPayload(feedback.getCorrections()));
+        payload.put("recommendations", recommendationPayload(feedback.getRecommendations()));
         payload.put("exampleAnswer", feedback.getExampleAnswer());
         payload.put("rulebookEvidence", feedback.getRulebookEvidence());
+    }
+
+    private Map<String, Object> correctionPayload(Corrections corrections) {
+        Corrections safe = corrections == null ? new Corrections(null, null, null) : corrections;
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("grammar", correctionDetailPayload(safe.grammar()));
+        payload.put("expression", correctionDetailPayload(safe.expression()));
+        payload.put("logic", correctionDetailPayload(safe.logic()));
+        return payload;
+    }
+
+    private Map<String, Object> correctionDetailPayload(CorrectionDetail detail) {
+        CorrectionDetail safe = detail == null ? new CorrectionDetail("", "") : detail;
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("issue", safe.issue());
+        payload.put("fix", safe.fix());
+        return payload;
+    }
+
+    private Map<String, Object> recommendationPayload(Recommendations recommendations) {
+        Recommendations safe = recommendations == null ? new Recommendations(null, null, null) : recommendations;
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("filler", recommendationDetailPayload(safe.filler()));
+        payload.put("adjective", recommendationDetailPayload(safe.adjective()));
+        payload.put("adverb", recommendationDetailPayload(safe.adverb()));
+        return payload;
+    }
+
+    private Map<String, Object> recommendationDetailPayload(RecommendationDetail detail) {
+        RecommendationDetail safe = detail == null ? new RecommendationDetail("", "") : detail;
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("term", safe.term());
+        payload.put("usage", safe.usage());
+        return payload;
     }
 
     private Map<String, Object> nextActionPayload(SessionFlowPolicy.SessionAction action) {

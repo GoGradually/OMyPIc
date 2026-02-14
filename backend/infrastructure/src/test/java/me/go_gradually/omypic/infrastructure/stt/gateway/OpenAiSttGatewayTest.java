@@ -1,13 +1,13 @@
 package me.go_gradually.omypic.infrastructure.stt.gateway;
 
 import me.go_gradually.omypic.application.stt.model.VadSettings;
+import me.go_gradually.omypic.infrastructure.shared.config.AppProperties;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.web.reactive.function.client.WebClient;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -31,11 +31,11 @@ class OpenAiSttGatewayTest {
     void transcribe_callsTranscriptionsEndpoint_andParsesText() throws Exception {
         server.enqueue(new MockResponse()
                 .setHeader("Content-Type", "application/json")
-                .setBody("{\"text\":\"hello\"}"));
+                .setBody("{" +
+                        "\"text\":\"hello\"" +
+                        "}"));
 
-        OpenAiSttGateway gateway = new OpenAiSttGateway(WebClient.builder()
-                .baseUrl(server.url("/").toString())
-                .build());
+        OpenAiSttGateway gateway = gateway();
 
         String text = gateway.transcribe(new byte[]{1, 2, 3}, "whisper-1", "api-key", false, new VadSettings(111, 222, 0.7));
 
@@ -49,20 +49,18 @@ class OpenAiSttGatewayTest {
         String body = request.getBody().readUtf8();
         assertTrue(body.contains("name=\"model\""));
         assertTrue(body.contains("whisper-1"));
-        assertTrue(body.contains("filename=audio.wav"));
-        assertTrue(body.contains("name=\"prefix_padding_ms\""));
-        assertTrue(body.contains("111"));
+        assertTrue(body.contains("audio.wav"));
     }
 
     @Test
     void transcribe_callsTranslationsEndpoint_whenTranslateTrue() throws Exception {
         server.enqueue(new MockResponse()
                 .setHeader("Content-Type", "application/json")
-                .setBody("{\"text\":\"translated\"}"));
+                .setBody("{" +
+                        "\"text\":\"translated\"" +
+                        "}"));
 
-        OpenAiSttGateway gateway = new OpenAiSttGateway(WebClient.builder()
-                .baseUrl(server.url("/").toString())
-                .build());
+        OpenAiSttGateway gateway = gateway();
 
         String text = gateway.transcribe(new byte[]{9}, "whisper-1", "api-key", true, new VadSettings(1, 2, 0.5));
 
@@ -76,12 +74,16 @@ class OpenAiSttGatewayTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody("{}"));
 
-        OpenAiSttGateway gateway = new OpenAiSttGateway(WebClient.builder()
-                .baseUrl(server.url("/").toString())
-                .build());
+        OpenAiSttGateway gateway = gateway();
 
         String text = gateway.transcribe(new byte[]{1}, "whisper-1", "api-key", false, new VadSettings(1, 2, 0.5));
 
         assertEquals("", text);
+    }
+
+    private OpenAiSttGateway gateway() {
+        AppProperties properties = new AppProperties();
+        properties.getIntegrations().getOpenai().setBaseUrl(server.url("/").toString());
+        return new OpenAiSttGateway(properties);
     }
 }

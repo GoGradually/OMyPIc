@@ -1,11 +1,10 @@
 package me.go_gradually.omypic.application.feedback.usecase;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import me.go_gradually.omypic.application.feedback.model.FeedbackCommand;
 import me.go_gradually.omypic.application.feedback.model.FeedbackResult;
 import me.go_gradually.omypic.application.feedback.policy.FeedbackPolicy;
 import me.go_gradually.omypic.application.feedback.port.LlmClient;
+import me.go_gradually.omypic.application.feedback.port.LlmGenerateResult;
 import me.go_gradually.omypic.application.rulebook.usecase.RulebookUseCase;
 import me.go_gradually.omypic.application.session.port.SessionStorePort;
 import me.go_gradually.omypic.application.shared.port.MetricsPort;
@@ -20,29 +19,16 @@ import me.go_gradually.omypic.domain.session.SessionState;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.*;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 public class FeedbackUseCase {
     private static final Logger log = Logger.getLogger(FeedbackUseCase.class.getName());
     private static final String OPENAI_PROVIDER = "openai";
-    private static final int REQUIRED_CORRECTION_POINT_COUNT = 3;
-    private static final int REQUIRED_RECOMMENDATION_COUNT = 3;
-    private static final List<String> REQUIRED_CORRECTION_CATEGORIES = List.of(
-            "Grammar", "Expression", "Logic"
-    );
-    private static final List<String> REQUIRED_RECOMMENDATION_CATEGORIES = List.of(
-            "Filler", "Adjective", "Adverb"
-    );
-    private static final Map<String, List<String>> CATEGORY_KEYWORDS = Map.of(
-            "Grammar", List.of("grammar", "grammer", "문법"),
-            "Expression", List.of("expression", "표현"),
-            "Logic", List.of("logic", "논리"),
-            "Filler", List.of("filler", "필러"),
-            "Adjective", List.of("adjective", "형용사"),
-            "Adverb", List.of("adverb", "부사")
-    );
     private static final String NO_STRATEGY = "(등록된 전략/룰북 문서가 없습니다)";
     private static final String NO_RULEBOOK_DOC = "(문서 없음)";
     private static final String BASE_COACH_PROMPT_TEMPLATE = """
@@ -100,47 +86,30 @@ Function 35%%, Content&Context 35%%, Text Type 20%%, Accuracy 10%%
 ---
 이제 본격적으로 학습을 도와라.
 """;
-    private static final String STRICT_JSON_INSTRUCTION_TEMPLATE = """
+    private static final String STRUCTURED_OUTPUT_INSTRUCTION_TEMPLATE = """
 반드시 JSON 객체 1개만 출력하라. 마크다운/코드펜스/설명문/주석을 출력하지 마라.
-출력 키는 정확히 summary, correctionPoints, recommendation, exampleAnswer, rulebookEvidence 5개만 허용한다.
+출력 키는 정확히 summary, corrections, recommendations, exampleAnswer, rulebookEvidence 5개만 허용한다.
 JSON 타입 계약(반드시 동일하게 준수):
 {
   "summary": "string",
-  "correctionPoints": ["string", "string", "string"],
-  "recommendation": ["string", "string", "string"],
+  "corrections": {
+    "grammar": {"issue": "string", "fix": "string"},
+    "expression": {"issue": "string", "fix": "string"},
+    "logic": {"issue": "string", "fix": "string"}
+  },
+  "recommendations": {
+    "filler": {"term": "string", "usage": "string"},
+    "adjective": {"term": "string", "usage": "string"},
+    "adverb": {"term": "string", "usage": "string"}
+  },
   "exampleAnswer": "string",
   "rulebookEvidence": ["string", "..."]
 }
 - summary: 1~2문장
-- correctionPoints: 정확히 3개, Grammar/Expression/Logic를 각각 1개씩 포함
-- correctionPoints 순서: Grammar, Expression, Logic
-- recommendation: 정확히 3개, Filler/Adjective/Adverb를 각각 1개씩 포함
-- recommendation 순서: Filler, Adjective, Adverb
-- correctionPoints는 반드시 JSON 배열([])이어야 한다. 객체({})/문자열/숫자/null 금지
-- recommendation은 반드시 JSON 배열([])이어야 한다. 객체({})/문자열/숫자/null 금지
-- 각 correctionPoints 항목은 반드시 "Category: 설명" 형식으로 작성
-- 각 recommendation 항목은 반드시 "Category: 설명" 형식으로 작성
+- corrections: grammar/expression/logic 모두 필수
+- recommendations: filler/adjective/adverb 모두 필수
 - exampleAnswer: 사용자 답변 길이의 0.8~1.2배
-- rulebookEvidence: 룰북 근거 배열(근거가 없으면 빈 배열)
-아래 규칙을 모두 만족하지 못하면 출력하지 말고 내부에서 다시 생성하라:
-1) correctionPoints[0]은 반드시 "Grammar:"로 시작
-2) correctionPoints[1]은 반드시 "Expression:"로 시작
-3) correctionPoints[2]은 반드시 "Logic:"로 시작
-4) recommendation[0]은 반드시 "Filler:"로 시작
-5) recommendation[1]는 반드시 "Adjective:"로 시작
-6) recommendation[2]는 반드시 "Adverb:"로 시작
-7) correctionPoints/recommendation 외에 grammar/grammer/expression/logic/filler/adjective/adverb 같은 개별 키를 절대 만들지 말 것
-8) summary/correctionPoints/recommendation/exampleAnswer/rulebookEvidence 외의 추가 키를 절대 만들지 말 것
-9) correctionPoints/recommendation의 각 원소 타입은 반드시 문자열이어야 함
-출력 직전 자기검증 체크리스트:
-- JSON parse 가능
-- 키 5개만 존재
-- correctionPoints 길이 정확히 3
-- recommendation 길이 정확히 3
-- correctionPoints는 배열 타입
-- recommendation은 배열 타입
-- 접두사/순서 정확히 일치
-모든 본문 텍스트는 %s로 작성하라.
+- 본문 텍스트는 %s로 작성하라.
 """;
     private static final String TURN_USER_PROMPT_TEMPLATE = """
 # 질문 별 프롬프트
@@ -165,10 +134,10 @@ JSON 타입 계약(반드시 동일하게 준수):
 
 이 문서 기반 + 문법 및 단어 뉘앙스의 사용을 피드백하라.
 """;
+
     private final Map<String, LlmClient> clients;
     private final RulebookUseCase rulebookUseCase;
     private final FeedbackPolicy feedbackPolicy;
-    private final ObjectMapper objectMapper = new ObjectMapper();
     private final MetricsPort metrics;
     private final SessionStorePort sessionStore;
     private final WrongNoteUseCase wrongNoteUseCase;
@@ -290,10 +259,9 @@ JSON 타입 계약(반드시 동일하게 준수):
                 .orElseThrow(() -> new IllegalStateException("OpenAI client is not configured"));
         Instant start = Instant.now();
         try {
-            String raw = client.generate(apiKey, command.getModel(), systemPrompt, userPrompt);
-            ParsedFeedback parsed = parseFeedback(raw);
-            logSchemaFallbackIfNeeded(command, provider, parsed.schemaFallbackReasons());
-            Feedback feedback = parsed.feedback();
+            LlmGenerateResult generated = client.generate(apiKey, command.getModel(), systemPrompt, userPrompt);
+            logSchemaFallbackIfNeeded(command, provider, generated.schemaFallbackReasons());
+            Feedback feedback = generated.feedback();
             FeedbackConstraints constraints = new FeedbackConstraints(
                     feedbackPolicy.getSummaryMaxChars(),
                     feedbackPolicy.getExampleMinRatio(),
@@ -357,7 +325,7 @@ JSON 타입 계약(반드시 동일하게 준수):
     private String buildSystemPrompt(String language, List<RulebookContext> contexts) {
         return baseCoachPrompt(renderStrategy(contexts))
                 + "\n\n"
-                + strictJsonInstruction(promptLanguage(language));
+                + structuredOutputInstruction(promptLanguage(language));
     }
 
     private String promptLanguage(String language) {
@@ -368,8 +336,8 @@ JSON 타입 계약(반드시 동일하게 준수):
         return BASE_COACH_PROMPT_TEMPLATE.formatted(strategy);
     }
 
-    private String strictJsonInstruction(String language) {
-        return STRICT_JSON_INSTRUCTION_TEMPLATE.formatted(language);
+    private String structuredOutputInstruction(String language) {
+        return STRUCTURED_OUTPUT_INSTRUCTION_TEMPLATE.formatted(language);
     }
 
     private String renderStrategy(List<RulebookContext> contexts) {
@@ -422,99 +390,6 @@ JSON 타입 계약(반드시 동일하게 준수):
         return q;
     }
 
-    private ParsedFeedback parseFeedback(String raw) throws Exception {
-        JsonNode root = objectMapper.readTree(extractJson(raw));
-        String summary = root.path("summary").asText("");
-        JsonNode correctionNode = root.path("correctionPoints");
-        List<String> points = toStringList(correctionNode);
-        JsonNode recommendationNode = root.path("recommendation");
-        List<String> recommendations = toStringList(recommendationNode);
-        String exampleAnswer = root.path("exampleAnswer").asText("");
-        List<String> evidence = toStringList(root.path("rulebookEvidence"));
-        List<String> reasons = schemaFallbackReasons(correctionNode, points, recommendationNode, recommendations);
-        return new ParsedFeedback(Feedback.of(summary, points, recommendations, exampleAnswer, evidence), reasons);
-    }
-
-    private List<String> schemaFallbackReasons(JsonNode correctionNode,
-                                               List<String> points,
-                                               JsonNode recommendationNode,
-                                               List<String> recommendations) {
-        List<String> reasons = new ArrayList<>();
-        collectArrayValidationReasons(
-                correctionNode,
-                points,
-                "correctionPoints",
-                REQUIRED_CORRECTION_POINT_COUNT,
-                REQUIRED_CORRECTION_CATEGORIES,
-                reasons
-        );
-        collectArrayValidationReasons(
-                recommendationNode,
-                recommendations,
-                "recommendation",
-                REQUIRED_RECOMMENDATION_COUNT,
-                REQUIRED_RECOMMENDATION_CATEGORIES,
-                reasons
-        );
-        return reasons;
-    }
-
-    private void collectArrayValidationReasons(JsonNode node,
-                                               List<String> values,
-                                               String fieldName,
-                                               int requiredCount,
-                                               List<String> requiredCategories,
-                                               List<String> reasons) {
-        if (node == null || node.isMissingNode() || !node.isArray()) {
-            reasons.add(fieldName + "_not_array");
-            return;
-        }
-        if (values.isEmpty()) {
-            reasons.add(fieldName + "_empty");
-        }
-        if (values.size() != requiredCount) {
-            reasons.add(fieldName + "_count_" + values.size());
-        }
-        for (String category : requiredCategories) {
-            if (!hasCategory(values, category)) {
-                reasons.add("missing_" + fieldName + "_" + category.toLowerCase(Locale.ROOT));
-            }
-        }
-    }
-
-    private boolean hasCategory(List<String> points, String category) {
-        return points.stream().anyMatch(point -> hasCategory(point, category));
-    }
-
-    private boolean hasCategory(String point, String category) {
-        if (point == null || category == null) {
-            return false;
-        }
-        String lowered = point.toLowerCase(Locale.ROOT);
-        List<String> keywords = CATEGORY_KEYWORDS.getOrDefault(category, List.of());
-        return keywords.stream().anyMatch(lowered::contains);
-    }
-
-    private List<String> toStringList(JsonNode arrayNode) {
-        List<String> values = new ArrayList<>();
-        if (arrayNode == null || !arrayNode.isArray()) {
-            return values;
-        }
-        for (JsonNode node : arrayNode) {
-            values.add(node.asText());
-        }
-        return values;
-    }
-
-    private String extractJson(String raw) {
-        int start = raw.indexOf('{');
-        int end = raw.lastIndexOf('}');
-        if (start >= 0 && end > start) {
-            return raw.substring(start, end + 1);
-        }
-        return raw;
-    }
-
     private String failureMessage(Throwable throwable) {
         Throwable current = throwable;
         String message = "";
@@ -558,8 +433,5 @@ JSON 타입 계약(반드시 동일하게 준수):
         private String normalizationText() {
             return isTurnPrompt() ? answerText : generalText;
         }
-    }
-
-    private record ParsedFeedback(Feedback feedback, List<String> schemaFallbackReasons) {
     }
 }

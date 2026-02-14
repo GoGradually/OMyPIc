@@ -4,11 +4,16 @@ import me.go_gradually.omypic.application.feedback.model.FeedbackCommand;
 import me.go_gradually.omypic.application.feedback.model.FeedbackResult;
 import me.go_gradually.omypic.application.feedback.policy.FeedbackPolicy;
 import me.go_gradually.omypic.application.feedback.port.LlmClient;
+import me.go_gradually.omypic.application.feedback.port.LlmGenerateResult;
 import me.go_gradually.omypic.application.rulebook.usecase.RulebookUseCase;
 import me.go_gradually.omypic.application.session.port.SessionStorePort;
 import me.go_gradually.omypic.application.shared.port.MetricsPort;
 import me.go_gradually.omypic.application.wrongnote.usecase.WrongNoteUseCase;
+import me.go_gradually.omypic.domain.feedback.CorrectionDetail;
+import me.go_gradually.omypic.domain.feedback.Corrections;
 import me.go_gradually.omypic.domain.feedback.Feedback;
+import me.go_gradually.omypic.domain.feedback.RecommendationDetail;
+import me.go_gradually.omypic.domain.feedback.Recommendations;
 import me.go_gradually.omypic.domain.question.QuestionGroup;
 import me.go_gradually.omypic.domain.rulebook.RulebookContext;
 import me.go_gradually.omypic.domain.rulebook.RulebookId;
@@ -22,13 +27,12 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.time.Instant;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -80,16 +84,14 @@ class FeedbackUseCaseTest {
         when(rulebookUseCase.searchContexts("This is my answer."))
                 .thenReturn(List.of(RulebookContext.of(RulebookId.of("r1"), "rulebook.md", "always include evidence")));
         when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
-                .thenReturn("```json\n{\"summary\":\"summary\",\"correctionPoints\":[\"Grammar: tense\",\"Expression: clearer wording\",\"Logic: add reason\"],\"recommendation\":[\"Filler: Well - Use this to start naturally.\",\"Adjective: impressive - Use it for vivid detail.\",\"Adverb: definitely - Use it for confidence.\"],\"exampleAnswer\":\"tiny\",\"rulebookEvidence\":[]}\n```");
+                .thenReturn(successResult());
 
         FeedbackResult result = useCase.generateFeedback("key", command("s2", "OpenAI", "en", "This is my answer."));
 
         assertTrue(result.isGenerated());
         Feedback feedback = result.getFeedback();
-        assertEquals(3, feedback.getCorrectionPoints().size());
-        assertTrue(feedback.getRecommendation().stream().anyMatch(point -> point.startsWith("Filler:")));
-        assertTrue(feedback.getRecommendation().stream().anyMatch(point -> point.startsWith("Adjective:")));
-        assertTrue(feedback.getRecommendation().stream().anyMatch(point -> point.startsWith("Adverb:")));
+        assertFalse(feedback.getCorrections().grammar().issue().isBlank());
+        assertFalse(feedback.getRecommendations().filler().term().isBlank());
         assertEquals(1, feedback.getRulebookEvidence().size());
         assertTrue(feedback.getRulebookEvidence().get(0).startsWith("[rulebook.md]"));
         assertTrue(feedback.getExampleAnswer().length() >= 14);
@@ -109,7 +111,7 @@ class FeedbackUseCaseTest {
         when(sessionStore.getOrCreate(SessionId.of("s-batch"))).thenReturn(state);
         when(rulebookUseCase.searchContexts(anyString())).thenReturn(List.of());
         when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
-                .thenReturn("{\"summary\":\"summary\",\"correctionPoints\":[\"Grammar\",\"Expression\",\"Logic\"],\"recommendation\":[\"Filler\",\"Adjective\",\"Adverb\"],\"exampleAnswer\":\"example answer\",\"rulebookEvidence\":[]}");
+                .thenReturn(successResult());
 
         state.appendSegment("first answer");
         FeedbackResult first = useCase.generateFeedback("key", command("s-batch", "openai", "en", "first answer"));
@@ -131,7 +133,7 @@ class FeedbackUseCaseTest {
         when(sessionStore.getOrCreate(SessionId.of("s3"))).thenReturn(state);
         when(rulebookUseCase.searchContexts(anyString())).thenReturn(List.of());
         when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
-                .thenReturn("{\"summary\":\"요약\",\"correctionPoints\":[\"Grammar\",\"Expression\",\"Logic\"],\"recommendation\":[\"Filler\",\"Adjective\",\"Adverb\"],\"exampleAnswer\":\"예시 답변입니다\",\"rulebookEvidence\":[]}");
+                .thenReturn(successResult());
 
         FeedbackCommand command = command("s3", "openai", null, "짧은 답변");
         FeedbackResult result = useCase.generateFeedback("key", command);
@@ -147,7 +149,24 @@ class FeedbackUseCaseTest {
         when(sessionStore.getOrCreate(SessionId.of("s4"))).thenReturn(state);
         when(rulebookUseCase.searchContexts(anyString())).thenReturn(List.of());
         when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
-                .thenReturn("{\"summary\":\"s\",\"correctionPoints\":[\"Grammar\",\"Expression\",\"Logic\"],\"recommendation\":[\"Filler\",\"Adjective\",\"Adverb\"],\"exampleAnswer\":\"123456789\",\"rulebookEvidence\":[\"should be removed\"]}");
+                .thenReturn(new LlmGenerateResult(
+                        Feedback.of(
+                                "s",
+                                new Corrections(
+                                        new CorrectionDetail("issue", "fix"),
+                                        new CorrectionDetail("issue", "fix"),
+                                        new CorrectionDetail("issue", "fix")
+                                ),
+                                new Recommendations(
+                                        new RecommendationDetail("Well", "usage"),
+                                        new RecommendationDetail("vivid", "usage"),
+                                        new RecommendationDetail("definitely", "usage")
+                                ),
+                                "123456789",
+                                List.of("should be removed")
+                        ),
+                        List.of()
+                ));
 
         FeedbackResult result = useCase.generateFeedback("key", command("s4", "openai", "ko", "123456789"));
 
@@ -155,30 +174,28 @@ class FeedbackUseCaseTest {
     }
 
     @Test
-    void generateFeedback_incrementsSchemaFallbackMetric_whenCorrectionPointsShapeIsInvalid() throws Exception {
+    void generateFeedback_incrementsSchemaFallbackMetric_whenClientReportsFallback() throws Exception {
         stubDefaultFeedbackPolicy();
         SessionState state = new SessionState(SessionId.of("s4-fallback"));
         when(sessionStore.getOrCreate(SessionId.of("s4-fallback"))).thenReturn(state);
         when(rulebookUseCase.searchContexts(anyString())).thenReturn(List.of());
         when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
-                .thenReturn("{\"summary\":\"summary\",\"grammar\":\"tense\",\"expression\":\"word\",\"logic\":\"reason\",\"filler\":\"well\",\"adjective\":\"impressive\",\"adverb\":\"definitely\",\"exampleAnswer\":\"example\",\"rulebookEvidence\":[]}");
+                .thenReturn(new LlmGenerateResult(successResult().feedback(), List.of("structured_output_conversion_failed")));
 
         FeedbackResult result = useCase.generateFeedback("key", command("s4-fallback", "openai", "en", "answer text"));
 
         assertTrue(result.isGenerated());
-        assertEquals(3, result.getFeedback().getCorrectionPoints().size());
-        assertEquals(3, result.getFeedback().getRecommendation().size());
         verify(metrics).incrementFeedbackSchemaFallback();
     }
 
     @Test
-    void generateFeedback_systemPrompt_enforcesStrictCorrectionPointsArrayContract() throws Exception {
+    void generateFeedback_systemPrompt_enforcesStructuredContract() throws Exception {
         stubDefaultFeedbackPolicy();
         SessionState state = new SessionState(SessionId.of("s4-prompt"));
         when(sessionStore.getOrCreate(SessionId.of("s4-prompt"))).thenReturn(state);
         when(rulebookUseCase.searchContexts(anyString())).thenReturn(List.of());
         when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
-                .thenReturn("{\"summary\":\"summary\",\"correctionPoints\":[\"Grammar: tense\",\"Expression: wording\",\"Logic: reason\"],\"recommendation\":[\"Filler: Well - Use it naturally.\",\"Adjective: vivid - Use it for detail.\",\"Adverb: definitely - Use it for certainty.\"],\"exampleAnswer\":\"example answer\",\"rulebookEvidence\":[]}");
+                .thenReturn(successResult());
 
         FeedbackResult result = useCase.generateFeedback("key", command("s4-prompt", "openai", "en", "answer text"));
 
@@ -186,20 +203,18 @@ class FeedbackUseCaseTest {
         ArgumentCaptor<String> systemPromptCaptor = ArgumentCaptor.forClass(String.class);
         verify(openAiClient).generate(anyString(), anyString(), systemPromptCaptor.capture(), anyString());
         String systemPrompt = systemPromptCaptor.getValue();
-        assertTrue(systemPrompt.contains("JSON 객체 1개만 출력"));
-        assertTrue(systemPrompt.contains("summary, correctionPoints, recommendation, exampleAnswer, rulebookEvidence 5개만"));
-        assertTrue(systemPrompt.contains("correctionPoints는 반드시 JSON 배열([])이어야 한다"));
-        assertTrue(systemPrompt.contains("recommendation은 반드시 JSON 배열([])이어야 한다"));
-        assertTrue(systemPrompt.contains("recommendation[2]는 반드시 \"Adverb:\"로 시작"));
+        assertTrue(systemPrompt.contains("summary, corrections, recommendations, exampleAnswer, rulebookEvidence"));
+        assertTrue(systemPrompt.contains("\"grammar\": {\"issue\": \"string\", \"fix\": \"string\"}"));
+        assertTrue(systemPrompt.contains("\"filler\": {\"term\": \"string\", \"usage\": \"string\"}"));
     }
 
     @Test
-    void generateFeedback_throwsAndIncrementsError_whenJsonIsMalformed() throws Exception {
+    void generateFeedback_throwsAndIncrementsError_whenClientFails() throws Exception {
         SessionState state = new SessionState(SessionId.of("s5"));
         when(sessionStore.getOrCreate(SessionId.of("s5"))).thenReturn(state);
         when(rulebookUseCase.searchContexts(anyString())).thenReturn(List.of());
         when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
-                .thenReturn("not-json");
+                .thenThrow(new IllegalStateException("bad response"));
 
         assertThrows(IllegalStateException.class,
                 () -> useCase.generateFeedback("key", command("s5", "openai", "ko", "답변")));
@@ -225,7 +240,7 @@ class FeedbackUseCaseTest {
         when(rulebookUseCase.searchContextsForTurn(QuestionGroup.of("A"), "Question text\nAnswer text", 2))
                 .thenReturn(List.of(RulebookContext.of(RulebookId.of("r1"), "a.md", "group A rules")));
         when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
-                .thenReturn("{\"summary\":\"summary\",\"correctionPoints\":[\"Grammar\",\"Expression\",\"Logic\"],\"recommendation\":[\"Filler\",\"Adjective\",\"Adverb\"],\"exampleAnswer\":\"example answer\",\"rulebookEvidence\":[]}");
+                .thenReturn(successResult());
 
         Feedback feedback = useCase.generateFeedbackForTurn(
                 "key",
@@ -247,7 +262,7 @@ class FeedbackUseCaseTest {
         when(rulebookUseCase.searchContextsForTurn(QuestionGroup.of("A"), "Question text", 2))
                 .thenReturn(List.of(RulebookContext.of(RulebookId.of("r1"), "a.md", "group A rules")));
         when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
-                .thenReturn("{\"summary\":\"summary\",\"correctionPoints\":[\"Grammar\",\"Expression\",\"Logic\"],\"recommendation\":[\"Filler\",\"Adjective\",\"Adverb\"],\"exampleAnswer\":\"example answer\",\"rulebookEvidence\":[]}");
+                .thenReturn(successResult());
 
         FeedbackUseCase.PrefetchedTurnPrompt prefetch = useCase.prefetchTurnPrompt(
                 "q-1",
@@ -267,6 +282,25 @@ class FeedbackUseCaseTest {
         verify(rulebookUseCase, times(1)).searchContextsForTurn(QuestionGroup.of("A"), "Question text", 2);
         verify(openAiClient).generate(anyString(), anyString(), anyString(), contains("Answer text"));
         verify(wrongNoteUseCase).addFeedback(any(Feedback.class));
+    }
+
+    private LlmGenerateResult successResult() {
+        Feedback feedback = Feedback.of(
+                "summary",
+                new Corrections(
+                        new CorrectionDetail("tense", "use past tense"),
+                        new CorrectionDetail("wording", "use specific vocabulary"),
+                        new CorrectionDetail("reason", "add one reason")
+                ),
+                new Recommendations(
+                        new RecommendationDetail("Well", "Use this to start naturally."),
+                        new RecommendationDetail("impressive", "Use it for vivid detail."),
+                        new RecommendationDetail("definitely", "Use it for confidence.")
+                ),
+                "tiny",
+                List.of()
+        );
+        return new LlmGenerateResult(feedback, List.of());
     }
 
     private void stubDefaultFeedbackPolicy() {
