@@ -1,8 +1,4 @@
 export const FEEDBACK_MODEL_OPTIONS = [
-    {value: 'gpt-5-pro', label: 'gpt-5-pro (최고 성능)'},
-    {value: 'gpt-5.2', label: 'gpt-5.2 (최신 고성능)'},
-    {value: 'gpt-5.1', label: 'gpt-5.1 (고성능)'},
-    {value: 'gpt-5', label: 'gpt-5 (표준 상위)'},
     {value: 'gpt-5-mini', label: 'gpt-5-mini (균형형)'},
     {value: 'gpt-5-nano', label: 'gpt-5-nano (초저비용)'},
     {value: 'gpt-4.1', label: 'gpt-4.1 (비추론 상위)'},
@@ -24,7 +20,7 @@ export const TTS_MODEL_OPTIONS = [
     {value: 'tts-1', label: 'tts-1 (속도 우선)'}
 ]
 
-export const DEFAULT_FEEDBACK_MODEL = 'gpt-4o-mini'
+export const DEFAULT_FEEDBACK_MODEL = 'gpt-5-nano'
 export const DEFAULT_VOICE_STT_MODEL = 'gpt-4o-mini-transcribe'
 export const DEFAULT_TTS_MODEL = 'gpt-4o-mini-tts'
 

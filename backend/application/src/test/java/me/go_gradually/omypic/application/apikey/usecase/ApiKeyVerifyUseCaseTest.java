@@ -58,6 +58,16 @@ class ApiKeyVerifyUseCaseTest {
     }
 
     @Test
+    void verify_throws_whenFeedbackModelIsUnsupported() {
+        ApiKeyVerifyCommand command = command("openai", "sk-test-key", "gpt-5.2");
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () -> useCase.verify(command));
+
+        assertEquals("Unsupported feedback model: gpt-5.2", error.getMessage());
+        verifyNoInteractions(probePort);
+    }
+
+    @Test
     void verify_throws_whenProviderIsUnsupported() {
         ApiKeyVerifyCommand command = command("gemini", "AIza-test-key", null);
 

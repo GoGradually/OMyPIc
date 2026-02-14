@@ -1,6 +1,7 @@
 package me.go_gradually.omypic.application.voice.usecase;
 
 import me.go_gradually.omypic.application.feedback.model.FeedbackCommand;
+import me.go_gradually.omypic.application.feedback.policy.FeedbackModelPolicy;
 import me.go_gradually.omypic.application.feedback.usecase.FeedbackUseCase;
 import me.go_gradually.omypic.application.question.model.NextQuestion;
 import me.go_gradually.omypic.application.question.usecase.QuestionUseCase;
@@ -93,6 +94,7 @@ public class VoiceSessionUseCase {
         if (command == null || isBlank(command.getSessionId()) || isBlank(command.getApiKey())) {
             throw new IllegalArgumentException("sessionId and apiKey are required");
         }
+        FeedbackModelPolicy.validateOrThrow(command.getFeedbackModel());
     }
 
     private RuntimeContext createRuntimeContext(VoiceSessionOpenCommand command) {

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import me.go_gradually.omypic.application.apikey.model.ApiKeyVerifyResult;
 import me.go_gradually.omypic.application.apikey.usecase.ApiKeyVerifyUseCase;
 import me.go_gradually.omypic.presentation.TestBootApplication;
+import me.go_gradually.omypic.presentation.shared.error.ApiExceptionHandler;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -21,7 +22,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@SpringBootTest(classes = {TestBootApplication.class, ApiKeyController.class})
+@SpringBootTest(classes = {TestBootApplication.class, ApiKeyController.class, ApiExceptionHandler.class})
 @AutoConfigureMockMvc
 class ApiKeyControllerTest {
 
@@ -56,6 +57,20 @@ class ApiKeyControllerTest {
         mockMvc.perform(post("/api/keys/verify")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of("provider", "openai"))))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void verify_returnsBadRequest_whenFeedbackModelUnsupported() throws Exception {
+        when(useCase.verify(any())).thenThrow(new IllegalArgumentException("Unsupported feedback model: gpt-5.2"));
+
+        mockMvc.perform(post("/api/keys/verify")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "provider", "openai",
+                                "apiKey", "sk-test",
+                                "model", "gpt-5.2"
+                        ))))
                 .andExpect(status().isBadRequest());
     }
 }

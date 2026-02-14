@@ -5,6 +5,7 @@ import me.go_gradually.omypic.application.voice.model.VoiceSessionOpenCommand;
 import me.go_gradually.omypic.application.voice.model.VoiceSessionStopCommand;
 import me.go_gradually.omypic.application.voice.usecase.VoiceSessionUseCase;
 import me.go_gradually.omypic.presentation.TestBootApplication;
+import me.go_gradually.omypic.presentation.shared.error.ApiExceptionHandler;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,7 +23,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@SpringBootTest(classes = {TestBootApplication.class, VoiceSessionController.class})
+@SpringBootTest(classes = {TestBootApplication.class, VoiceSessionController.class, ApiExceptionHandler.class})
 @AutoConfigureMockMvc
 class VoiceSessionControllerTest {
     @Autowired
@@ -91,5 +92,21 @@ class VoiceSessionControllerTest {
         assertEquals("voice-1", captor.getValue().getVoiceSessionId());
         assertEquals(true, captor.getValue().isForced());
         assertEquals("user_stop", captor.getValue().getReason());
+    }
+
+    @Test
+    void open_returnsBadRequest_whenFeedbackModelUnsupported() throws Exception {
+        when(voiceSessionUseCase.open(any())).thenThrow(new IllegalArgumentException("Unsupported feedback model: gpt-5.2"));
+
+        mockMvc.perform(post("/api/voice/sessions")
+                        .header("X-API-Key", "api-key")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "sessionId":"s1",
+                                  "feedbackModel":"gpt-5.2"
+                                }
+                                """))
+                .andExpect(status().isBadRequest());
     }
 }

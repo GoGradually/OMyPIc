@@ -173,7 +173,7 @@ describe('useVoiceSession', () => {
     it('sends selected models when opening voice session', async () => {
         const {result, unmount} = renderHook(() => useVoiceSession({
             sessionId: 's1',
-            feedbackModel: 'gpt-5',
+            feedbackModel: 'gpt-5-mini',
             voiceSttModel: 'gpt-4o-transcribe',
             ttsModel: 'tts-1-hd',
             feedbackLang: 'ko',
@@ -191,7 +191,7 @@ describe('useVoiceSession', () => {
 
         expect(openVoiceSession).toHaveBeenCalledWith(expect.objectContaining({
             sessionId: 's1',
-            feedbackModel: 'gpt-5',
+            feedbackModel: 'gpt-5-mini',
             feedbackLanguage: 'ko',
             sttModel: 'gpt-4o-transcribe',
             ttsModel: 'tts-1-hd',

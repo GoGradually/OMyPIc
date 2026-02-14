@@ -3,6 +3,7 @@ package me.go_gradually.omypic.application.apikey.usecase;
 import me.go_gradually.omypic.application.apikey.model.ApiKeyVerifyCommand;
 import me.go_gradually.omypic.application.apikey.model.ApiKeyVerifyResult;
 import me.go_gradually.omypic.application.apikey.port.ApiKeyProbePort;
+import me.go_gradually.omypic.application.feedback.policy.FeedbackModelPolicy;
 
 import java.util.Locale;
 
@@ -21,6 +22,7 @@ public class ApiKeyVerifyUseCase {
         if (formatError != null) {
             return ApiKeyVerifyResult.failure(provider, formatError);
         }
+        FeedbackModelPolicy.validateOrThrow(command.getModel());
         return verifyProvider(provider, apiKey, command.getModel());
     }
 
