@@ -21,9 +21,15 @@ import me.go_gradually.omypic.domain.session.SessionState;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
+import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 public class FeedbackUseCase {
+    private static final Logger log = Logger.getLogger(FeedbackUseCase.class.getName());
+    private static final int REQUIRED_CORRECTION_POINT_COUNT = 6;
+    private static final List<String> REQUIRED_CORRECTION_CATEGORIES = List.of(
+            "Grammar", "Expression", "Logic", "Filler", "Adjective", "Adverb"
+    );
     private static final String NO_STRATEGY = "(등록된 전략/룰북 문서가 없습니다)";
     private static final String NO_RULEBOOK_DOC = "(문서 없음)";
     private static final String BASE_COACH_PROMPT_TEMPLATE = """
@@ -76,17 +82,44 @@ Function 35%%, Content&Context 35%%, Text Type 20%%, Accuracy 10%%
 위에 설명된 내용이 사용자가 취하고 있는 OPIc 고득점 전략이다.
 해당 전략을 바탕으로, 사용자의 답변이 전략을 잘 지켰는지 피드백을 수행한다.
 또한, 단어 사용의 자연스러움이나 문법적 오류 등을 피드백한다.
+마지막으로, 사용자의 답변에 들어갈 법한 좋은 표현으로 filler words와 adjective, adverb를 각각 추천하고 사용법을 설명하라.
 
 ---
 이제 본격적으로 학습을 도와라.
 """;
     private static final String STRICT_JSON_INSTRUCTION_TEMPLATE = """
-반드시 JSON만 출력하라. 마크다운/코드펜스/설명문을 출력하지 마라.
-출력 키는 정확히 summary, correctionPoints, exampleAnswer, rulebookEvidence 4개만 사용하라.
+반드시 JSON 객체 1개만 출력하라. 마크다운/코드펜스/설명문/주석을 출력하지 마라.
+출력 키는 정확히 summary, correctionPoints, exampleAnswer, rulebookEvidence 4개만 허용한다.
+JSON 타입 계약(반드시 동일하게 준수):
+{
+  "summary": "string",
+  "correctionPoints": ["string", "string", "string", "string", "string", "string"],
+  "exampleAnswer": "string",
+  "rulebookEvidence": ["string", "..."]
+}
 - summary: 1~2문장
-- correctionPoints: 정확히 3개, Grammar/Expression/Logic 중 최소 2종 포함
+- correctionPoints: 정확히 6개, Grammar/Expression/Logic/Filler/Adjective/Adverb를 각각 1개씩 포함
+- correctionPoints 순서: Grammar, Expression, Logic, Filler, Adjective, Adverb
+- correctionPoints는 반드시 JSON 배열([])이어야 한다. 객체({})/문자열/숫자/null 금지
+- 각 correctionPoints 항목은 반드시 "Category: 설명" 형식으로 작성
 - exampleAnswer: 사용자 답변 길이의 0.8~1.2배
 - rulebookEvidence: 룰북 근거 배열(근거가 없으면 빈 배열)
+아래 규칙을 모두 만족하지 못하면 출력하지 말고 내부에서 다시 생성하라:
+1) correctionPoints[0]은 반드시 "Grammar:"로 시작
+2) correctionPoints[1]은 반드시 "Expression:"로 시작
+3) correctionPoints[2]은 반드시 "Logic:"로 시작
+4) correctionPoints[3]은 반드시 "Filler:"로 시작
+5) correctionPoints[4]는 반드시 "Adjective:"로 시작
+6) correctionPoints[5]는 반드시 "Adverb:"로 시작
+7) correctionPoints 외에 grammar/grammer/expression/logic/filler/adjective/adverb 같은 개별 키를 절대 만들지 말 것
+8) summary/correctionPoints/exampleAnswer/rulebookEvidence 외의 추가 키를 절대 만들지 말 것
+9) correctionPoints의 각 원소 타입은 반드시 문자열이어야 함
+출력 직전 자기검증 체크리스트:
+- JSON parse 가능
+- 키 4개만 존재
+- correctionPoints 길이 정확히 6
+- correctionPoints는 배열 타입
+- 접두사/순서 정확히 일치
 모든 본문 텍스트는 %s로 작성하라.
 """;
     private static final String TURN_USER_PROMPT_TEMPLATE = """
@@ -178,7 +211,9 @@ Function 35%%, Content&Context 35%%, Text Type 20%%, Accuracy 10%%
 
         try {
             String raw = client.generate(apiKey, command.getModel(), systemPrompt, userPrompt);
-            Feedback feedback = parseFeedback(raw);
+            ParsedFeedback parsed = parseFeedback(raw);
+            logSchemaFallbackIfNeeded(command, provider, parsed.schemaFallbackReasons());
+            Feedback feedback = parsed.feedback();
             FeedbackConstraints constraints = new FeedbackConstraints(
                     feedbackPolicy.getSummaryMaxChars(),
                     feedbackPolicy.getExampleMinRatio(),
@@ -192,6 +227,20 @@ Function 35%%, Content&Context 35%%, Text Type 20%%, Accuracy 10%%
             metrics.incrementFeedbackError();
             throw new IllegalStateException("LLM feedback failed: " + failureMessage(e), e);
         }
+    }
+
+    private void logSchemaFallbackIfNeeded(FeedbackCommand command, String provider, List<String> reasons) {
+        if (reasons == null || reasons.isEmpty()) {
+            return;
+        }
+        metrics.incrementFeedbackSchemaFallback();
+        log.warning(String.format(
+                "feedback schema fallback applied sessionId=%s provider=%s model=%s reasons=%s",
+                command.getSessionId(),
+                provider,
+                command.getModel(),
+                reasons
+        ));
     }
 
     private String buildSystemPrompt(String language, List<RulebookContext> contexts) {
@@ -258,17 +307,62 @@ Function 35%%, Content&Context 35%%, Text Type 20%%, Accuracy 10%%
         return q;
     }
 
-    private Feedback parseFeedback(String raw) throws Exception {
+    private ParsedFeedback parseFeedback(String raw) throws Exception {
         JsonNode root = objectMapper.readTree(extractJson(raw));
         String summary = root.path("summary").asText("");
-        List<String> points = toStringList(root.path("correctionPoints"));
+        JsonNode correctionNode = root.path("correctionPoints");
+        List<String> points = toStringList(correctionNode);
         String exampleAnswer = root.path("exampleAnswer").asText("");
         List<String> evidence = toStringList(root.path("rulebookEvidence"));
-        return Feedback.of(summary, points, exampleAnswer, evidence);
+        List<String> reasons = schemaFallbackReasons(correctionNode, points);
+        return new ParsedFeedback(Feedback.of(summary, points, exampleAnswer, evidence), reasons);
+    }
+
+    private List<String> schemaFallbackReasons(JsonNode correctionNode, List<String> points) {
+        List<String> reasons = new ArrayList<>();
+        if (correctionNode == null || correctionNode.isMissingNode() || !correctionNode.isArray()) {
+            reasons.add("correctionPoints_not_array");
+            return reasons;
+        }
+        if (points.isEmpty()) {
+            reasons.add("correctionPoints_empty");
+        }
+        if (points.size() != REQUIRED_CORRECTION_POINT_COUNT) {
+            reasons.add("correctionPoints_count_" + points.size());
+        }
+        for (String category : REQUIRED_CORRECTION_CATEGORIES) {
+            if (!hasCategory(points, category)) {
+                reasons.add("missing_" + category.toLowerCase(Locale.ROOT));
+            }
+        }
+        return reasons;
+    }
+
+    private boolean hasCategory(List<String> points, String category) {
+        return points.stream().anyMatch(point -> hasCategory(point, category));
+    }
+
+    private boolean hasCategory(String point, String category) {
+        if (point == null) {
+            return false;
+        }
+        String lowered = point.toLowerCase(Locale.ROOT);
+        return switch (category) {
+            case "Grammar" -> lowered.contains("grammar") || lowered.contains("grammer") || lowered.contains("문법");
+            case "Expression" -> lowered.contains("expression") || lowered.contains("표현");
+            case "Logic" -> lowered.contains("logic") || lowered.contains("논리");
+            case "Filler" -> lowered.contains("filler") || lowered.contains("필러");
+            case "Adjective" -> lowered.contains("adjective") || lowered.contains("형용사");
+            case "Adverb" -> lowered.contains("adverb") || lowered.contains("부사");
+            default -> false;
+        };
     }
 
     private List<String> toStringList(JsonNode arrayNode) {
         List<String> values = new ArrayList<>();
+        if (arrayNode == null || !arrayNode.isArray()) {
+            return values;
+        }
         for (JsonNode node : arrayNode) {
             values.add(node.asText());
         }
@@ -320,5 +414,8 @@ Function 35%%, Content&Context 35%%, Text Type 20%%, Accuracy 10%%
         private String normalizationText() {
             return isTurnPrompt() ? answerText : generalText;
         }
+    }
+
+    private record ParsedFeedback(Feedback feedback, List<String> schemaFallbackReasons) {
     }
 }

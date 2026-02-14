@@ -12,16 +12,19 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class FeedbackTest {
 
     @Test
-    void normalized_fillsCorrectionPointsToThree() {
+    void normalized_fillsCorrectionPointsToCoreThreePlusFillerAdjectiveAdverb() {
         Feedback feedback = Feedback.of("summary", List.of("Grammar: tense"), "example text", List.of());
         FeedbackConstraints constraints = new FeedbackConstraints(255, 0.8, 1.2);
 
         Feedback normalized = feedback.normalized(constraints, "user answer text", FeedbackLanguage.of("en"), List.of());
 
-        assertEquals(3, normalized.getCorrectionPoints().size());
+        assertEquals(6, normalized.getCorrectionPoints().size());
         assertTrue(normalized.getCorrectionPoints().get(0).contains("Grammar"));
         assertTrue(normalized.getCorrectionPoints().get(1).contains("Expression"));
         assertTrue(normalized.getCorrectionPoints().get(2).contains("Logic"));
+        assertTrue(normalized.getCorrectionPoints().get(3).contains("Filler:"));
+        assertTrue(normalized.getCorrectionPoints().get(4).contains("Adjective:"));
+        assertTrue(normalized.getCorrectionPoints().get(5).contains("Adverb:"));
     }
 
     @Test
@@ -72,7 +75,7 @@ class FeedbackTest {
 
         Feedback normalized = feedback.normalized(constraints, "user answer long enough", FeedbackLanguage.of("en"), List.of());
 
-        assertEquals(3, normalized.getCorrectionPoints().size());
+        assertEquals(6, normalized.getCorrectionPoints().size());
         boolean hasGrammar = normalized.getCorrectionPoints().stream().anyMatch(p -> p.contains("Grammar"));
         boolean hasExpression = normalized.getCorrectionPoints().stream().anyMatch(p -> p.contains("Expression"));
         boolean hasLogic = normalized.getCorrectionPoints().stream().anyMatch(p -> p.contains("Logic"));
@@ -99,5 +102,29 @@ class FeedbackTest {
         Feedback normalized = feedback.normalized(constraints, "user answer", FeedbackLanguage.of("en"), List.of());
 
         assertTrue(normalized.getRulebookEvidence().isEmpty());
+    }
+
+    @Test
+    void normalized_preservesProvidedFillerPointInCorrectionPoints() {
+        Feedback feedback = Feedback.of(
+                "summary",
+                List.of(
+                        "Grammar",
+                        "Expression",
+                        "Logic",
+                        "Filler: Actually: Use this to add or correct a detail.",
+                        "Adjective: impressive - Use it for vivid detail.",
+                        "Adverb: definitely - Use it for confidence."
+                ),
+                "example answer",
+                List.of()
+        );
+        FeedbackConstraints constraints = new FeedbackConstraints(255, 0.8, 1.2);
+
+        Feedback normalized = feedback.normalized(constraints, "user answer", FeedbackLanguage.of("en"), List.of());
+
+        assertTrue(normalized.getCorrectionPoints().stream().anyMatch(point -> point.equals("Filler: Actually: Use this to add or correct a detail.")));
+        assertTrue(normalized.getCorrectionPoints().stream().anyMatch(point -> point.equals("Adjective: impressive - Use it for vivid detail.")));
+        assertTrue(normalized.getCorrectionPoints().stream().anyMatch(point -> point.equals("Adverb: definitely - Use it for confidence.")));
     }
 }

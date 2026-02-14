@@ -85,16 +85,139 @@ public final class Feedback {
     }
 
     private List<String> normalizeCorrectionPoints(FeedbackLanguage language) {
-        List<String> points = correctionPoints.stream()
+        List<String> rawPoints = correctionPoints.stream()
                 .filter(p -> p != null && !p.isBlank())
                 .map(String::trim)
+                .collect(Collectors.toCollection(ArrayList::new));
+        String fillerPoint = resolveFillerPoint(rawPoints, language);
+        String adjectivePoint = resolveAdjectivePoint(rawPoints, language);
+        String adverbPoint = resolveAdverbPoint(rawPoints, language);
+        List<String> points = rawPoints.stream()
+                .filter(point -> !isAuxiliaryPoint(point))
                 .collect(Collectors.toCollection(ArrayList::new));
         trimToMax(points, 3);
         appendMissingCategories(points, language);
         fillUntilThree(points, language);
         trimToMax(points, 3);
         ensureCategoryCoverageByReplacement(points, language);
+        points.add(fillerPoint);
+        points.add(adjectivePoint);
+        points.add(adverbPoint);
         return points;
+    }
+
+    private boolean isAuxiliaryPoint(String point) {
+        return isFillerPoint(point) || isAdjectivePoint(point) || isAdverbPoint(point);
+    }
+
+    private String resolveFillerPoint(List<String> rawPoints, FeedbackLanguage language) {
+        for (String point : rawPoints) {
+            if (isFillerPoint(point)) {
+                return normalizeFillerPoint(point);
+            }
+        }
+        return defaultFillerPoint(language);
+    }
+
+    private boolean isFillerPoint(String point) {
+        if (point == null) {
+            return false;
+        }
+        String lowered = point.toLowerCase(Locale.ROOT);
+        return lowered.contains("filler") || lowered.contains("필러");
+    }
+
+    private String normalizeFillerPoint(String point) {
+        String normalized = point == null ? "" : point.trim();
+        if (normalized.isEmpty()) {
+            return "Filler:";
+        }
+        if (normalized.toLowerCase(Locale.ROOT).startsWith("filler:")) {
+            return normalized;
+        }
+        if (normalized.startsWith("필러:")) {
+            String body = normalized.substring("필러:".length()).trim();
+            return body.isEmpty() ? "Filler:" : "Filler: " + body;
+        }
+        return "Filler: " + normalized;
+    }
+
+    private String defaultFillerPoint(FeedbackLanguage language) {
+        if (language != null && language.isEnglish()) {
+            return "Filler: Well - Use it at the beginning of a sentence to buy a short moment before your main point.";
+        }
+        return "Filler: Well - 문장 시작에서 생각을 정리할 짧은 시간을 벌 때 자연스럽게 사용하세요.";
+    }
+
+    private String resolveAdjectivePoint(List<String> rawPoints, FeedbackLanguage language) {
+        for (String point : rawPoints) {
+            if (isAdjectivePoint(point)) {
+                return normalizeAdjectivePoint(point);
+            }
+        }
+        return defaultAdjectivePoint(language);
+    }
+
+    private String resolveAdverbPoint(List<String> rawPoints, FeedbackLanguage language) {
+        for (String point : rawPoints) {
+            if (isAdverbPoint(point)) {
+                return normalizeAdverbPoint(point);
+            }
+        }
+        return defaultAdverbPoint(language);
+    }
+
+    private boolean isAdjectivePoint(String point) {
+        if (point == null) {
+            return false;
+        }
+        String lowered = point.toLowerCase(Locale.ROOT);
+        return lowered.contains("adjective") || lowered.contains("형용사");
+    }
+
+    private boolean isAdverbPoint(String point) {
+        if (point == null) {
+            return false;
+        }
+        String lowered = point.toLowerCase(Locale.ROOT);
+        return lowered.contains("adverb") || lowered.contains("부사");
+    }
+
+    private String normalizeAdjectivePoint(String point) {
+        return normalizePrefixedPoint(point, "Adjective:", "형용사:");
+    }
+
+    private String normalizeAdverbPoint(String point) {
+        return normalizePrefixedPoint(point, "Adverb:", "부사:");
+    }
+
+    private String normalizePrefixedPoint(String point, String englishPrefix, String koreanPrefix) {
+        String normalized = point == null ? "" : point.trim();
+        if (normalized.isEmpty()) {
+            return englishPrefix;
+        }
+        if (normalized.toLowerCase(Locale.ROOT).startsWith(englishPrefix.toLowerCase(Locale.ROOT))) {
+            return normalized;
+        }
+        if (normalized.startsWith(koreanPrefix)) {
+            String body = normalized.substring(koreanPrefix.length()).trim();
+            return body.isEmpty() ? englishPrefix : englishPrefix + " " + body;
+        }
+        return englishPrefix + " " + normalized;
+    }
+
+    private String defaultAdjectivePoint(FeedbackLanguage language) {
+        if (language != null && language.isEnglish()) {
+            return "Adjective: impressive - Use it to describe your experience more vividly.";
+        }
+        return "Adjective: vivid - 상황을 더 생생하게 설명할 때 사용하세요.";
+    }
+
+    private String defaultAdverbPoint(FeedbackLanguage language) {
+        if (language != null && language.isEnglish()) {
+            return "Adverb: definitely - Use it to emphasize certainty naturally.";
+        }
+        return "Adverb: clearly - 의견의 확신도를 자연스럽게 강조할 때 사용하세요.";
     }
 
     private void fillUntilThree(List<String> points, FeedbackLanguage language) {
