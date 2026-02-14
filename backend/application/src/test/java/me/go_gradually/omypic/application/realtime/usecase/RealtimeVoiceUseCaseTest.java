@@ -70,7 +70,6 @@ class RealtimeVoiceUseCaseTest {
         lenient().when(realtimePolicy.realtimeVadPrefixPaddingMs()).thenReturn(300);
         lenient().when(realtimePolicy.realtimeVadSilenceDurationMs()).thenReturn(0);
         lenient().when(realtimePolicy.realtimeVadThreshold()).thenReturn(0.5);
-        when(realtimePolicy.realtimeFeedbackProvider()).thenReturn("openai");
         when(realtimePolicy.realtimeFeedbackModel()).thenReturn("gpt-realtime-mini");
         when(realtimePolicy.realtimeFeedbackLanguage()).thenReturn("ko");
         when(realtimePolicy.realtimeTtsVoice()).thenReturn("alloy");
@@ -237,9 +236,8 @@ class RealtimeVoiceUseCaseTest {
         RealtimeSessionUpdateCommand update = new RealtimeSessionUpdateCommand();
         update.setConversationModel("gpt-realtime");
         update.setSttModel("gpt-4o-transcribe");
-        update.setFeedbackProvider("gemini");
-        update.setFeedbackModel("gemini-2.0-flash");
-        update.setFeedbackApiKey("gemini-key");
+        update.setFeedbackModel("gpt-4o");
+        update.setFeedbackApiKey("override-key");
         update.setFeedbackLanguage("en");
         update.setTtsVoice("echo");
         session.update(update);
@@ -247,9 +245,9 @@ class RealtimeVoiceUseCaseTest {
         listener.onFinalTranscript("answer");
 
         ArgumentCaptor<FeedbackCommand> feedbackCaptor = ArgumentCaptor.forClass(FeedbackCommand.class);
-        verify(feedbackUseCase).generateFeedbackForTurn(eq("gemini-key"), feedbackCaptor.capture(), anyString(), any(QuestionGroup.class), anyString(), eq(2));
-        assertEquals("gemini", feedbackCaptor.getValue().getProvider());
-        assertEquals("gemini-2.0-flash", feedbackCaptor.getValue().getModel());
+        verify(feedbackUseCase).generateFeedbackForTurn(eq("override-key"), feedbackCaptor.capture(), anyString(), any(QuestionGroup.class), anyString(), eq(2));
+        assertEquals("openai", feedbackCaptor.getValue().getProvider());
+        assertEquals("gpt-4o", feedbackCaptor.getValue().getModel());
         assertEquals("en", feedbackCaptor.getValue().getFeedbackLanguage());
 
         ArgumentCaptor<String> voiceCaptor = ArgumentCaptor.forClass(String.class);

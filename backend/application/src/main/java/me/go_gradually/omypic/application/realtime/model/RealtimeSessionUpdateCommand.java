@@ -3,7 +3,6 @@ package me.go_gradually.omypic.application.realtime.model;
 public class RealtimeSessionUpdateCommand {
     private String conversationModel;
     private String sttModel;
-    private String feedbackProvider;
     private String feedbackModel;
     private String feedbackApiKey;
     private String feedbackLanguage;
@@ -23,14 +22,6 @@ public class RealtimeSessionUpdateCommand {
 
     public void setSttModel(String sttModel) {
         this.sttModel = sttModel;
-    }
-
-    public String getFeedbackProvider() {
-        return feedbackProvider;
-    }
-
-    public void setFeedbackProvider(String feedbackProvider) {
-        this.feedbackProvider = feedbackProvider;
     }
 
     public String getFeedbackModel() {

@@ -37,6 +37,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 public class RealtimeVoiceUseCase {
     private static final int MIN_FINAL_TRANSCRIPT_LENGTH = 3;
+    private static final String FEEDBACK_PROVIDER = "openai";
     private final RealtimeAudioGateway realtimeAudioGateway;
     private final FeedbackUseCase feedbackUseCase;
     private final SessionUseCase sessionUseCase;
@@ -492,7 +493,7 @@ public class RealtimeVoiceUseCase {
         FeedbackCommand feedbackCommand = new FeedbackCommand();
         feedbackCommand.setSessionId(sessionId);
         feedbackCommand.setText(text);
-        feedbackCommand.setProvider(settings.feedbackProvider);
+        feedbackCommand.setProvider(FEEDBACK_PROVIDER);
         feedbackCommand.setModel(settings.feedbackModel);
         feedbackCommand.setFeedbackLanguage(settings.feedbackLanguage);
         return feedbackCommand;
@@ -853,14 +854,13 @@ public class RealtimeVoiceUseCase {
     }
 
     private record RuntimeSettings(String conversationModel, String sttModel,
-                                   String feedbackProvider, String feedbackModel, String feedbackApiKey,
+                                   String feedbackModel, String feedbackApiKey,
                                    String feedbackLanguage, String ttsVoice) {
 
         private static RuntimeSettings defaults(RealtimePolicy policy) {
             return new RuntimeSettings(
                     policy.realtimeConversationModel(),
                     policy.realtimeSttModel(),
-                    policy.realtimeFeedbackProvider(),
                     policy.realtimeFeedbackModel(),
                     null,
                     policy.realtimeFeedbackLanguage(),
@@ -872,7 +872,6 @@ public class RealtimeVoiceUseCase {
             return new RuntimeSettings(
                     firstNonBlank(command.getConversationModel(), conversationModel),
                     firstNonBlank(command.getSttModel(), sttModel),
-                    firstNonBlank(command.getFeedbackProvider(), feedbackProvider),
                     firstNonBlank(command.getFeedbackModel(), feedbackModel),
                     firstNonBlank(command.getFeedbackApiKey(), feedbackApiKey),
                     firstNonBlank(command.getFeedbackLanguage(), feedbackLanguage),
@@ -884,7 +883,6 @@ public class RealtimeVoiceUseCase {
             return new RuntimeSettings(
                     conversationModel,
                     sttModel,
-                    feedbackProvider,
                     feedbackModel,
                     feedbackApiKey,
                     feedbackLanguage,
@@ -1187,7 +1185,7 @@ public class RealtimeVoiceUseCase {
             payload.put("sessionId", sessionId);
             payload.put("conversationModel", settings.conversationModel);
             payload.put("sttModel", settings.sttModel);
-            payload.put("feedbackProvider", settings.feedbackProvider);
+            payload.put("feedbackProvider", FEEDBACK_PROVIDER);
             payload.put("feedbackModel", settings.feedbackModel);
             payload.put("feedbackLanguage", settings.feedbackLanguage);
             payload.put("ttsVoice", settings.ttsVoice);

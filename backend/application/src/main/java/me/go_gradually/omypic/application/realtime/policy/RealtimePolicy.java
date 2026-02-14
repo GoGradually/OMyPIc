@@ -11,8 +11,6 @@ public interface RealtimePolicy {
 
     double realtimeVadThreshold();
 
-    String realtimeFeedbackProvider();
-
     String realtimeFeedbackModel();
 
     String realtimeFeedbackLanguage();
