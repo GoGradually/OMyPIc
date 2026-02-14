@@ -1,7 +1,8 @@
 import React from 'react'
 import {
-    FEEDBACK_MODELS,
-    VOICE_STT_MODELS,
+    FEEDBACK_MODEL_OPTIONS,
+    TTS_MODEL_OPTIONS,
+    VOICE_STT_MODEL_OPTIONS,
     VOICES
 } from '../../../shared/constants/models.js'
 
@@ -10,6 +11,8 @@ export function ModelSettingsOverlay({
                                          setVoiceSttModel,
                                          feedbackModel,
                                          setFeedbackModel,
+                                         ttsModel,
+                                         setTtsModel,
                                          apiKeyInput,
                                          setApiKeyInput,
                                          voice,
@@ -24,16 +27,24 @@ export function ModelSettingsOverlay({
                 <div className="field-block">
                     <label>STT 모델</label>
                     <select value={voiceSttModel} onChange={(event) => setVoiceSttModel(event.target.value)}>
-                        {VOICE_STT_MODELS.map((item) => (
-                            <option key={item} value={item}>{item}</option>
+                        {VOICE_STT_MODEL_OPTIONS.map((item) => (
+                            <option key={item.value} value={item.value}>{item.label}</option>
                         ))}
                     </select>
                 </div>
                 <div className="field-block">
                     <label>피드백 모델</label>
                     <select value={feedbackModel} onChange={(event) => setFeedbackModel(event.target.value)}>
-                        {FEEDBACK_MODELS.map((item) => (
-                            <option key={item} value={item}>{item}</option>
+                        {FEEDBACK_MODEL_OPTIONS.map((item) => (
+                            <option key={item.value} value={item.value}>{item.label}</option>
+                        ))}
+                    </select>
+                </div>
+                <div className="field-block">
+                    <label>TTS 모델</label>
+                    <select value={ttsModel} onChange={(event) => setTtsModel(event.target.value)}>
+                        {TTS_MODEL_OPTIONS.map((item) => (
+                            <option key={item.value} value={item.value}>{item.label}</option>
                         ))}
                     </select>
                 </div>

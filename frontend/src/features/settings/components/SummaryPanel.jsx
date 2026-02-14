@@ -5,6 +5,7 @@ export function SummaryPanel({
                                  voice,
                                  voiceSttModel,
                                  feedbackModel,
+                                 ttsModel,
                                  enabledRulebookCount,
                                  questionGroupCount,
                                  onOpenSettings
@@ -28,6 +29,10 @@ export function SummaryPanel({
                 <li>
                     <span>피드백 모델</span>
                     <strong>{feedbackModel}</strong>
+                </li>
+                <li>
+                    <span>TTS 모델</span>
+                    <strong>{ttsModel}</strong>
                 </li>
                 <li>
                     <span>활성 룰북</span>

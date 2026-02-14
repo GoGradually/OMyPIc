@@ -1,6 +1,13 @@
 import {useCallback, useEffect, useState} from 'react'
 import {getApiKey, setApiKey, verifyApiKey} from '../../shared/api/http.js'
-import {FEEDBACK_MODELS, getModeSummary, PANEL_TITLES, VOICE_STT_MODELS, VOICES} from '../../shared/constants/models.js'
+import {
+    DEFAULT_FEEDBACK_MODEL,
+    DEFAULT_TTS_MODEL,
+    DEFAULT_VOICE_STT_MODEL,
+    getModeSummary,
+    PANEL_TITLES,
+    VOICES
+} from '../../shared/constants/models.js'
 import {copyText} from '../../shared/utils/clipboard.js'
 import {getCurrentQuestionLabel} from '../../shared/utils/mode.js'
 import {useSessionId} from '../providers/session.js'
@@ -13,8 +20,9 @@ import {getAudioUiState} from '../../features/voice/utils/audioStatus.js'
 export function useAppViewModel() {
     const sessionId = useSessionId()
 
-    const [feedbackModel, setFeedbackModel] = useState(FEEDBACK_MODELS[0])
-    const [voiceSttModel, setVoiceSttModel] = useState(VOICE_STT_MODELS[0])
+    const [feedbackModel, setFeedbackModel] = useState(DEFAULT_FEEDBACK_MODEL)
+    const [voiceSttModel, setVoiceSttModel] = useState(DEFAULT_VOICE_STT_MODEL)
+    const [ttsModel, setTtsModel] = useState(DEFAULT_TTS_MODEL)
 
     const [apiKeyInput, setApiKeyInput] = useState('')
     const [statusMessage, setStatusMessage] = useState('')
@@ -107,6 +115,7 @@ export function useAppViewModel() {
         sessionId,
         feedbackModel,
         voiceSttModel,
+        ttsModel,
         feedbackLang,
         voice,
         onStatus: setStatusMessage,
@@ -190,7 +199,8 @@ export function useAppViewModel() {
         audioPermissionLabel,
         audioInputCount: audioDeviceStatus.inputCount,
         voiceSttModel,
-        feedbackModel
+        feedbackModel,
+        ttsModel
     }
 
     const rulebookProps = {
@@ -265,6 +275,8 @@ export function useAppViewModel() {
         setVoiceSttModel,
         feedbackModel,
         setFeedbackModel,
+        ttsModel,
+        setTtsModel,
         apiKeyInput,
         setApiKeyInput,
         voice,
@@ -322,6 +334,7 @@ export function useAppViewModel() {
             voice,
             voiceSttModel,
             feedbackModel,
+            ttsModel,
             enabledRulebookCount,
             questionGroupCount: questionGroups.length,
             onOpenSettings: () => setActivePanel('model')

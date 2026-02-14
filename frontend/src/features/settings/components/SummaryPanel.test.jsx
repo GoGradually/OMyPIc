@@ -12,6 +12,7 @@ describe('SummaryPanel', () => {
                 voice="alloy"
                 voiceSttModel="gpt-4o-mini-transcribe"
                 feedbackModel="gpt-4o-mini"
+                ttsModel="gpt-4o-mini-tts"
                 enabledRulebookCount={2}
                 questionGroupCount={3}
                 onOpenSettings={vi.fn()}
@@ -20,5 +21,7 @@ describe('SummaryPanel', () => {
 
         expect(screen.getByText('질문 그룹')).toBeTruthy()
         expect(screen.getByText('3개')).toBeTruthy()
+        expect(screen.getByText('TTS 모델')).toBeTruthy()
+        expect(screen.getByText('gpt-4o-mini-tts')).toBeTruthy()
     })
 })

@@ -31,6 +31,7 @@ export function StatusBar({
                     <span>입력 장치 {statusDetails.audioInputCount}개</span>
                     <span>STT 모델 {statusDetails.voiceSttModel}</span>
                     <span>피드백 모델 {statusDetails.feedbackModel}</span>
+                    <span>TTS 모델 {statusDetails.ttsModel}</span>
                 </div>
             )}
         </>

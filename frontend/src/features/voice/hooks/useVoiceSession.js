@@ -19,6 +19,7 @@ export function useVoiceSession({
                                     sessionId,
                                     feedbackModel,
                                     voiceSttModel,
+                                    ttsModel,
                                     feedbackLang,
                                     voice,
                                     onStatus,
@@ -42,6 +43,7 @@ export function useVoiceSession({
     const settingsRef = useRef({
         feedbackModel,
         voiceSttModel,
+        ttsModel,
         feedbackLang,
         voice
     })
@@ -91,10 +93,11 @@ export function useVoiceSession({
         settingsRef.current = {
             feedbackModel,
             voiceSttModel,
+            ttsModel,
             feedbackLang,
             voice
         }
-    }, [feedbackModel, voiceSttModel, feedbackLang, voice])
+    }, [feedbackModel, voiceSttModel, ttsModel, feedbackLang, voice])
 
     const setStatus = useCallback((message) => {
         if (statusRef.current) {
@@ -362,6 +365,7 @@ export function useVoiceSession({
                 feedbackModel: settingsRef.current.feedbackModel,
                 feedbackLanguage: settingsRef.current.feedbackLang,
                 sttModel: settingsRef.current.voiceSttModel,
+                ttsModel: settingsRef.current.ttsModel,
                 ttsVoice: settingsRef.current.voice
             })
             const voiceSessionId = created?.voiceSessionId

@@ -2,12 +2,7 @@
 import {act, renderHook, waitFor} from '@testing-library/react'
 import {beforeEach, describe, expect, it, vi} from 'vitest'
 import {useVoiceSession} from './useVoiceSession.js'
-import {
-    getVoiceEventsUrl,
-    openVoiceSession,
-    sendVoiceAudioChunk,
-    stopVoiceSession
-} from '../../../shared/api/http.js'
+import {getVoiceEventsUrl, openVoiceSession, sendVoiceAudioChunk, stopVoiceSession} from '../../../shared/api/http.js'
 
 vi.mock('../../../shared/api/http.js', () => ({
     openVoiceSession: vi.fn(),
@@ -160,6 +155,36 @@ describe('useVoiceSession', () => {
         getVoiceEventsUrl.mockResolvedValue('http://localhost/events')
         sendVoiceAudioChunk.mockResolvedValue(undefined)
         stopVoiceSession.mockResolvedValue(undefined)
+    })
+
+    it('sends selected models when opening voice session', async () => {
+        const {result, unmount} = renderHook(() => useVoiceSession({
+            sessionId: 's1',
+            feedbackModel: 'gpt-5',
+            voiceSttModel: 'gpt-4o-transcribe',
+            ttsModel: 'tts-1-hd',
+            feedbackLang: 'ko',
+            voice: 'alloy',
+            onStatus: vi.fn(),
+            onFeedback: vi.fn(),
+            refreshWrongNotes: vi.fn(async () => {
+            }),
+            onQuestionPrompt: vi.fn()
+        }))
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+
+        expect(openVoiceSession).toHaveBeenCalledWith(expect.objectContaining({
+            sessionId: 's1',
+            feedbackModel: 'gpt-5',
+            feedbackLanguage: 'ko',
+            sttModel: 'gpt-4o-transcribe',
+            ttsModel: 'tts-1-hd',
+            ttsVoice: 'alloy'
+        }))
+        unmount()
     })
 
     it('blocks STT transmission while question tts is still playing', async () => {
