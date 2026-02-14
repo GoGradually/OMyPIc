@@ -17,10 +17,10 @@
 - [x] 질문 UI에 질문 삭제 기능 연결 (`DELETE /api/questions/{id}/items/{itemId}`)
 - [x] 피드백 포맷 강제 검증 로직 보강
 - [x] `summary` 1~2문장 제약 검증 추가
-- [x] `correctionPoints` 6개(문법/표현/논리/Filler/Adjective/Adverb 독립 항목) 검증 추가
+- [x] `correctionPoints` 3개(문법/표현/논리) + `recommendation` 3개(Filler/Adjective/Adverb) 검증 추가
 - [x] `exampleAnswer` 길이 비율(0.8~1.2배) 검증/보정 정확도 보강
 - [x] `rulebookEvidence` 규칙(컨텍스트 없을 때 비움, 있을 때 최소 1개) 검증 보강
-- [x] `correctionPoints` 스키마 위반 시 fallback 발생 로그 + `feedback.schema_fallbacks` 메트릭 기록 추가
+- [x] `correctionPoints`/`recommendation` 스키마 위반 시 fallback 발생 로그 + `feedback.schema_fallbacks` 메트릭 기록 추가
 
 ## P2 성능/품질/문서 보완
 

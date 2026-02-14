@@ -38,11 +38,13 @@
 
     1. 요약(1~2문장)
 
-  2. 교정 포인트 6개(문법/표현/논리/Filler/Adjective/Adverb 각 1개, 모두 독립 항목)
+  2. 교정 포인트 3개(문법/표현/논리 각 1개)
 
-    3. 개선 예시 답변 1개(사용자 답변 길이의 0.8~1.2배)
+  3. 추천 표현 3개(Filler/Adjective/Adverb 각 1개)
 
-    4. 룰북 근거(있으면 1개 이상)
+    4. 개선 예시 답변 1개(사용자 답변 길이의 0.8~1.2배)
+
+    5. 룰북 근거(있으면 1개 이상)
 
 - 연속 발화 모드 피드백 규칙
     - 1회 피드백 안에 **문답별 피드백 항목 N개**를 포함한다.
@@ -52,7 +54,7 @@
 
     - AC-01: 즉시 피드백 모드에서 “답변 종료 → 피드백 표시” p95 ≤ 10초
 
-  - AC-02: 피드백 항목 누락률 0%(필수 4키 구성: summary/correctionPoints/exampleAnswer/rulebookEvidence)
+  - AC-02: 피드백 항목 누락률 0%(필수 5키 구성: summary/correctionPoints/recommendation/exampleAnswer/rulebookEvidence)
 
     
 
