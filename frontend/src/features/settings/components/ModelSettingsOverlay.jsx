@@ -7,8 +7,6 @@ import {
 } from '../../../shared/constants/models.js'
 
 export function ModelSettingsOverlay({
-                                         provider,
-                                         setProvider,
                                          realtimeConversationModel,
                                          setRealtimeConversationModel,
                                          realtimeSttModel,
@@ -27,14 +25,6 @@ export function ModelSettingsOverlay({
     return (
         <div className="overlay-content">
             <div className="field-grid two-col">
-                <div className="field-block">
-                    <label>공급자</label>
-                    <select value={provider} onChange={(event) => setProvider(event.target.value)}>
-                        <option value="openai">OpenAI</option>
-                        <option value="anthropic">Claude</option>
-                        <option value="gemini">Gemini</option>
-                    </select>
-                </div>
                 <div className="field-block">
                     <label>실시간 대화 모델</label>
                     <select value={realtimeConversationModel}
@@ -55,7 +45,7 @@ export function ModelSettingsOverlay({
                 <div className="field-block">
                     <label>실시간 피드백 모델</label>
                     <select value={feedbackModel} onChange={(event) => setFeedbackModel(event.target.value)}>
-                        {FEEDBACK_MODELS[provider].map((item) => (
+                        {FEEDBACK_MODELS.map((item) => (
                             <option key={item} value={item}>{item}</option>
                         ))}
                     </select>
