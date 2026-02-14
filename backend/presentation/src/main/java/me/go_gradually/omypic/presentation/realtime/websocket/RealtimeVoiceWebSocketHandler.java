@@ -132,7 +132,6 @@ public class RealtimeVoiceWebSocketHandler extends TextWebSocketHandler {
         RealtimeSessionUpdateCommand command = new RealtimeSessionUpdateCommand();
         command.setConversationModel(readString(data, "conversationModel"));
         command.setSttModel(readString(data, "sttModel"));
-        command.setFeedbackProvider(readString(data, "feedbackProvider"));
         command.setFeedbackModel(readString(data, "feedbackModel"));
         command.setFeedbackApiKey(readString(data, "feedbackApiKey"));
         command.setFeedbackLanguage(readString(data, "feedbackLanguage"));
