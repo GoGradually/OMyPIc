@@ -21,5 +21,7 @@ public interface MetricsPort {
 
     void incrementFeedbackError();
 
+    void incrementFeedbackSchemaFallback();
+
     void incrementTtsError();
 }
