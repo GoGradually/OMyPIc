@@ -32,6 +32,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Deque;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -41,8 +42,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.logging.Logger;
 
 public class VoiceSessionUseCase {
+    private static final Logger log = Logger.getLogger(VoiceSessionUseCase.class.getName());
     private static final String FEEDBACK_PROVIDER = "openai";
     private static final int DEFAULT_SAMPLE_RATE = 16000;
     private static final int MAX_RULEBOOK_DOCUMENTS_PER_TURN = 2;
@@ -209,6 +212,7 @@ public class VoiceSessionUseCase {
             return;
         }
         context.setCurrentQuestion(question, turnId);
+        scheduleTurnPrefetch(context, question);
         emitSpeech(context, turnId, "question", question.getText());
     }
 
@@ -328,6 +332,7 @@ public class VoiceSessionUseCase {
         }
         long nextTurnId = context.nextTurnId();
         context.setCurrentQuestion(nextQuestion, nextTurnId);
+        scheduleTurnPrefetch(context, nextQuestion);
         context.emit("question.prompt", questionPayload(context.sessionId, nextTurnId, mode, nextQuestion));
         return nextTurnId;
     }
@@ -434,14 +439,60 @@ public class VoiceSessionUseCase {
     }
 
     private Feedback generateFeedback(RuntimeContext context, TurnInput input) {
+        FeedbackCommand command = feedbackCommand(context, input.answerText());
+        FeedbackUseCase.PrefetchedTurnPrompt prefetch = context.consumePrefetchedTurnPrompt(input.questionId());
+        if (prefetch != null) {
+            return feedbackUseCase.generateFeedbackForTurnWithPrefetch(
+                    context.apiKey,
+                    command,
+                    input.answerText(),
+                    prefetch
+            );
+        }
         return feedbackUseCase.generateFeedbackForTurn(
                 context.apiKey,
-                feedbackCommand(context, input.answerText()),
+                command,
                 input.questionText(),
                 input.questionGroup(),
                 input.answerText(),
                 MAX_RULEBOOK_DOCUMENTS_PER_TURN
         );
+    }
+
+    private void scheduleTurnPrefetch(RuntimeContext context, NextQuestion question) {
+        if (context.isInactive() || question == null || question.isSkipped() || isBlank(question.getQuestionId())) {
+            return;
+        }
+        PrefetchTarget target = new PrefetchTarget(
+                question.getQuestionId(),
+                question.getText(),
+                QuestionGroup.fromNullable(question.getGroup()),
+                context.settings.feedbackLanguage()
+        );
+        asyncExecutor.execute(() -> prefetchTurnPrompt(context, target));
+    }
+
+    private void prefetchTurnPrompt(RuntimeContext context, PrefetchTarget target) {
+        if (context.isInactive() || target == null || isBlank(target.questionId())) {
+            return;
+        }
+        try {
+            FeedbackUseCase.PrefetchedTurnPrompt prefetch = feedbackUseCase.prefetchTurnPrompt(
+                    target.questionId(),
+                    target.questionText(),
+                    target.questionGroup(),
+                    target.feedbackLanguage(),
+                    MAX_RULEBOOK_DOCUMENTS_PER_TURN
+            );
+            context.storePrefetchedTurnPrompt(prefetch);
+        } catch (Exception e) {
+            log.fine(() -> "feedback prefetch skipped sessionId="
+                    + context.sessionId
+                    + " questionId="
+                    + target.questionId()
+                    + " reason="
+                    + defaultMessage(e.getMessage()));
+        }
     }
 
     private FeedbackCommand feedbackCommand(RuntimeContext context, String text) {
@@ -836,13 +887,21 @@ public class VoiceSessionUseCase {
     private record AudioSnapshot(byte[] pcm16, int sampleRate, long turnId, QuestionSnapshot question) {
     }
 
+    private record PrefetchTarget(String questionId,
+                                  String questionText,
+                                  QuestionGroup questionGroup,
+                                  String feedbackLanguage) {
+    }
+
     private static final class RuntimeContext {
+        private static final int PREFETCH_CACHE_LIMIT = 2;
         private final String voiceSessionId;
         private final String sessionId;
         private final String apiKey;
         private final RuntimeSettings settings;
         private final Set<VoiceEventSink> sinks = ConcurrentHashMap.newKeySet();
         private final Deque<TurnInput> continuousTurns = new ConcurrentLinkedDeque<>();
+        private final LinkedHashMap<String, FeedbackUseCase.PrefetchedTurnPrompt> prefetchByQuestionId = new LinkedHashMap<>();
         private final AtomicBoolean initialized = new AtomicBoolean(false);
         private final AtomicBoolean closed = new AtomicBoolean(false);
         private final AtomicBoolean turnProcessing = new AtomicBoolean(false);
@@ -949,6 +1008,7 @@ public class VoiceSessionUseCase {
         private void clearCurrentQuestion() {
             synchronized (audioLock) {
                 this.currentQuestion = null;
+                this.prefetchByQuestionId.clear();
             }
         }
 
@@ -971,6 +1031,42 @@ public class VoiceSessionUseCase {
 
         private void appendContinuousTurn(TurnInput turn) {
             continuousTurns.add(turn);
+        }
+
+        private void storePrefetchedTurnPrompt(FeedbackUseCase.PrefetchedTurnPrompt prefetch) {
+            if (prefetch == null || prefetch.questionId() == null || prefetch.questionId().isBlank()) {
+                return;
+            }
+            synchronized (audioLock) {
+                if (currentQuestion == null || currentQuestion.isSkipped()) {
+                    return;
+                }
+                if (!prefetch.questionId().equals(currentQuestion.getQuestionId())) {
+                    return;
+                }
+                prefetchByQuestionId.put(prefetch.questionId(), prefetch);
+                trimPrefetchCache();
+            }
+        }
+
+        private FeedbackUseCase.PrefetchedTurnPrompt consumePrefetchedTurnPrompt(String questionId) {
+            if (questionId == null || questionId.isBlank()) {
+                return null;
+            }
+            synchronized (audioLock) {
+                return prefetchByQuestionId.remove(questionId);
+            }
+        }
+
+        private void trimPrefetchCache() {
+            if (prefetchByQuestionId.size() <= PREFETCH_CACHE_LIMIT) {
+                return;
+            }
+            Iterator<String> keys = prefetchByQuestionId.keySet().iterator();
+            while (prefetchByQuestionId.size() > PREFETCH_CACHE_LIMIT && keys.hasNext()) {
+                keys.next();
+                keys.remove();
+            }
         }
 
         private List<TurnInput> pollAllContinuousTurns() {

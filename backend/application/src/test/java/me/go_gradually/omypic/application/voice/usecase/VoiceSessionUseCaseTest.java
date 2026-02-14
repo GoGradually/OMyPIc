@@ -37,6 +37,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -88,7 +91,7 @@ class VoiceSessionUseCaseTest {
         }).when(asyncExecutor).execute(any(Runnable.class));
 
         when(sttUseCase.transcribe(any(SttCommand.class))).thenReturn("answer text");
-        when(feedbackUseCase.generateFeedbackForTurn(
+        lenient().when(feedbackUseCase.generateFeedbackForTurn(
                 anyString(),
                 any(FeedbackCommand.class),
                 anyString(),
@@ -165,6 +168,53 @@ class VoiceSessionUseCaseTest {
         assertTrue(questionSpeechIndex < feedbackFinalIndex);
         assertEquals(-1, feedbackSpeechIndex);
         assertEquals(1L, questionSpeechCount);
+    }
+
+    @Test
+    void immediateMode_usesPrefetchedTurnPromptWhenAvailable() {
+        SessionState state = new SessionState(SessionId.of("s1"));
+        state.applyModeUpdate(ModeType.IMMEDIATE, null);
+        when(sessionUseCase.getOrCreate("s1")).thenReturn(state);
+        when(questionUseCase.nextQuestion("s1")).thenReturn(
+                question("q-1", "question-1", "g-1", "travel"),
+                question("q-2", "question-2", "g-2", "hobby")
+        );
+        when(feedbackUseCase.prefetchTurnPrompt(anyString(), anyString(), any(), anyString(), anyInt()))
+                .thenAnswer(invocation -> new FeedbackUseCase.PrefetchedTurnPrompt(
+                        invocation.getArgument(0),
+                        invocation.getArgument(1),
+                        List.of(),
+                        "ko",
+                        "prefetched-system-prompt"
+                ));
+        when(feedbackUseCase.generateFeedbackForTurnWithPrefetch(
+                anyString(),
+                any(FeedbackCommand.class),
+                anyString(),
+                any()
+        )).thenReturn(sampleFeedback());
+
+        String voiceSessionId = useCase.open(openCommand("s1"));
+        List<EventRecord> events = new ArrayList<>();
+        useCase.registerSink(voiceSessionId, capture(events));
+
+        events.clear();
+        useCase.appendAudio(audioChunk(voiceSessionId));
+
+        verify(feedbackUseCase).generateFeedbackForTurnWithPrefetch(
+                anyString(),
+                any(FeedbackCommand.class),
+                anyString(),
+                any()
+        );
+        verify(feedbackUseCase, never()).generateFeedbackForTurn(
+                anyString(),
+                any(FeedbackCommand.class),
+                anyString(),
+                any(),
+                anyString(),
+                anyInt()
+        );
     }
 
     private VoiceSessionOpenCommand openCommand(String sessionId) {

@@ -213,22 +213,82 @@ JSON 타입 계약(반드시 동일하게 준수):
         return generateFeedbackInternal(apiKey, command, language, promptInput, contexts);
     }
 
+    public PrefetchedTurnPrompt prefetchTurnPrompt(String questionId,
+                                                   String questionText,
+                                                   QuestionGroup questionGroup,
+                                                   String feedbackLanguage,
+                                                   int maxRulebookDocuments) {
+        FeedbackLanguage language = FeedbackLanguage.of(feedbackLanguage);
+        String safeQuestionText = trimText(questionText);
+        String query = buildTurnQuery(safeQuestionText, "");
+        List<RulebookContext> contexts = rulebookUseCase.searchContextsForTurn(questionGroup, query, maxRulebookDocuments);
+        List<RulebookContext> safeContexts = safeContexts(contexts);
+        String systemPrompt = buildSystemPrompt(language.value(), safeContexts);
+        return new PrefetchedTurnPrompt(
+                trimText(questionId),
+                safeQuestionText,
+                safeContexts,
+                language.value(),
+                systemPrompt
+        );
+    }
+
+    public Feedback generateFeedbackForTurnWithPrefetch(String apiKey,
+                                                        FeedbackCommand command,
+                                                        String answerText,
+                                                        PrefetchedTurnPrompt prefetch) {
+        if (prefetch == null) {
+            throw new IllegalArgumentException("prefetch is required");
+        }
+        FeedbackLanguage language = FeedbackLanguage.of(command.getFeedbackLanguage());
+        List<RulebookContext> safeContexts = safeContexts(prefetch.contexts());
+        String safeAnswer = trimText(answerText);
+        String languageValue = language.value();
+        String systemPrompt = resolveSystemPrompt(prefetch, languageValue, safeContexts);
+        String userPrompt = buildTurnPrompt(prefetch.questionText(), safeAnswer, safeContexts);
+        return generateFeedbackFromPrompts(
+                apiKey,
+                command,
+                language,
+                safeAnswer,
+                safeContexts,
+                systemPrompt,
+                userPrompt
+        );
+    }
+
     private Feedback generateFeedbackInternal(String apiKey,
                                               FeedbackCommand command,
                                               FeedbackLanguage language,
                                               PromptInput promptInput,
                                               List<RulebookContext> contexts) {
         PromptInput safeInput = promptInput == null ? PromptInput.empty() : promptInput;
-        String text = safeInput.normalizationText();
-        List<RulebookContext> safeContexts = contexts == null ? List.of() : contexts;
-        Instant start = Instant.now();
-        String systemPrompt = buildSystemPrompt(language.value(), safeContexts);
-        String userPrompt = buildUserPrompt(safeInput, safeContexts, language.value());
+        List<RulebookContext> safeContexts = safeContexts(contexts);
+        String languageValue = language.value();
+        String systemPrompt = buildSystemPrompt(languageValue, safeContexts);
+        String userPrompt = buildUserPrompt(safeInput, safeContexts, languageValue);
+        return generateFeedbackFromPrompts(
+                apiKey,
+                command,
+                language,
+                safeInput.normalizationText(),
+                safeContexts,
+                systemPrompt,
+                userPrompt
+        );
+    }
 
+    private Feedback generateFeedbackFromPrompts(String apiKey,
+                                                 FeedbackCommand command,
+                                                 FeedbackLanguage language,
+                                                 String text,
+                                                 List<RulebookContext> contexts,
+                                                 String systemPrompt,
+                                                 String userPrompt) {
         String provider = normalizeProvider(command.getProvider());
         LlmClient client = Optional.ofNullable(clients.get(OPENAI_PROVIDER))
                 .orElseThrow(() -> new IllegalStateException("OpenAI client is not configured"));
-
+        Instant start = Instant.now();
         try {
             String raw = client.generate(apiKey, command.getModel(), systemPrompt, userPrompt);
             ParsedFeedback parsed = parseFeedback(raw);
@@ -239,7 +299,7 @@ JSON 타입 계약(반드시 동일하게 준수):
                     feedbackPolicy.getExampleMinRatio(),
                     feedbackPolicy.getExampleMaxRatio()
             );
-            feedback = feedback.normalized(constraints, text, language, safeContexts);
+            feedback = feedback.normalized(constraints, text, language, contexts);
             metrics.recordFeedbackLatency(Duration.between(start, Instant.now()));
             wrongNoteUseCase.addFeedback(feedback);
             return feedback;
@@ -247,6 +307,26 @@ JSON 타입 계약(반드시 동일하게 준수):
             metrics.incrementFeedbackError();
             throw new IllegalStateException("LLM feedback failed: " + failureMessage(e), e);
         }
+    }
+
+    private String resolveSystemPrompt(PrefetchedTurnPrompt prefetch,
+                                       String language,
+                                       List<RulebookContext> contexts) {
+        if (prefetch.systemPrompt() != null && language.equalsIgnoreCase(prefetch.language())) {
+            return prefetch.systemPrompt();
+        }
+        return buildSystemPrompt(language, contexts);
+    }
+
+    private List<RulebookContext> safeContexts(List<RulebookContext> contexts) {
+        if (contexts == null || contexts.isEmpty()) {
+            return List.of();
+        }
+        return List.copyOf(contexts);
+    }
+
+    private String trimText(String text) {
+        return text == null ? "" : text.trim();
     }
 
     private void logSchemaFallbackIfNeeded(FeedbackCommand command, String provider, List<String> reasons) {
@@ -314,9 +394,13 @@ JSON 타입 계약(반드시 동일하게 준수):
     }
 
     private String buildTurnPrompt(PromptInput input, List<RulebookContext> contexts) {
+        return buildTurnPrompt(input.questionText(), input.answerText(), contexts);
+    }
+
+    private String buildTurnPrompt(String questionText, String answerText, List<RulebookContext> contexts) {
         String firstDoc = rulebookDoc(contexts, 0);
         String secondDoc = rulebookDoc(contexts, 1);
-        return TURN_USER_PROMPT_TEMPLATE.formatted(input.questionText(), input.answerText(), firstDoc, secondDoc);
+        return TURN_USER_PROMPT_TEMPLATE.formatted(questionText, answerText, firstDoc, secondDoc);
     }
 
     private String rulebookDoc(List<RulebookContext> contexts, int index) {
@@ -441,6 +525,13 @@ JSON 타입 계약(반드시 동일하게 준수):
             current = current.getCause();
         }
         return message.isBlank() ? "unknown cause" : message;
+    }
+
+    public record PrefetchedTurnPrompt(String questionId,
+                                       String questionText,
+                                       List<RulebookContext> contexts,
+                                       String language,
+                                       String systemPrompt) {
     }
 
     private record PromptInput(String questionText, String answerText, String generalText) {

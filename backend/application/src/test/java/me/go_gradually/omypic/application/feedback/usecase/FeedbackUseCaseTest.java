@@ -27,6 +27,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
@@ -237,6 +238,34 @@ class FeedbackUseCaseTest {
 
         assertNotNull(feedback);
         verify(rulebookUseCase).searchContextsForTurn(QuestionGroup.of("A"), "Question text\nAnswer text", 2);
+        verify(wrongNoteUseCase).addFeedback(any(Feedback.class));
+    }
+
+    @Test
+    void generateFeedbackForTurnWithPrefetch_reusesPrefetchedPromptWithoutExtraSearch() throws Exception {
+        stubDefaultFeedbackPolicy();
+        when(rulebookUseCase.searchContextsForTurn(QuestionGroup.of("A"), "Question text", 2))
+                .thenReturn(List.of(RulebookContext.of(RulebookId.of("r1"), "a.md", "group A rules")));
+        when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn("{\"summary\":\"summary\",\"correctionPoints\":[\"Grammar\",\"Expression\",\"Logic\"],\"recommendation\":[\"Filler\",\"Adjective\",\"Adverb\"],\"exampleAnswer\":\"example answer\",\"rulebookEvidence\":[]}");
+
+        FeedbackUseCase.PrefetchedTurnPrompt prefetch = useCase.prefetchTurnPrompt(
+                "q-1",
+                "Question text",
+                QuestionGroup.of("A"),
+                "en",
+                2
+        );
+        Feedback feedback = useCase.generateFeedbackForTurnWithPrefetch(
+                "key",
+                command("s-turn", "openai", "en", "ignored"),
+                "Answer text",
+                prefetch
+        );
+
+        assertNotNull(feedback);
+        verify(rulebookUseCase, times(1)).searchContextsForTurn(QuestionGroup.of("A"), "Question text", 2);
+        verify(openAiClient).generate(anyString(), anyString(), anyString(), contains("Answer text"));
         verify(wrongNoteUseCase).addFeedback(any(Feedback.class));
     }
 
