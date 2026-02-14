@@ -138,11 +138,6 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
     }
 
     @Override
-    public String realtimeFeedbackProvider() {
-        return realtime.getFeedbackProvider();
-    }
-
-    @Override
     public String realtimeFeedbackModel() {
         return realtime.getFeedbackModel();
     }
@@ -299,7 +294,6 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
         private String conversationModel = "gpt-realtime-mini";
         private String sttModel = "gpt-4o-mini-transcribe";
         private RealtimeVad vad = new RealtimeVad();
-        private String feedbackProvider = "openai";
         private String feedbackModel = "gpt-4o-mini";
         private String feedbackLanguage = "ko";
         private String ttsVoice = "alloy";
@@ -327,14 +321,6 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
 
         public void setVad(RealtimeVad vad) {
             this.vad = vad;
-        }
-
-        public String getFeedbackProvider() {
-            return feedbackProvider;
-        }
-
-        public void setFeedbackProvider(String feedbackProvider) {
-            this.feedbackProvider = feedbackProvider;
         }
 
         public String getFeedbackModel() {
@@ -402,8 +388,6 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
 
     public static class Integrations {
         private OpenAi openai = new OpenAi();
-        private Gemini gemini = new Gemini();
-        private Anthropic anthropic = new Anthropic();
 
         public OpenAi getOpenai() {
             return openai;
@@ -411,22 +395,6 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
 
         public void setOpenai(OpenAi openai) {
             this.openai = openai;
-        }
-
-        public Gemini getGemini() {
-            return gemini;
-        }
-
-        public void setGemini(Gemini gemini) {
-            this.gemini = gemini;
-        }
-
-        public Anthropic getAnthropic() {
-            return anthropic;
-        }
-
-        public void setAnthropic(Anthropic anthropic) {
-            this.anthropic = anthropic;
         }
     }
 
@@ -442,27 +410,4 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
         }
     }
 
-    public static class Gemini {
-        private String baseUrl = "https://generativelanguage.googleapis.com";
-
-        public String getBaseUrl() {
-            return baseUrl;
-        }
-
-        public void setBaseUrl(String baseUrl) {
-            this.baseUrl = baseUrl;
-        }
-    }
-
-    public static class Anthropic {
-        private String baseUrl = "https://api.anthropic.com";
-
-        public String getBaseUrl() {
-            return baseUrl;
-        }
-
-        public void setBaseUrl(String baseUrl) {
-            this.baseUrl = baseUrl;
-        }
-    }
 }

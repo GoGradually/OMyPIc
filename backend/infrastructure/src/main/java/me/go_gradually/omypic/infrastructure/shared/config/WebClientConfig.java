@@ -17,16 +17,6 @@ public class WebClientConfig {
         return createWebClient(properties.getIntegrations().getOpenai().getBaseUrl());
     }
 
-    @Bean("geminiWebClient")
-    public WebClient geminiWebClient(AppProperties properties) {
-        return createWebClient(properties.getIntegrations().getGemini().getBaseUrl());
-    }
-
-    @Bean("anthropicWebClient")
-    public WebClient anthropicWebClient(AppProperties properties) {
-        return createWebClient(properties.getIntegrations().getAnthropic().getBaseUrl());
-    }
-
     private WebClient createWebClient(String baseUrl) {
         ConnectionProvider provider = createConnectionProvider();
         HttpClient httpClient = createHttpClient(provider);
