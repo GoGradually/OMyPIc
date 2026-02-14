@@ -18,6 +18,7 @@ import me.go_gradually.omypic.domain.session.SessionState;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -78,19 +79,23 @@ class FeedbackUseCaseTest {
         when(rulebookUseCase.searchContexts("This is my answer."))
                 .thenReturn(List.of(RulebookContext.of(RulebookId.of("r1"), "rulebook.md", "always include evidence")));
         when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
-                .thenReturn("```json\n{\"summary\":\"summary\",\"correctionPoints\":[\"Grammar: tense\"],\"exampleAnswer\":\"tiny\",\"rulebookEvidence\":[]}\n```");
+                .thenReturn("```json\n{\"summary\":\"summary\",\"correctionPoints\":[\"Grammar: tense\",\"Expression: clearer wording\",\"Logic: add reason\",\"Filler: Well - Use this to start naturally.\",\"Adjective: impressive - Use it for vivid detail.\",\"Adverb: definitely - Use it for confidence.\"],\"exampleAnswer\":\"tiny\",\"rulebookEvidence\":[]}\n```");
 
         FeedbackResult result = useCase.generateFeedback("key", command("s2", "OpenAI", "en", "This is my answer."));
 
         assertTrue(result.isGenerated());
         Feedback feedback = result.getFeedback();
-        assertEquals(3, feedback.getCorrectionPoints().size());
+        assertEquals(6, feedback.getCorrectionPoints().size());
+        assertTrue(feedback.getCorrectionPoints().stream().anyMatch(point -> point.startsWith("Filler:")));
+        assertTrue(feedback.getCorrectionPoints().stream().anyMatch(point -> point.startsWith("Adjective:")));
+        assertTrue(feedback.getCorrectionPoints().stream().anyMatch(point -> point.startsWith("Adverb:")));
         assertEquals(1, feedback.getRulebookEvidence().size());
         assertTrue(feedback.getRulebookEvidence().get(0).startsWith("[rulebook.md]"));
         assertTrue(feedback.getExampleAnswer().length() >= 14);
         assertTrue(feedback.getExampleAnswer().length() <= 21);
         assertEquals("en", state.getFeedbackLanguage().value());
         verify(metrics).recordFeedbackLatency(any());
+        verify(metrics, never()).incrementFeedbackSchemaFallback();
         verify(metrics, never()).incrementFeedbackError();
         verify(wrongNoteUseCase).addFeedback(any(Feedback.class));
     }
@@ -146,6 +151,43 @@ class FeedbackUseCaseTest {
         FeedbackResult result = useCase.generateFeedback("key", command("s4", "openai", "ko", "123456789"));
 
         assertTrue(result.getFeedback().getRulebookEvidence().isEmpty());
+    }
+
+    @Test
+    void generateFeedback_incrementsSchemaFallbackMetric_whenCorrectionPointsShapeIsInvalid() throws Exception {
+        stubDefaultFeedbackPolicy();
+        SessionState state = new SessionState(SessionId.of("s4-fallback"));
+        when(sessionStore.getOrCreate(SessionId.of("s4-fallback"))).thenReturn(state);
+        when(rulebookUseCase.searchContexts(anyString())).thenReturn(List.of());
+        when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn("{\"summary\":\"summary\",\"grammar\":\"tense\",\"expression\":\"word\",\"logic\":\"reason\",\"filler\":\"well\",\"adjective\":\"impressive\",\"adverb\":\"definitely\",\"exampleAnswer\":\"example\",\"rulebookEvidence\":[]}");
+
+        FeedbackResult result = useCase.generateFeedback("key", command("s4-fallback", "openai", "en", "answer text"));
+
+        assertTrue(result.isGenerated());
+        assertEquals(6, result.getFeedback().getCorrectionPoints().size());
+        verify(metrics).incrementFeedbackSchemaFallback();
+    }
+
+    @Test
+    void generateFeedback_systemPrompt_enforcesStrictCorrectionPointsArrayContract() throws Exception {
+        stubDefaultFeedbackPolicy();
+        SessionState state = new SessionState(SessionId.of("s4-prompt"));
+        when(sessionStore.getOrCreate(SessionId.of("s4-prompt"))).thenReturn(state);
+        when(rulebookUseCase.searchContexts(anyString())).thenReturn(List.of());
+        when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn("{\"summary\":\"summary\",\"correctionPoints\":[\"Grammar: tense\",\"Expression: wording\",\"Logic: reason\",\"Filler: Well - Use it naturally.\",\"Adjective: vivid - Use it for detail.\",\"Adverb: definitely - Use it for certainty.\"],\"exampleAnswer\":\"example answer\",\"rulebookEvidence\":[]}");
+
+        FeedbackResult result = useCase.generateFeedback("key", command("s4-prompt", "openai", "en", "answer text"));
+
+        assertTrue(result.isGenerated());
+        ArgumentCaptor<String> systemPromptCaptor = ArgumentCaptor.forClass(String.class);
+        verify(openAiClient).generate(anyString(), anyString(), systemPromptCaptor.capture(), anyString());
+        String systemPrompt = systemPromptCaptor.getValue();
+        assertTrue(systemPrompt.contains("JSON 객체 1개만 출력"));
+        assertTrue(systemPrompt.contains("summary, correctionPoints, exampleAnswer, rulebookEvidence 4개만"));
+        assertTrue(systemPrompt.contains("correctionPoints는 반드시 JSON 배열([])이어야 한다"));
+        assertTrue(systemPrompt.contains("correctionPoints[5]는 반드시 \"Adverb:\"로 시작"));
     }
 
     @Test
