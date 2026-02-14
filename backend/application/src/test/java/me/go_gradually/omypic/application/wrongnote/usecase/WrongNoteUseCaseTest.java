@@ -14,6 +14,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -120,6 +121,34 @@ class WrongNoteUseCaseTest {
         useCase.addFeedback(Feedback.of("summary", List.of("A"), "", List.of()));
 
         verify(recentQueueStore).saveGlobalQueue(any());
+    }
+
+    @Test
+    void addFeedback_recordsIndependentFillerAdjectiveAdverbPoints() {
+        stubAddFeedbackDependencies();
+        useCase.addFeedback(Feedback.of(
+                "summary",
+                List.of(
+                        "Grammar: tense",
+                        "Expression: clearer wording",
+                        "Logic: add reason",
+                        "Filler: Well: Use this to start naturally.",
+                        "Adjective: impressive - Use it for vivid detail.",
+                        "Adverb: definitely - Use it for confidence."
+                ),
+                "",
+                List.of()
+        ));
+
+        WrongNote fillerNote = storage.get("Filler: Well: Use this to start naturally.");
+        WrongNote adjectiveNote = storage.get("Adjective: impressive - Use it for vivid detail.");
+        WrongNote adverbNote = storage.get("Adverb: definitely - Use it for confidence.");
+        assertNotNull(fillerNote);
+        assertNotNull(adjectiveNote);
+        assertNotNull(adverbNote);
+        assertEquals(1, fillerNote.getCount());
+        assertEquals(1, adjectiveNote.getCount());
+        assertEquals(1, adverbNote.getCount());
     }
 
     private void stubAddFeedbackDependencies() {
