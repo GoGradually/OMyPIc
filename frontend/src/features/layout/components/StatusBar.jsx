@@ -27,7 +27,6 @@ export function StatusBar({
             {showStatusDetails && (
                 <div className="status-details app__status-details">
                     <span>세션 {statusDetails.sessionIdPrefix}</span>
-                    <span>공급자 {statusDetails.provider}</span>
                     <span>마이크 권한 {statusDetails.audioPermissionLabel}</span>
                     <span>입력 장치 {statusDetails.audioInputCount}개</span>
                     <span>실시간 대화 모델 {statusDetails.realtimeConversationModel}</span>
