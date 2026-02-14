@@ -1,3 +1,5 @@
+const OPENAI_PROVIDER = 'openai'
+
 export async function getBackendUrl() {
     if (window.omypic && window.omypic.getBackendUrl) {
         return await window.omypic.getBackendUrl()
@@ -5,26 +7,26 @@ export async function getBackendUrl() {
     return 'http://localhost:4317'
 }
 
-export async function getApiKey(provider) {
+export async function getApiKey() {
     if (window.omypic && window.omypic.getApiKey) {
-        return await window.omypic.getApiKey(provider)
+        return await window.omypic.getApiKey()
     }
     return ''
 }
 
-export async function setApiKey(provider, key) {
+export async function setApiKey(key) {
     if (window.omypic && window.omypic.setApiKey) {
-        return await window.omypic.setApiKey(provider, key)
+        return await window.omypic.setApiKey(key)
     }
     return null
 }
 
-export async function verifyApiKey(provider, apiKey, model) {
+export async function verifyApiKey(apiKey, model) {
     const baseUrl = await getBackendUrl()
     const response = await fetch(`${baseUrl}/api/keys/verify`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({provider, apiKey, model})
+        body: JSON.stringify({provider: OPENAI_PROVIDER, apiKey, model})
     })
     if (!response.ok) {
         const text = await response.text()
@@ -33,9 +35,9 @@ export async function verifyApiKey(provider, apiKey, model) {
     return response.json()
 }
 
-export async function callApi(path, options = {}, provider = 'openai') {
+export async function callApi(path, options = {}) {
     const baseUrl = await getBackendUrl()
-    const apiKey = await getApiKey(provider)
+    const apiKey = await getApiKey()
     const headers = options.headers ? {...options.headers} : {}
     if (apiKey) {
         headers['X-API-Key'] = apiKey
