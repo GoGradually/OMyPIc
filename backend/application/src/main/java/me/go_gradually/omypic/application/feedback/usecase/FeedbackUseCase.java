@@ -26,6 +26,7 @@ import java.util.stream.Collectors;
 
 public class FeedbackUseCase {
     private static final Logger log = Logger.getLogger(FeedbackUseCase.class.getName());
+    private static final String OPENAI_PROVIDER = "openai";
     private static final int REQUIRED_CORRECTION_POINT_COUNT = 6;
     private static final List<String> REQUIRED_CORRECTION_CATEGORIES = List.of(
             "Grammar", "Expression", "Logic", "Filler", "Adjective", "Adverb"
@@ -205,9 +206,9 @@ JSON 타입 계약(반드시 동일하게 준수):
         String systemPrompt = buildSystemPrompt(language.value(), safeContexts);
         String userPrompt = buildUserPrompt(safeInput, safeContexts, language.value());
 
-        String provider = command.getProvider() == null ? "" : command.getProvider().toLowerCase(Locale.ROOT);
-        LlmClient client = Optional.ofNullable(clients.get(provider))
-                .orElseThrow(() -> new IllegalArgumentException("Unknown provider"));
+        String provider = normalizeProvider(command.getProvider());
+        LlmClient client = Optional.ofNullable(clients.get(OPENAI_PROVIDER))
+                .orElseThrow(() -> new IllegalStateException("OpenAI client is not configured"));
 
         try {
             String raw = client.generate(apiKey, command.getModel(), systemPrompt, userPrompt);
@@ -241,6 +242,17 @@ JSON 타입 계약(반드시 동일하게 준수):
                 command.getModel(),
                 reasons
         ));
+    }
+
+    private String normalizeProvider(String provider) {
+        if (provider == null || provider.isBlank()) {
+            throw new IllegalArgumentException("Provider is required");
+        }
+        String normalized = provider.trim().toLowerCase(Locale.ROOT);
+        if (!OPENAI_PROVIDER.equals(normalized)) {
+            throw new IllegalArgumentException("Unsupported provider: only openai is allowed");
+        }
+        return normalized;
     }
 
     private String buildSystemPrompt(String language, List<RulebookContext> contexts) {
