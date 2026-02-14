@@ -21,12 +21,16 @@ public class OpenAiTtsGateway implements TtsGateway {
         if (text == null || text.isBlank()) {
             return new byte[0];
         }
+        return requestAudio(apiKey, payload(model, voice, text));
+    }
+
+    private byte[] requestAudio(String apiKey, Map<String, Object> requestBody) {
         return webClient.post()
                 .uri("/v1/audio/speech")
                 .header("Authorization", "Bearer " + apiKey)
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.APPLICATION_OCTET_STREAM)
-                .bodyValue(payload(model, voice, text))
+                .bodyValue(requestBody)
                 .retrieve()
                 .bodyToMono(byte[].class)
                 .block();

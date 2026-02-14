@@ -57,34 +57,52 @@ public class OpenAiLlmClient implements LlmClient {
     }
 
     private Map<String, Object> feedbackResponseFormat() {
-        Map<String, Object> properties = new HashMap<>();
-        properties.put("summary", Map.of("type", "string"));
-        properties.put("correctionPoints", Map.of(
-                "type", "array",
-                "minItems", 6,
-                "maxItems", 6,
-                "items", Map.of("type", "string")
-        ));
-        properties.put("exampleAnswer", Map.of("type", "string"));
-        properties.put("rulebookEvidence", Map.of(
-                "type", "array",
-                "items", Map.of("type", "string")
-        ));
+        return Map.of("type", "json_schema", "json_schema", feedbackJsonSchema());
+    }
 
-        Map<String, Object> schema = new HashMap<>();
-        schema.put("type", "object");
-        schema.put("additionalProperties", false);
-        schema.put("required", List.of("summary", "correctionPoints", "exampleAnswer", "rulebookEvidence"));
-        schema.put("properties", properties);
-
-        Map<String, Object> jsonSchema = new HashMap<>();
-        jsonSchema.put("name", "feedback_response");
-        jsonSchema.put("strict", true);
-        jsonSchema.put("schema", schema);
-
+    private Map<String, Object> feedbackJsonSchema() {
         return Map.of(
-                "type", "json_schema",
-                "json_schema", jsonSchema
+                "name", "feedback_response",
+                "strict", true,
+                "schema", feedbackSchema()
+        );
+    }
+
+    private Map<String, Object> feedbackSchema() {
+        return Map.of(
+                "type", "object",
+                "additionalProperties", false,
+                "required", List.of("summary", "correctionPoints", "exampleAnswer", "rulebookEvidence"),
+                "properties", schemaProperties()
+        );
+    }
+
+    private Map<String, Object> schemaProperties() {
+        Map<String, Object> properties = new HashMap<>();
+        properties.put("summary", stringType());
+        properties.put("correctionPoints", fixedStringArray(6));
+        properties.put("exampleAnswer", stringType());
+        properties.put("rulebookEvidence", stringArray());
+        return properties;
+    }
+
+    private Map<String, Object> stringType() {
+        return Map.of("type", "string");
+    }
+
+    private Map<String, Object> fixedStringArray(int count) {
+        return Map.of(
+                "type", "array",
+                "minItems", count,
+                "maxItems", count,
+                "items", stringType()
+        );
+    }
+
+    private Map<String, Object> stringArray() {
+        return Map.of(
+                "type", "array",
+                "items", stringType()
         );
     }
 
