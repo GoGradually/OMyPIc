@@ -25,6 +25,7 @@ class MicrometerMetricsAdapterTest {
         adapter.incrementSttRequest();
         adapter.incrementSttError();
         adapter.incrementFeedbackError();
+        adapter.incrementFeedbackSchemaFallback();
         adapter.incrementTtsError();
 
         assertNotNull(registry.find("stt.latency").timer());
@@ -38,6 +39,7 @@ class MicrometerMetricsAdapterTest {
         assertEquals(1.0, registry.find("stt.requests").counter().count());
         assertEquals(1.0, registry.find("stt.errors").counter().count());
         assertEquals(1.0, registry.find("feedback.errors").counter().count());
+        assertEquals(1.0, registry.find("feedback.schema_fallbacks").counter().count());
         assertEquals(1.0, registry.find("tts.errors").counter().count());
     }
 }

@@ -61,6 +61,11 @@ public class MicrometerMetricsAdapter implements MetricsPort {
     }
 
     @Override
+    public void incrementFeedbackSchemaFallback() {
+        meterRegistry.counter("feedback.schema_fallbacks").increment();
+    }
+
+    @Override
     public void incrementTtsError() {
         meterRegistry.counter("tts.errors").increment();
     }
