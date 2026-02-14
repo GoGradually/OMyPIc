@@ -92,3 +92,4 @@ Windows 설치형은 Windows 환경에서, macOS DMG는 macOS 환경에서 빌�
 
 - API Key는 Electron에서 OS Keychain(`keytar`)에 저장됩니다.
 - Backend에는 저장하지 않고 요청 시 헤더로 전달됩니다.
+- 현재 앱은 OpenAI API Key만 지원합니다.
