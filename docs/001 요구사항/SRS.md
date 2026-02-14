@@ -194,8 +194,7 @@ API 직접 연결.
 ![img_9.png](img_9.png)
 
 - 세부 기능
-    - 모델 선택(최소 3개 옵션: GPT/Claude/Gemini)
-    - 모델 등급 선택 (실제 모델 기반 - gpt-o3-mini 등)
+  - OpenAI 모델 선택 (예: gpt-4o-mini, gpt-4o)
     - API Key 등록/검증(형식 검증 + 인증 테스트 호출 1회)
 - AC
     - API Key는 클라이언트 로그/크래시 리포트에 포함되지 않음(0건)   
