@@ -3,14 +3,15 @@ package me.go_gradually.omypic.infrastructure.wrongnote.persistence.mongo;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -37,11 +38,18 @@ class WrongNoteRecentQueueMongoAdapterTest {
     }
 
     @Test
-    void saveGlobalQueue_clampsTo30() {
+    void saveGlobalQueue_clampsTo100() {
         when(repository.findById("global")).thenReturn(Optional.empty());
 
-        adapter.saveGlobalQueue(java.util.stream.IntStream.range(0, 40).mapToObj(i -> "p-" + i).toList());
+        adapter.saveGlobalQueue(IntStream.range(0, 140).mapToObj(i -> "p-" + i).toList());
 
-        verify(repository).save(any(WrongNoteRecentQueueDocument.class));
+        ArgumentCaptor<WrongNoteRecentQueueDocument> captor = ArgumentCaptor.forClass(WrongNoteRecentQueueDocument.class);
+        verify(repository).save(captor.capture());
+
+        WrongNoteRecentQueueDocument saved = captor.getValue();
+        assertEquals("global", saved.getId());
+        assertEquals(100, saved.getPatterns().size());
+        assertEquals("p-40", saved.getPatterns().get(0));
+        assertEquals("p-139", saved.getPatterns().get(99));
     }
 }

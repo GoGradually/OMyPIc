@@ -61,15 +61,15 @@ class WrongNoteUseCaseTest {
     }
 
     @Test
-    void addFeedback_keepsRecentQueueAt30_andDeletesZeroCountNotes() {
+    void addFeedback_keepsRecentQueueAt100_andDeletesZeroCountNotes() {
         stubAddFeedbackDependencies();
         stubDeleteByIdFromStorage();
-        for (int i = 0; i < 31; i++) {
+        for (int i = 0; i < 101; i++) {
             useCase.addFeedback(Feedback.of("summary", List.of("pattern-" + i), "", List.of()));
         }
 
         assertNull(storage.get("pattern-0"));
-        assertEquals(30, storage.size());
+        assertEquals(100, storage.size());
     }
 
     @Test
@@ -91,7 +91,7 @@ class WrongNoteUseCaseTest {
         stubAddFeedbackDependencies();
         useCase.addFeedback(Feedback.of("summary", List.of("A"), "", List.of()));
         useCase.addFeedback(Feedback.of("summary", List.of("A"), "", List.of()));
-        for (int i = 0; i < 29; i++) {
+        for (int i = 0; i < 99; i++) {
             useCase.addFeedback(Feedback.of("summary", List.of("B-" + i), "", List.of()));
         }
 
@@ -155,7 +155,7 @@ class WrongNoteUseCaseTest {
 
     private void stubAddFeedbackDependencies() {
         when(feedbackPolicy.getWrongnoteSummaryMaxChars()).thenReturn(255);
-        when(feedbackPolicy.getWrongnoteWindowSize()).thenReturn(30);
+        when(feedbackPolicy.getWrongnoteWindowSize()).thenReturn(100);
         when(repository.findByPattern(anyString())).thenAnswer(invocation -> Optional.ofNullable(storage.get(invocation.getArgument(0))));
         when(repository.save(any(WrongNote.class))).thenAnswer(invocation -> {
             WrongNote note = invocation.getArgument(0);

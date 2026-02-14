@@ -42,6 +42,7 @@ omypic:
     example-min-ratio: 0.8
     example-max-ratio: 1.2
     wrongnote-summary-max-chars: 255
+    wrongnote-window-size: 100
   voice:
     stt-model: gpt-4o-mini-transcribe
     feedback-model: gpt-4o-mini

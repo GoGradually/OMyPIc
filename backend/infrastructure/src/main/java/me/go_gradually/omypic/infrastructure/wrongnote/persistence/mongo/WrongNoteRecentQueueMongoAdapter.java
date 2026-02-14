@@ -10,6 +10,7 @@ import java.util.List;
 @Component
 public class WrongNoteRecentQueueMongoAdapter implements WrongNoteRecentQueuePort {
     private static final String GLOBAL_ID = "global";
+    private static final int MAX_PATTERNS = 100;
     private final WrongNoteRecentQueueRepository repository;
 
     public WrongNoteRecentQueueMongoAdapter(WrongNoteRecentQueueRepository repository) {
@@ -32,9 +33,9 @@ public class WrongNoteRecentQueueMongoAdapter implements WrongNoteRecentQueuePor
             return created;
         });
 
-        // 최대 30개까지만 저장
+        // 최대 100개까지만 저장
         List<String> input = patterns == null ? List.of() : patterns;
-        int fromIndex = Math.max(0, input.size() - 30);
+        int fromIndex = Math.max(0, input.size() - MAX_PATTERNS);
         doc.setPatterns(new ArrayList<>(input.subList(fromIndex, input.size())));
         doc.setUpdatedAt(Instant.now());
         repository.save(doc);

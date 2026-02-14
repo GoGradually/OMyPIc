@@ -237,7 +237,7 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
         private double exampleMinRatio = 0.8;
         private double exampleMaxRatio = 1.2;
         private int wrongnoteSummaryMaxChars = 255;
-        private int wrongnoteWindowSize = 30;
+        private int wrongnoteWindowSize = 100;
 
         public int getSummaryMaxChars() {
             return summaryMaxChars;

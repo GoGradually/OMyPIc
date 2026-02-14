@@ -10,6 +10,6 @@ public interface FeedbackPolicy {
     int getWrongnoteSummaryMaxChars();
 
     default int getWrongnoteWindowSize() {
-        return 30;
+        return 100;
     }
 }
