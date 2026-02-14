@@ -1,5 +1,7 @@
 package me.go_gradually.omypic.infrastructure.feedback.llm;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import me.go_gradually.omypic.application.feedback.port.LlmGenerateResult;
 import me.go_gradually.omypic.infrastructure.shared.config.AppProperties;
 import okhttp3.mockwebserver.MockResponse;
@@ -10,10 +12,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class OpenAiLlmClientTest {
 
+    private final ObjectMapper objectMapper = new ObjectMapper();
     private MockWebServer server;
 
     @BeforeEach
@@ -79,6 +83,31 @@ class OpenAiLlmClientTest {
         assertTrue(result.schemaFallbackReasons().contains("fallback_parse_failed"));
     }
 
+    @Test
+    void generate_sendsTemperatureForLegacyModels() throws Exception {
+        enqueueChatResponse(minimalStructuredResponse());
+
+        OpenAiLlmClient client = client();
+        client.generate("api-key", "gpt-4o-mini", "sys", "user");
+
+        JsonNode payload = objectMapper.readTree(server.takeRequest().getBody().readUtf8());
+        assertEquals("gpt-4o-mini", payload.path("model").asText());
+        assertTrue(payload.has("temperature"));
+        assertEquals(0.2, payload.path("temperature").asDouble());
+    }
+
+    @Test
+    void generate_doesNotSendTemperatureForGpt5Family() throws Exception {
+        enqueueChatResponse(minimalStructuredResponse());
+
+        OpenAiLlmClient client = client();
+        client.generate("api-key", "gpt-5-mini", "sys", "user");
+
+        JsonNode payload = objectMapper.readTree(server.takeRequest().getBody().readUtf8());
+        assertEquals("gpt-5-mini", payload.path("model").asText());
+        assertFalse(payload.has("temperature"));
+    }
+
     private OpenAiLlmClient client() {
         AppProperties properties = new AppProperties();
         properties.getIntegrations().getOpenai().setBaseUrl(server.url("/").toString());
@@ -114,5 +143,25 @@ class OpenAiLlmClientTest {
     private String jsonString(String text) {
         String escaped = text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
         return "\"" + escaped + "\"";
+    }
+
+    private String minimalStructuredResponse() {
+        return """
+                {
+                  "summary":"요약",
+                  "corrections":{
+                    "grammar":{"issue":"a","fix":"b"},
+                    "expression":{"issue":"c","fix":"d"},
+                    "logic":{"issue":"e","fix":"f"}
+                  },
+                  "recommendations":{
+                    "filler":{"term":"Well","usage":"u1"},
+                    "adjective":{"term":"vivid","usage":"u2"},
+                    "adverb":{"term":"definitely","usage":"u3"}
+                  },
+                  "exampleAnswer":"example",
+                  "rulebookEvidence":[]
+                }
+                """;
     }
 }
