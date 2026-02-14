@@ -40,6 +40,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -217,6 +218,63 @@ class VoiceSessionUseCaseTest {
         );
     }
 
+    @Test
+    void immediateMode_continuesToNextQuestionWhenFeedbackFails() {
+        SessionState state = new SessionState(SessionId.of("s1"));
+        state.applyModeUpdate(ModeType.IMMEDIATE, null);
+        when(sessionUseCase.getOrCreate("s1")).thenReturn(state);
+        when(questionUseCase.nextQuestion("s1")).thenReturn(
+                question("q-1", "question-1", "g-1", "travel"),
+                question("q-2", "question-2", "g-2", "hobby")
+        );
+        when(feedbackUseCase.generateFeedbackForTurn(
+                anyString(),
+                any(FeedbackCommand.class),
+                anyString(),
+                any(),
+                anyString(),
+                anyInt()
+        )).thenThrow(new IllegalStateException("LLM feedback failed: timeout"));
+
+        String voiceSessionId = useCase.open(openCommand("s1"));
+        List<EventRecord> events = new ArrayList<>();
+        useCase.registerSink(voiceSessionId, capture(events));
+
+        events.clear();
+        useCase.appendAudio(audioChunk(voiceSessionId));
+
+        int errorIndex = firstIndex(events, event -> "error".equals(event.type()));
+        int feedbackFinalIndex = firstIndex(events, event -> "feedback.final".equals(event.type()));
+        int questionPromptIndex = firstIndex(events, event -> "question.prompt".equals(event.type()));
+        int questionSpeechIndex = firstIndex(events, event -> isTtsRole(event, "question"));
+
+        assertTrue(errorIndex >= 0);
+        assertEquals(-1, feedbackFinalIndex);
+        assertTrue(questionPromptIndex >= 0);
+        assertTrue(questionSpeechIndex >= 0);
+        assertTrue(errorIndex < questionPromptIndex);
+    }
+
+    @Test
+    void appendAudio_ignoresDuplicateOrOlderSequence() {
+        SessionState state = new SessionState(SessionId.of("s1"));
+        state.applyModeUpdate(ModeType.IMMEDIATE, null);
+        when(sessionUseCase.getOrCreate("s1")).thenReturn(state);
+        when(questionUseCase.nextQuestion("s1")).thenReturn(
+                question("q-1", "question-1", "g-1", "travel"),
+                question("q-2", "question-2", "g-2", "hobby")
+        );
+
+        String voiceSessionId = useCase.open(openCommand("s1"));
+        useCase.registerSink(voiceSessionId, capture(new ArrayList<>()));
+
+        useCase.appendAudio(audioChunk(voiceSessionId, 5L));
+        useCase.appendAudio(audioChunk(voiceSessionId, 5L));
+        useCase.appendAudio(audioChunk(voiceSessionId, 4L));
+
+        verify(sttUseCase, times(1)).transcribe(any(SttCommand.class));
+    }
+
     private VoiceSessionOpenCommand openCommand(String sessionId) {
         VoiceSessionOpenCommand command = new VoiceSessionOpenCommand();
         command.setSessionId(sessionId);
@@ -225,11 +283,15 @@ class VoiceSessionUseCaseTest {
     }
 
     private VoiceAudioChunkCommand audioChunk(String voiceSessionId) {
+        return audioChunk(voiceSessionId, 1L);
+    }
+
+    private VoiceAudioChunkCommand audioChunk(String voiceSessionId, Long sequence) {
         VoiceAudioChunkCommand command = new VoiceAudioChunkCommand();
         command.setVoiceSessionId(voiceSessionId);
         command.setPcm16Base64(Base64.getEncoder().encodeToString(new byte[]{0, 1, 2, 3}));
         command.setSampleRate(16000);
-        command.setSequence(1L);
+        command.setSequence(sequence);
         return command;
     }
 

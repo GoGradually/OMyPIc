@@ -123,6 +123,9 @@ public class VoiceSessionUseCase {
         if (context.isInactive()) {
             return;
         }
+        if (!context.acceptChunkSequence(command.getSequence())) {
+            return;
+        }
         byte[] pcm16Bytes = decodePcm16(command.getPcm16Base64());
         if (pcm16Bytes.length == 0) {
             return;
@@ -300,8 +303,13 @@ public class VoiceSessionUseCase {
 
         FeedbackPlan feedbackPlan = resolveFeedbackPlan(context, turnInput, sessionState, mode, nextQuestion, exhausted);
         if (mode == ModeType.IMMEDIATE) {
-            boolean emittedFeedback = emitMainFeedback(context, turnId, mode, feedbackPlan, nextAction);
-            emitResidualFeedback(context, turnId, mode, sessionState, nextAction, exhausted, emittedFeedback);
+            boolean emittedFeedback = false;
+            try {
+                emittedFeedback = emitMainFeedback(context, turnId, mode, feedbackPlan, nextAction);
+                emitResidualFeedback(context, turnId, mode, sessionState, nextAction, exhausted, emittedFeedback);
+            } catch (Exception e) {
+                emitFeedbackErrorAndContinue(context, turnId, e);
+            }
             long nextQuestionTurnId = emitQuestionPromptAndTrack(context, mode, nextQuestion, exhausted, turnId);
             if (nextQuestionTurnId > 0) {
                 emitSpeech(context, nextQuestionTurnId, "question", nextQuestion.getText());
@@ -311,13 +319,33 @@ public class VoiceSessionUseCase {
             if (nextQuestionTurnId > 0) {
                 emitSpeech(context, nextQuestionTurnId, "question", nextQuestion.getText());
             }
-            boolean emittedFeedback = emitMainFeedback(context, turnId, mode, feedbackPlan, nextAction);
-            emitResidualFeedback(context, turnId, mode, sessionState, nextAction, exhausted, emittedFeedback);
+            boolean emittedFeedback = false;
+            try {
+                emittedFeedback = emitMainFeedback(context, turnId, mode, feedbackPlan, nextAction);
+                emitResidualFeedback(context, turnId, mode, sessionState, nextAction, exhausted, emittedFeedback);
+            } catch (Exception e) {
+                emitFeedbackErrorAndContinue(context, turnId, e);
+            }
         }
 
         if (nextAction.type() == SessionFlowPolicy.NextActionType.AUTO_STOP) {
             stopInternal(context, false, nextAction.reason().code());
         }
+    }
+
+    private void emitFeedbackErrorAndContinue(RuntimeContext context, long turnId, Exception error) {
+        String failure = defaultMessage(error == null ? null : error.getMessage());
+        context.emit("error", errorPayload(
+                context.sessionId,
+                turnId,
+                "피드백 생성에 실패했습니다. 다음 질문으로 진행합니다. (" + failure + ")"
+        ));
+        log.warning(() -> "feedback generation failed but session continued sessionId="
+                + context.sessionId
+                + " turnId="
+                + turnId
+                + " reason="
+                + failure);
     }
 
     private long emitQuestionPromptAndTrack(RuntimeContext context,
@@ -910,6 +938,7 @@ public class VoiceSessionUseCase {
         private final Object audioLock = new Object();
         private final ByteArrayOutputStream pcmBuffer = new ByteArrayOutputStream();
         private int sampleRate = DEFAULT_SAMPLE_RATE;
+        private Long lastAcceptedChunkSequence;
         private NextQuestion currentQuestion;
         private long currentTurnId;
 
@@ -971,6 +1000,19 @@ public class VoiceSessionUseCase {
                 if (sampleRate > 0) {
                     this.sampleRate = sampleRate;
                 }
+            }
+        }
+
+        private boolean acceptChunkSequence(Long sequence) {
+            if (sequence == null) {
+                return true;
+            }
+            synchronized (audioLock) {
+                if (lastAcceptedChunkSequence != null && sequence <= lastAcceptedChunkSequence) {
+                    return false;
+                }
+                lastAcceptedChunkSequence = sequence;
+                return true;
             }
         }
 

@@ -11,7 +11,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class OpenAiLlmClientTest {
 
@@ -59,6 +61,7 @@ class OpenAiLlmClientTest {
 
         JsonNode payload = objectMapper.readTree(request.getBody().readUtf8());
         assertEquals("gpt-4o-mini", payload.path("model").asText());
+        assertEquals(0.2, payload.path("temperature").asDouble());
         assertEquals("sys", payload.path("messages").path(0).path("content").asText());
         assertEquals("user", payload.path("messages").path(1).path("content").asText());
         assertEquals("json_schema", payload.path("response_format").path("type").asText());
@@ -99,5 +102,58 @@ class OpenAiLlmClientTest {
 
         JsonNode payload = objectMapper.readTree(server.takeRequest().getBody().readUtf8());
         assertEquals("gpt-4o-mini", payload.path("model").asText());
+    }
+
+    @Test
+    void generate_doesNotSendTemperatureForGpt5Family() throws Exception {
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"choices\":[{\"message\":{\"content\":\"{\\\"summary\\\":\\\"ok\\\"}\"}}]}"));
+
+        OpenAiLlmClient client = new OpenAiLlmClient(WebClient.builder()
+                .baseUrl(server.url("/").toString())
+                .build());
+
+        client.generate("api-key", "gpt-5-mini", "sys", "user");
+
+        JsonNode payload = objectMapper.readTree(server.takeRequest().getBody().readUtf8());
+        assertEquals("gpt-5-mini", payload.path("model").asText());
+        assertFalse(payload.has("temperature"));
+    }
+
+    @Test
+    void generate_retriesOnceWithoutUnsupportedParameter() throws Exception {
+        server.enqueue(new MockResponse()
+                .setResponseCode(400)
+                .setHeader("Content-Type", "application/json")
+                .setBody("""
+                        {
+                          "error": {
+                            "message": "Unsupported parameter: 'temperature' is not supported with this model.",
+                            "type": "invalid_request_error",
+                            "param": "temperature",
+                            "code": "unsupported_parameter"
+                          }
+                        }
+                        """));
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"choices\":[{\"message\":{\"content\":\"{\\\"summary\\\":\\\"ok\\\"}\"}}]}"));
+
+        OpenAiLlmClient client = new OpenAiLlmClient(WebClient.builder()
+                .baseUrl(server.url("/").toString())
+                .build());
+
+        String result = client.generate("api-key", "gpt-4o-mini", "sys", "user");
+        assertEquals("{\"summary\":\"ok\"}", result);
+
+        RecordedRequest first = server.takeRequest();
+        RecordedRequest second = server.takeRequest();
+
+        JsonNode firstPayload = objectMapper.readTree(first.getBody().readUtf8());
+        JsonNode secondPayload = objectMapper.readTree(second.getBody().readUtf8());
+        assertTrue(firstPayload.has("temperature"));
+        assertFalse(secondPayload.has("temperature"));
+        assertEquals("gpt-4o-mini", secondPayload.path("model").asText());
     }
 }

@@ -6,17 +6,23 @@ import me.go_gradually.omypic.application.feedback.port.LlmClient;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.logging.Logger;
 
 @Component
 public class OpenAiLlmClient implements LlmClient {
     private static final String DEFAULT_CHAT_MODEL = "gpt-4o-mini";
+    private static final Logger log = Logger.getLogger(OpenAiLlmClient.class.getName());
     private final WebClient webClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final OpenAiModelParameterPolicyResolver modelParameterPolicyResolver = new OpenAiModelParameterPolicyResolver();
 
     public OpenAiLlmClient(@Qualifier("openAiWebClient") WebClient webClient) {
         this.webClient = webClient;
@@ -35,6 +41,27 @@ public class OpenAiLlmClient implements LlmClient {
 
     private String requestOpenAi(String apiKey, String model, String systemPrompt, String userPrompt) {
         Map<String, Object> payload = requestPayload(model, systemPrompt, userPrompt);
+        try {
+            return requestOpenAiOnce(apiKey, payload);
+        } catch (WebClientResponseException e) {
+            if (e.getStatusCode().value() != 400) {
+                throw e;
+            }
+            String unsupportedParam = unsupportedParameter(e.getResponseBodyAsString());
+            if (!canRetryByRemoving(payload, unsupportedParam)) {
+                throw e;
+            }
+            Map<String, Object> retriedPayload = new HashMap<>(payload);
+            retriedPayload.remove(unsupportedParam);
+            log.warning(() -> "openai request retry without unsupported parameter model="
+                    + String.valueOf(payload.get("model"))
+                    + " removed="
+                    + unsupportedParam);
+            return requestOpenAiOnce(apiKey, retriedPayload);
+        }
+    }
+
+    private String requestOpenAiOnce(String apiKey, Map<String, Object> payload) {
         return webClient.post()
                 .uri("/v1/chat/completions")
                 .header("Authorization", "Bearer " + apiKey)
@@ -45,9 +72,11 @@ public class OpenAiLlmClient implements LlmClient {
     }
 
     private Map<String, Object> requestPayload(String model, String systemPrompt, String userPrompt) {
+        String resolvedModel = resolveChatModel(model);
+        OpenAiModelParameterPolicy parameterPolicy = modelParameterPolicyResolver.resolve(resolvedModel);
         Map<String, Object> payload = new HashMap<>();
-        payload.put("model", resolveChatModel(model));
-        payload.put("temperature", 0.2);
+        payload.put("model", resolvedModel);
+        parameterPolicy.apply(payload);
         payload.put("response_format", feedbackResponseFormat());
         payload.put("messages", List.of(
                 Map.of("role", "system", "content", systemPrompt),
@@ -116,6 +145,68 @@ public class OpenAiLlmClient implements LlmClient {
             return DEFAULT_CHAT_MODEL;
         }
         return candidate;
+    }
+
+    private boolean canRetryByRemoving(Map<String, Object> payload, String unsupportedParam) {
+        if (unsupportedParam == null || unsupportedParam.isBlank()) {
+            return false;
+        }
+        String normalized = normalizeParameterName(unsupportedParam);
+        return modelParameterPolicyResolver.isRetryRemovableParameter(normalized) && payload.containsKey(normalized);
+    }
+
+    private String unsupportedParameter(String body) {
+        if (body == null || body.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(body);
+            JsonNode error = root.path("error");
+            String code = error.path("code").asText("");
+            String param = normalizeParameterName(error.path("param").asText(""));
+            if ("unsupported_parameter".equalsIgnoreCase(code) && !param.isBlank()) {
+                return param;
+            }
+            String message = error.path("message").asText("");
+            return inferParameterFromMessage(message);
+        } catch (Exception ignored) {
+            return inferParameterFromMessage(body);
+        }
+    }
+
+    private String inferParameterFromMessage(String message) {
+        if (message == null || message.isBlank()) {
+            return null;
+        }
+        String lowered = message.toLowerCase(Locale.ROOT);
+        Set<String> matched = new HashSet<>();
+        for (String key : modelParameterPolicyResolver.retryRemovableParameters()) {
+            if (lowered.contains(key.toLowerCase(Locale.ROOT))) {
+                matched.add(key);
+            }
+        }
+        if (matched.isEmpty()) {
+            return null;
+        }
+        if (matched.contains("temperature")) {
+            return "temperature";
+        }
+        return matched.stream().sorted().findFirst().orElse(null);
+    }
+
+    private String normalizeParameterName(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        String normalized = raw.trim().toLowerCase(Locale.ROOT);
+        if (normalized.startsWith("request.body.")) {
+            normalized = normalized.substring("request.body.".length());
+        }
+        int dot = normalized.indexOf('.');
+        if (dot >= 0) {
+            normalized = normalized.substring(0, dot);
+        }
+        return normalized;
     }
 
     private String extractContent(String response) throws Exception {
