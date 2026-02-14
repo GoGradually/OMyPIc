@@ -11,7 +11,10 @@ import {
     NO_WINDOW_ID,
     SPEECH_STATE,
     VAD_RMS_THRESHOLD,
-    VAD_SILENCE_MS
+    VAD_SILENCE_MS,
+    VOICE_RECONNECT_BASE_DELAY_MS,
+    VOICE_RECONNECT_MAX_ATTEMPTS,
+    VOICE_RECONNECT_MAX_DELAY_MS
 } from './voiceSessionConstants.js'
 import {computeRms, joinByteChunks} from './voiceSessionAudio.js'
 
@@ -72,6 +75,11 @@ export function useVoiceSession({
     const answerWindowIdRef = useRef(0)
     const captureWindowIdRef = useRef(NO_WINDOW_ID)
     const stopSessionRef = useRef(null)
+    const reconnectAttemptsRef = useRef(0)
+    const reconnectTimerRef = useRef(null)
+    const reconnectingRef = useRef(false)
+    const onConnectionErrorRef = useRef(() => {
+    })
 
     useEffect(() => {
         statusRef.current = onStatus
@@ -199,6 +207,19 @@ export function useVoiceSession({
         })
     }, [clearTtsPlayback, refreshAudioDeviceStatus, resetPendingAudio, setStatus])
 
+    const clearReconnectTimer = useCallback(() => {
+        if (reconnectTimerRef.current !== null) {
+            clearTimeout(reconnectTimerRef.current)
+            reconnectTimerRef.current = null
+        }
+    }, [])
+
+    const resetReconnectState = useCallback(() => {
+        clearReconnectTimer()
+        reconnectAttemptsRef.current = 0
+        reconnectingRef.current = false
+    }, [clearReconnectTimer])
+
     const flushPendingAudio = useCallback(async ({force = false, expectedWindowId = null} = {}) => {
         const voiceSessionId = voiceSessionIdRef.current
         if (!voiceSessionId) {
@@ -278,6 +299,7 @@ export function useVoiceSession({
         }
 
         localStopRef.current = notifyServer
+        resetReconnectState()
         setSessionPhase('STOPPING')
         updateSpeechState(SPEECH_STATE.STOPPING)
         resetPendingAudio()
@@ -302,7 +324,7 @@ export function useVoiceSession({
         if (statusMessage) {
             setStatus(statusMessage)
         }
-    }, [closeEventSource, flushPendingAudio, resetPendingAudio, setStatus, stopCapture, updateSpeechState])
+    }, [closeEventSource, flushPendingAudio, resetPendingAudio, resetReconnectState, setStatus, stopCapture, updateSpeechState])
 
     useEffect(() => {
         stopSessionRef.current = stopSession
@@ -318,9 +340,13 @@ export function useVoiceSession({
 
         bindVoiceEvents({
             eventSource,
-            localStopRef,
             serverStopRef,
-            setVoiceConnected,
+            setVoiceConnected: (connected) => {
+                setVoiceConnected(connected)
+                if (connected) {
+                    resetReconnectState()
+                }
+            },
             setStatus,
             setPartialTranscript,
             setTranscript,
@@ -337,9 +363,94 @@ export function useVoiceSession({
             refreshWrongNotes: refreshWrongNotesAction,
             stopSession,
             enqueueTtsAudio,
-            handleTtsFailure
+            handleTtsFailure,
+            onConnectionError: () => {
+                onConnectionErrorRef.current?.()
+            }
         })
-    }, [enqueueTtsAudio, handleTtsFailure, resetPendingAudio, setStatus, stopSession, updateSpeechState])
+    }, [enqueueTtsAudio, handleTtsFailure, resetPendingAudio, resetReconnectState, setStatus, stopSession, updateSpeechState])
+
+    const scheduleReconnect = useCallback(() => {
+        if (!sessionActiveRef.current || !voiceSessionIdRef.current) {
+            reconnectingRef.current = false
+            return
+        }
+        if (reconnectingRef.current || reconnectTimerRef.current !== null) {
+            return
+        }
+
+        const nextAttempt = reconnectAttemptsRef.current + 1
+        if (nextAttempt > VOICE_RECONNECT_MAX_ATTEMPTS) {
+            reconnectingRef.current = false
+            stopSession({
+                forced: false,
+                notifyServer: false,
+                statusMessage: '음성 이벤트 연결이 반복적으로 끊겨 세션을 종료했습니다. 다시 시작해 주세요.'
+            }).catch(() => {
+            })
+            return
+        }
+
+        reconnectAttemptsRef.current = nextAttempt
+        reconnectingRef.current = true
+        setVoiceConnected(false)
+        setStatus(`음성 이벤트 연결이 끊겼습니다. 재연결을 시도합니다. (${nextAttempt}/${VOICE_RECONNECT_MAX_ATTEMPTS})`)
+
+        const delayMs = Math.min(
+            VOICE_RECONNECT_BASE_DELAY_MS * (2 ** (nextAttempt - 1)),
+            VOICE_RECONNECT_MAX_DELAY_MS
+        )
+
+        reconnectTimerRef.current = setTimeout(() => {
+            reconnectTimerRef.current = null
+            const reconnect = async () => {
+                if (!sessionActiveRef.current || localStopRef.current || serverStopRef.current) {
+                    reconnectingRef.current = false
+                    return
+                }
+                const voiceSessionId = voiceSessionIdRef.current
+                if (!voiceSessionId) {
+                    reconnectingRef.current = false
+                    return
+                }
+                try {
+                    const eventsUrl = await getVoiceEventsUrl(voiceSessionId)
+                    closeEventSource()
+                    const eventSource = new EventSource(eventsUrl)
+                    eventSourceRef.current = eventSource
+                    bindSessionEvents(eventSource)
+                    reconnectingRef.current = false
+                    reconnectAttemptsRef.current = 0
+                    setVoiceConnected(true)
+                    setStatus('음성 이벤트 연결이 복구되었습니다.')
+                } catch (_error) {
+                    reconnectingRef.current = false
+                    scheduleReconnect()
+                }
+            }
+            reconnect().catch(() => {
+                reconnectingRef.current = false
+                scheduleReconnect()
+            })
+        }, delayMs)
+    }, [bindSessionEvents, closeEventSource, setStatus, stopSession])
+
+    const handleConnectionError = useCallback(() => {
+        if (localStopRef.current || serverStopRef.current) {
+            localStopRef.current = false
+            serverStopRef.current = false
+            return
+        }
+        if (!sessionActiveRef.current || !voiceSessionIdRef.current) {
+            return
+        }
+        closeEventSource()
+        scheduleReconnect()
+    }, [closeEventSource, scheduleReconnect])
+
+    useEffect(() => {
+        onConnectionErrorRef.current = handleConnectionError
+    }, [handleConnectionError])
 
     const startSession = useCallback(async () => {
         if (sessionActiveRef.current) {
@@ -356,6 +467,7 @@ export function useVoiceSession({
             setSessionPhase('STARTING')
             localStopRef.current = false
             serverStopRef.current = false
+            resetReconnectState()
             answerWindowIdRef.current = 0
             captureWindowIdRef.current = NO_WINDOW_ID
             updateSpeechState(SPEECH_STATE.WAITING_TTS)
@@ -452,6 +564,7 @@ export function useVoiceSession({
             const openedVoiceSessionId = voiceSessionIdRef.current
             setSessionPhase('IDLE')
             updateSpeechState(SPEECH_STATE.IDLE)
+            resetReconnectState()
             if (error?.name === 'NotAllowedError' || error?.name === 'SecurityError') {
                 setAudioPermission('denied')
                 setStatus('마이크 권한이 거부되었습니다. 아래에서 권한 요청을 다시 실행해 주세요.')
@@ -483,6 +596,7 @@ export function useVoiceSession({
         flushPendingAudio,
         refreshAudioDeviceStatus,
         resetPendingAudio,
+        resetReconnectState,
         sessionId,
         setAudioPermission,
         setStatus,

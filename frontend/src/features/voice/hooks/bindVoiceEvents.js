@@ -16,7 +16,6 @@ function parseQuestionPayload(data) {
 
 export function bindVoiceEvents({
                                     eventSource,
-                                    localStopRef,
                                     serverStopRef,
                                     setVoiceConnected,
                                     setStatus,
@@ -31,7 +30,8 @@ export function bindVoiceEvents({
                                     refreshWrongNotes,
                                     stopSession,
                                     enqueueTtsAudio,
-                                    handleTtsFailure
+                                    handleTtsFailure,
+                                    onConnectionError
                                 }) {
     eventSource.addEventListener('session.ready', () => {
         setVoiceConnected(true)
@@ -104,16 +104,6 @@ export function bindVoiceEvents({
     })
 
     eventSource.onerror = () => {
-        if (localStopRef.current || serverStopRef.current) {
-            localStopRef.current = false
-            serverStopRef.current = false
-            return
-        }
-        stopSession({
-            forced: false,
-            notifyServer: false,
-            statusMessage: '음성 이벤트 연결이 종료되어 세션을 중단했습니다.'
-        }).catch(() => {
-        })
+        onConnectionError?.()
     }
 }

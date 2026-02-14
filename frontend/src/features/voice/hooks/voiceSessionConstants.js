@@ -12,6 +12,9 @@ export const VAD_RMS_THRESHOLD = 0.018
 export const VAD_SILENCE_MS = 1500
 export const MIN_TURN_DURATION_MS = 300
 export const NO_WINDOW_ID = -1
+export const VOICE_RECONNECT_MAX_ATTEMPTS = 4
+export const VOICE_RECONNECT_BASE_DELAY_MS = 500
+export const VOICE_RECONNECT_MAX_DELAY_MS = 4000
 
 export const SPEECH_STATE = {
     IDLE: 'IDLE',

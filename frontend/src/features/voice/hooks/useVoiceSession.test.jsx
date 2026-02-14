@@ -12,6 +12,7 @@ vi.mock('../../../shared/api/http.js', () => ({
 }))
 
 let activeEventSource = null
+let eventSourceInstances = []
 let lastProcessor = null
 let audioInstances = []
 let audioPlayShouldFail = false
@@ -21,7 +22,9 @@ class MockEventSource {
         this.url = url
         this.listeners = {}
         this.onerror = null
+        this.closed = false
         activeEventSource = this
+        eventSourceInstances.push(this)
     }
 
     addEventListener(type, listener) {
@@ -32,6 +35,7 @@ class MockEventSource {
     }
 
     close() {
+        this.closed = true
     }
 
     emit(type, payload) {
@@ -40,6 +44,14 @@ class MockEventSource {
         }
         const listeners = this.listeners[type] || []
         listeners.forEach((listener) => listener(event))
+    }
+
+    emitError(payload) {
+        if (typeof this.onerror === 'function') {
+            this.onerror({
+                data: payload === undefined ? '' : JSON.stringify(payload)
+            })
+        }
     }
 }
 
@@ -120,6 +132,7 @@ describe('useVoiceSession', () => {
         vi.clearAllMocks()
 
         activeEventSource = null
+        eventSourceInstances = []
         lastProcessor = null
         audioInstances = []
         audioPlayShouldFail = false
@@ -313,6 +326,130 @@ describe('useVoiceSession', () => {
         })
         expect(result.current.speechState).toBe('IDLE')
         unmount()
+    })
+
+    it('retries event stream connection before stopping the session', async () => {
+        vi.useFakeTimers()
+        const onStatus = vi.fn()
+        const {result, unmount} = renderHook(() => useVoiceSession({
+            sessionId: 's1',
+            feedbackModel: 'gpt-4o-mini',
+            voiceSttModel: 'gpt-4o-mini-transcribe',
+            feedbackLang: 'ko',
+            voice: 'alloy',
+            onStatus,
+            onFeedback: vi.fn(),
+            refreshWrongNotes: vi.fn(async () => {
+            }),
+            onQuestionPrompt: vi.fn()
+        }))
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+        expect(eventSourceInstances).toHaveLength(1)
+
+        act(() => {
+            activeEventSource.emitError()
+        })
+
+        expect(stopVoiceSession).not.toHaveBeenCalled()
+        expect(result.current.sessionActive).toBe(true)
+
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(500)
+        })
+
+        expect(eventSourceInstances).toHaveLength(2)
+        expect(stopVoiceSession).not.toHaveBeenCalled()
+
+        await act(async () => {
+            activeEventSource.emit('session.ready', {sessionId: 's1', voiceSessionId: 'voice-1'})
+        })
+        expect(result.current.voiceConnected).toBe(true)
+        expect(onStatus).toHaveBeenCalledWith('음성 이벤트 연결이 복구되었습니다.')
+        unmount()
+        vi.useRealTimers()
+    })
+
+    it('stops session when reconnect attempts are exhausted', async () => {
+        vi.useFakeTimers()
+        const {result, unmount} = renderHook(() => useVoiceSession({
+            sessionId: 's1',
+            feedbackModel: 'gpt-4o-mini',
+            voiceSttModel: 'gpt-4o-mini-transcribe',
+            feedbackLang: 'ko',
+            voice: 'alloy',
+            onStatus: vi.fn(),
+            onFeedback: vi.fn(),
+            refreshWrongNotes: vi.fn(async () => {
+            }),
+            onQuestionPrompt: vi.fn()
+        }))
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+
+        getVoiceEventsUrl.mockRejectedValue(new Error('sse unavailable'))
+
+        act(() => {
+            activeEventSource.emitError()
+        })
+
+        const reconnectDelays = [500, 1000, 2000, 4000]
+        for (const delay of reconnectDelays) {
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(delay)
+            })
+        }
+
+        await act(async () => {
+            await Promise.resolve()
+        })
+
+        expect(stopVoiceSession).not.toHaveBeenCalled()
+        expect(result.current.sessionActive).toBe(false)
+        expect(result.current.speechState).toBe('IDLE')
+        unmount()
+        vi.useRealTimers()
+    })
+
+    it('does not reconnect when disconnect happens after local stop', async () => {
+        vi.useFakeTimers()
+        const {result, unmount} = renderHook(() => useVoiceSession({
+            sessionId: 's1',
+            feedbackModel: 'gpt-4o-mini',
+            voiceSttModel: 'gpt-4o-mini-transcribe',
+            feedbackLang: 'ko',
+            voice: 'alloy',
+            onStatus: vi.fn(),
+            onFeedback: vi.fn(),
+            refreshWrongNotes: vi.fn(async () => {
+            }),
+            onQuestionPrompt: vi.fn()
+        }))
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+        const sourceCountBeforeStop = eventSourceInstances.length
+
+        await act(async () => {
+            await result.current.stopSession()
+        })
+        expect(stopVoiceSession).toHaveBeenCalledTimes(1)
+
+        act(() => {
+            activeEventSource.emitError()
+        })
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(5000)
+        })
+
+        expect(eventSourceInstances).toHaveLength(sourceCountBeforeStop)
+        unmount()
+        vi.useRealTimers()
     })
 
     it('drops buffered audio immediately when question prompt arrives', async () => {
