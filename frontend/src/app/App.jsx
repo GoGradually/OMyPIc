@@ -35,8 +35,7 @@ import {ModelSettingsOverlay} from '../features/settings/components/ModelSetting
 export default function App() {
     const sessionId = useSessionId()
 
-    const [provider, setProvider] = useState('openai')
-    const [feedbackModel, setFeedbackModel] = useState(FEEDBACK_MODELS.openai[0])
+    const [feedbackModel, setFeedbackModel] = useState(FEEDBACK_MODELS[0])
     const [realtimeConversationModel, setRealtimeConversationModel] = useState(REALTIME_CONVERSATION_MODELS[0])
     const [realtimeSttModel, setRealtimeSttModel] = useState(REALTIME_STT_MODELS[0])
 
@@ -119,7 +118,6 @@ export default function App() {
         handleAudioQuickAction
     } = useRealtimeSession({
         sessionId,
-        provider,
         feedbackModel,
         realtimeConversationModel,
         realtimeSttModel,
@@ -141,15 +139,14 @@ export default function App() {
     }, [refreshRulebooks, refreshQuestionGroups, refreshWrongNotes])
 
     useEffect(() => {
-        setFeedbackModel(FEEDBACK_MODELS[provider][0])
-        getApiKey(provider).then((key) => setApiKeyInput(key || ''))
+        getApiKey().then((key) => setApiKeyInput(key || ''))
         setStatusMessage('')
-    }, [provider])
+    }, [])
 
     const handleSaveApiKey = useCallback(async () => {
-        await setApiKey(provider, apiKeyInput)
+        await setApiKey(apiKeyInput)
         try {
-            const result = await verifyApiKey(provider, apiKeyInput, feedbackModel)
+            const result = await verifyApiKey(apiKeyInput, feedbackModel)
             if (result.valid) {
                 setStatusMessage('API Key 검증이 완료되었습니다.')
             } else {
@@ -158,7 +155,7 @@ export default function App() {
         } catch (error) {
             setStatusMessage(`API Key 검증 실패: ${error.message}`)
         }
-    }, [provider, apiKeyInput, feedbackModel])
+    }, [apiKeyInput, feedbackModel])
 
     const copyUserText = useCallback(async () => {
         if (!userText.trim()) {
@@ -204,7 +201,6 @@ export default function App() {
 
     const statusDetails = {
         sessionIdPrefix: sessionId.slice(0, 8),
-        provider,
         audioPermissionLabel,
         audioInputCount: audioDeviceStatus.inputCount,
         realtimeConversationModel,
@@ -276,8 +272,6 @@ export default function App() {
     if (activePanel === 'model') {
         overlayContent = (
             <ModelSettingsOverlay
-                provider={provider}
-                setProvider={setProvider}
                 realtimeConversationModel={realtimeConversationModel}
                 setRealtimeConversationModel={setRealtimeConversationModel}
                 realtimeSttModel={realtimeSttModel}

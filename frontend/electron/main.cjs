@@ -9,6 +9,7 @@ const keytar = require('keytar')
 const WebSocket = require('ws')
 
 const SERVICE = 'OMyPIc'
+const OPENAI_PROVIDER = 'openai'
 let backendProcess = null
 let mongoProcess = null
 const realtimeSockets = new Map()
@@ -245,17 +246,17 @@ ipcMain.handle('get-backend-url', () => {
     return BACKEND_URL
 })
 
-ipcMain.handle('get-api-key', async (event, provider) => {
-    return keytar.getPassword(SERVICE, provider)
+ipcMain.handle('get-api-key', async () => {
+    return keytar.getPassword(SERVICE, OPENAI_PROVIDER)
 })
 
-ipcMain.handle('set-api-key', async (event, provider, key) => {
-    await keytar.setPassword(SERVICE, provider, key)
+ipcMain.handle('set-api-key', async (event, key) => {
+    await keytar.setPassword(SERVICE, OPENAI_PROVIDER, key)
     return true
 })
 
-ipcMain.handle('delete-api-key', async (event, provider) => {
-    await keytar.deletePassword(SERVICE, provider)
+ipcMain.handle('delete-api-key', async () => {
+    await keytar.deletePassword(SERVICE, OPENAI_PROVIDER)
     return true
 })
 
