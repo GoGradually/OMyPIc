@@ -1,9 +1,9 @@
 import {describe, expect, it} from 'vitest'
-import {buildFeedbackFromRealtime, parseRealtimeEnvelope} from './realtimeEvent.js'
+import {buildFeedbackFromVoice, parseVoiceEnvelope} from './voiceEvent.js'
 
-describe('realtimeEvent', () => {
-    it('parses realtime envelope safely', () => {
-        const parsed = parseRealtimeEnvelope('{"type":"stt.partial","data":{"text":"hello"}}')
+describe('voiceEvent', () => {
+    it('parses voice envelope safely', () => {
+        const parsed = parseVoiceEnvelope('{"type":"stt.partial","data":{"text":"hello"}}')
 
         expect(parsed).toEqual({
             type: 'stt.partial',
@@ -12,7 +12,7 @@ describe('realtimeEvent', () => {
     })
 
     it('builds feedback model with defaults', () => {
-        const feedback = buildFeedbackFromRealtime({
+        const feedback = buildFeedbackFromVoice({
             policy: {
                 mode: 'CONTINUOUS',
                 reason: 'BATCH_READY',

@@ -1,8 +1,6 @@
 export const FEEDBACK_MODELS = ['gpt-4o-mini', 'gpt-4o']
 
-export const REALTIME_CONVERSATION_MODELS = ['gpt-realtime-mini', 'gpt-realtime']
-
-export const REALTIME_STT_MODELS = ['gpt-4o-mini-transcribe', 'gpt-4o-transcribe']
+export const VOICE_STT_MODELS = ['gpt-4o-mini-transcribe', 'gpt-4o-transcribe']
 
 export const VOICES = ['alloy', 'echo', 'fable', 'nova', 'shimmer']
 

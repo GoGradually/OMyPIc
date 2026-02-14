@@ -1,4 +1,4 @@
-export function parseRealtimeEnvelope(raw) {
+export function parseVoiceEnvelope(raw) {
     const envelope = JSON.parse(raw)
     return {
         type: envelope?.type || '',
@@ -19,7 +19,7 @@ function normalizeItem(item = {}) {
     }
 }
 
-export function buildFeedbackFromRealtime(data) {
+export function buildFeedbackFromVoice(data) {
     const batchItems = Array.isArray(data?.batch?.items) ? data.batch.items : []
     const legacyItems = Array.isArray(data?.items) ? data.items : []
     const sourceItems = batchItems.length > 0 ? batchItems : legacyItems

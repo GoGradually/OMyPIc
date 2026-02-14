@@ -3,8 +3,7 @@ import React from 'react'
 export function SummaryPanel({
                                  feedbackLang,
                                  voice,
-                                 realtimeConversationModel,
-                                 realtimeSttModel,
+                                 voiceSttModel,
                                  feedbackModel,
                                  enabledRulebookCount,
                                  questionGroupCount,
@@ -23,15 +22,11 @@ export function SummaryPanel({
                     <strong>{voice}</strong>
                 </li>
                 <li>
-                    <span>실시간 대화 모델</span>
-                    <strong>{realtimeConversationModel}</strong>
+                    <span>STT 모델</span>
+                    <strong>{voiceSttModel}</strong>
                 </li>
                 <li>
-                    <span>실시간 STT 모델</span>
-                    <strong>{realtimeSttModel}</strong>
-                </li>
-                <li>
-                    <span>실시간 피드백 모델</span>
+                    <span>피드백 모델</span>
                     <strong>{feedbackModel}</strong>
                 </li>
                 <li>

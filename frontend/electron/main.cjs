@@ -6,14 +6,11 @@ const net = require('net')
 const http = require('http')
 const https = require('https')
 const keytar = require('keytar')
-const WebSocket = require('ws')
 
 const SERVICE = 'OMyPIc'
 const OPENAI_PROVIDER = 'openai'
 let backendProcess = null
 let mongoProcess = null
-const realtimeSockets = new Map()
-let realtimeSocketSeq = 0
 const BACKEND_URL = process.env.OMYPIC_BACKEND_URL || 'http://localhost:4317'
 const MONGO_URI = process.env.OMYPIC_MONGODB_URI || 'mongodb://127.0.0.1:27017/omypic'
 
@@ -230,14 +227,6 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
-    for (const socket of realtimeSockets.values()) {
-        try {
-            socket.close()
-        } catch (e) {
-            // ignore
-        }
-    }
-    realtimeSockets.clear()
     stopProcess(backendProcess)
     stopProcess(mongoProcess)
 })
@@ -257,89 +246,5 @@ ipcMain.handle('set-api-key', async (event, key) => {
 
 ipcMain.handle('delete-api-key', async () => {
     await keytar.deletePassword(SERVICE, OPENAI_PROVIDER)
-    return true
-})
-
-ipcMain.handle('realtime-connect', async (event, payload) => {
-    const backendUrl = payload?.backendUrl || process.env.OMYPIC_BACKEND_URL || 'http://localhost:4317'
-    const sessionId = payload?.sessionId
-    const apiKey = payload?.apiKey
-    const conversationModel = payload?.conversationModel
-    const sttModel = payload?.sttModel
-    if (!sessionId || !apiKey) {
-        throw new Error('sessionId and apiKey are required')
-    }
-
-    const socketId = `rt-${++realtimeSocketSeq}`
-    const params = new URLSearchParams({sessionId})
-    if (conversationModel) {
-        params.set('conversationModel', conversationModel)
-    }
-    if (sttModel) {
-        params.set('sttModel', sttModel)
-    }
-    const wsUrl = `${backendUrl.replace(/^http/i, 'ws')}/api/realtime/voice?${params.toString()}`
-    return await new Promise((resolve, reject) => {
-        const socket = new WebSocket(wsUrl, {
-            headers: {
-                'X-API-Key': apiKey
-            }
-        })
-        realtimeSockets.set(socketId, socket)
-
-        let resolved = false
-        const sendEvent = (type, data) => {
-            if (!event.sender.isDestroyed()) {
-                event.sender.send('realtime-event', {socketId, type, data})
-            }
-        }
-
-        socket.on('open', () => {
-            sendEvent('open', null)
-            resolved = true
-            resolve(socketId)
-        })
-
-        socket.on('message', (data) => sendEvent('message', data.toString()))
-
-        socket.on('error', (error) => {
-            const message = error?.message || 'Socket error'
-            sendEvent('error', message)
-            if (!resolved) {
-                realtimeSockets.delete(socketId)
-                reject(new Error(message))
-            }
-        })
-
-        socket.on('close', (code, reason) => {
-            const closeReason = reason?.toString() || ''
-            sendEvent('close', {code, reason: closeReason})
-            realtimeSockets.delete(socketId)
-            if (!resolved) {
-                const suffix = closeReason ? ` (${closeReason})` : ''
-                reject(new Error(`Socket closed before open: ${code}${suffix}`))
-            }
-        })
-    })
-})
-
-ipcMain.handle('realtime-send', async (event, payload) => {
-    const socketId = payload?.socketId
-    const message = payload?.message
-    const socket = realtimeSockets.get(socketId)
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
-        return false
-    }
-    socket.send(message)
-    return true
-})
-
-ipcMain.handle('realtime-close', async (event, socketId) => {
-    const socket = realtimeSockets.get(socketId)
-    if (!socket) {
-        return false
-    }
-    socket.close()
-    realtimeSockets.delete(socketId)
     return true
 })

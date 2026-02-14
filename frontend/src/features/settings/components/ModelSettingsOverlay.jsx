@@ -1,16 +1,13 @@
 import React from 'react'
 import {
     FEEDBACK_MODELS,
-    REALTIME_CONVERSATION_MODELS,
-    REALTIME_STT_MODELS,
+    VOICE_STT_MODELS,
     VOICES
 } from '../../../shared/constants/models.js'
 
 export function ModelSettingsOverlay({
-                                         realtimeConversationModel,
-                                         setRealtimeConversationModel,
-                                         realtimeSttModel,
-                                         setRealtimeSttModel,
+                                         voiceSttModel,
+                                         setVoiceSttModel,
                                          feedbackModel,
                                          setFeedbackModel,
                                          apiKeyInput,
@@ -19,31 +16,21 @@ export function ModelSettingsOverlay({
                                          setVoice,
                                          feedbackLang,
                                          setFeedbackLang,
-                                         onSaveApiKey,
-                                         onSyncRealtimeSettings
+                                         onSaveApiKey
                                      }) {
     return (
         <div className="overlay-content">
             <div className="field-grid two-col">
                 <div className="field-block">
-                    <label>실시간 대화 모델</label>
-                    <select value={realtimeConversationModel}
-                            onChange={(event) => setRealtimeConversationModel(event.target.value)}>
-                        {REALTIME_CONVERSATION_MODELS.map((item) => (
+                    <label>STT 모델</label>
+                    <select value={voiceSttModel} onChange={(event) => setVoiceSttModel(event.target.value)}>
+                        {VOICE_STT_MODELS.map((item) => (
                             <option key={item} value={item}>{item}</option>
                         ))}
                     </select>
                 </div>
                 <div className="field-block">
-                    <label>실시간 STT 모델</label>
-                    <select value={realtimeSttModel} onChange={(event) => setRealtimeSttModel(event.target.value)}>
-                        {REALTIME_STT_MODELS.map((item) => (
-                            <option key={item} value={item}>{item}</option>
-                        ))}
-                    </select>
-                </div>
-                <div className="field-block">
-                    <label>실시간 피드백 모델</label>
+                    <label>피드백 모델</label>
                     <select value={feedbackModel} onChange={(event) => setFeedbackModel(event.target.value)}>
                         {FEEDBACK_MODELS.map((item) => (
                             <option key={item} value={item}>{item}</option>
@@ -81,10 +68,9 @@ export function ModelSettingsOverlay({
 
             <div className="action-row">
                 <button className="control-button" onClick={onSaveApiKey}>저장 + 검증</button>
-                <button className="control-button secondary" onClick={onSyncRealtimeSettings}>실시간 설정 반영</button>
             </div>
 
-            <p className="tiny-meta">실시간 음성 기능은 OpenAI API Key가 필요합니다.</p>
+            <p className="tiny-meta">음성 세션 기능은 OpenAI API Key가 필요합니다.</p>
             <p className="tiny-meta">저장 + 검증은 API Key 권한 확인이며, 모델 유효성은 별도로 확인됩니다.</p>
         </div>
     )

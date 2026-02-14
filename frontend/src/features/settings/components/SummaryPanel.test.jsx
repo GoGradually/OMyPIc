@@ -10,9 +10,8 @@ describe('SummaryPanel', () => {
             <SummaryPanel
                 feedbackLang="ko"
                 voice="alloy"
-                realtimeConversationModel="gpt-realtime-mini"
-                realtimeSttModel="gpt-4o-mini-transcribe"
-                feedbackModel="gpt-realtime-mini"
+                voiceSttModel="gpt-4o-mini-transcribe"
+                feedbackModel="gpt-4o-mini"
                 enabledRulebookCount={2}
                 questionGroupCount={3}
                 onOpenSettings={vi.fn()}

@@ -1,11 +1,11 @@
 export {
     callApi,
-    closeRealtime,
-    connectRealtime,
     getApiKey,
     getBackendUrl,
-    sendRealtime,
+    getVoiceEventsUrl,
+    openVoiceSession,
+    sendVoiceAudioChunk,
     setApiKey,
-    subscribeRealtime,
+    stopVoiceSession,
     verifyApiKey
 } from './shared/api/http.js'

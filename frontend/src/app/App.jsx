@@ -4,25 +4,24 @@ import {
     FEEDBACK_MODELS,
     getModeSummary,
     PANEL_TITLES,
-    REALTIME_CONVERSATION_MODELS,
-    REALTIME_STT_MODELS,
+    VOICE_STT_MODELS,
     VOICES
 } from '../shared/constants/models.js'
 import {copyText} from '../shared/utils/clipboard.js'
 import {getCurrentQuestionLabel} from '../shared/utils/mode.js'
 import {useSessionId} from './providers/session.js'
 
-import {useRealtimeSession} from '../features/realtime/hooks/useRealtimeSession.js'
+import {useVoiceSession} from '../features/voice/hooks/useVoiceSession.js'
 import {useRulebooks} from '../features/rulebooks/hooks/useRulebooks.js'
 import {useWrongNotes} from '../features/wrongnotes/hooks/useWrongNotes.js'
 import {useQuestionGroups} from '../features/questions/hooks/useQuestionGroups.js'
 
-import {getAudioUiState} from '../features/realtime/utils/audioStatus.js'
+import {getAudioUiState} from '../features/voice/utils/audioStatus.js'
 
 import {Header} from '../features/layout/components/Header.jsx'
-import {VoicePanel} from '../features/realtime/components/VoicePanel.jsx'
+import {VoicePanel} from '../features/voice/components/VoicePanel.jsx'
 import {QuestionPanel} from '../features/questions/components/QuestionPanel.jsx'
-import {TranscriptPanel} from '../features/realtime/components/TranscriptPanel.jsx'
+import {TranscriptPanel} from '../features/voice/components/TranscriptPanel.jsx'
 import {SummaryPanel} from '../features/settings/components/SummaryPanel.jsx'
 import {RecentFeedbackPanel} from '../features/wrongnotes/components/RecentFeedbackPanel.jsx'
 import {StatusBar} from '../features/layout/components/StatusBar.jsx'
@@ -36,8 +35,7 @@ export default function App() {
     const sessionId = useSessionId()
 
     const [feedbackModel, setFeedbackModel] = useState(FEEDBACK_MODELS[0])
-    const [realtimeConversationModel, setRealtimeConversationModel] = useState(REALTIME_CONVERSATION_MODELS[0])
-    const [realtimeSttModel, setRealtimeSttModel] = useState(REALTIME_STT_MODELS[0])
+    const [voiceSttModel, setVoiceSttModel] = useState(VOICE_STT_MODELS[0])
 
     const [apiKeyInput, setApiKeyInput] = useState('')
     const [statusMessage, setStatusMessage] = useState('')
@@ -106,7 +104,8 @@ export default function App() {
 
     const {
         sessionActive,
-        realtimeConnected,
+        voiceConnected,
+        speechState,
         partialTranscript,
         transcript,
         userText,
@@ -114,13 +113,11 @@ export default function App() {
         audioDeviceStatus,
         startSession,
         stopSession,
-        syncRealtimeSettings,
         handleAudioQuickAction
-    } = useRealtimeSession({
+    } = useVoiceSession({
         sessionId,
         feedbackModel,
-        realtimeConversationModel,
-        realtimeSttModel,
+        voiceSttModel,
         feedbackLang,
         voice,
         onStatus: setStatusMessage,
@@ -203,8 +200,7 @@ export default function App() {
         sessionIdPrefix: sessionId.slice(0, 8),
         audioPermissionLabel,
         audioInputCount: audioDeviceStatus.inputCount,
-        realtimeConversationModel,
-        realtimeSttModel,
+        voiceSttModel,
         feedbackModel
     }
 
@@ -272,10 +268,8 @@ export default function App() {
     if (activePanel === 'model') {
         overlayContent = (
             <ModelSettingsOverlay
-                realtimeConversationModel={realtimeConversationModel}
-                setRealtimeConversationModel={setRealtimeConversationModel}
-                realtimeSttModel={realtimeSttModel}
-                setRealtimeSttModel={setRealtimeSttModel}
+                voiceSttModel={voiceSttModel}
+                setVoiceSttModel={setVoiceSttModel}
                 feedbackModel={feedbackModel}
                 setFeedbackModel={setFeedbackModel}
                 apiKeyInput={apiKeyInput}
@@ -285,7 +279,6 @@ export default function App() {
                 feedbackLang={feedbackLang}
                 setFeedbackLang={setFeedbackLang}
                 onSaveApiKey={handleSaveApiKey}
-                onSyncRealtimeSettings={syncRealtimeSettings}
             />
         )
     }
@@ -297,8 +290,9 @@ export default function App() {
             <div className="workspace app__workspace">
                 <main className="practice-column app__practice-column">
                     <VoicePanel
-                        realtimeConnected={realtimeConnected}
+                        voiceConnected={voiceConnected}
                         sessionActive={sessionActive}
+                        speechState={speechState}
                         partialTranscript={partialTranscript}
                         startSession={handleStartSession}
                         stopSession={handleStopSession}
@@ -328,8 +322,7 @@ export default function App() {
                     <SummaryPanel
                         feedbackLang={feedbackLang}
                         voice={voice}
-                        realtimeConversationModel={realtimeConversationModel}
-                        realtimeSttModel={realtimeSttModel}
+                        voiceSttModel={voiceSttModel}
                         feedbackModel={feedbackModel}
                         enabledRulebookCount={enabledRulebookCount}
                         questionGroupCount={questionGroups.length}
@@ -344,7 +337,7 @@ export default function App() {
             </div>
 
             <StatusBar
-                realtimeConnected={realtimeConnected}
+                voiceConnected={voiceConnected}
                 audioConnectionLabel={audioConnectionLabel}
                 statusMessage={statusMessage}
                 showStatusDetails={showStatusDetails}

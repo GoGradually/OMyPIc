@@ -53,32 +53,32 @@ export async function callApi(path, options = {}) {
     return response
 }
 
-export async function connectRealtime(sessionId, apiKey, conversationModel, sttModel) {
-    if (!window.omypic || !window.omypic.realtimeConnect) {
-        throw new Error('Realtime is only available in desktop app')
-    }
-    const backendUrl = await getBackendUrl()
-    return window.omypic.realtimeConnect({backendUrl, sessionId, apiKey, conversationModel, sttModel})
+export async function openVoiceSession(payload) {
+    const response = await callApi('/api/voice/sessions', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+    })
+    return response.json()
 }
 
-export async function sendRealtime(socketId, payload) {
-    if (!window.omypic || !window.omypic.realtimeSend) {
-        throw new Error('Realtime is only available in desktop app')
-    }
-    return window.omypic.realtimeSend(socketId, JSON.stringify(payload))
+export async function sendVoiceAudioChunk(voiceSessionId, payload) {
+    await callApi(`/api/voice/sessions/${encodeURIComponent(voiceSessionId)}/audio-chunks`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+    })
 }
 
-export async function closeRealtime(socketId) {
-    if (!window.omypic || !window.omypic.realtimeClose) {
-        return false
-    }
-    return window.omypic.realtimeClose(socketId)
+export async function stopVoiceSession(voiceSessionId, payload = {forced: true, reason: 'user_stop'}) {
+    await callApi(`/api/voice/sessions/${encodeURIComponent(voiceSessionId)}/stop`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+    })
 }
 
-export function subscribeRealtime(callback) {
-    if (!window.omypic || !window.omypic.onRealtimeEvent) {
-        return () => {
-        }
-    }
-    return window.omypic.onRealtimeEvent(callback)
+export async function getVoiceEventsUrl(voiceSessionId) {
+    const baseUrl = await getBackendUrl()
+    return `${baseUrl}/api/voice/sessions/${encodeURIComponent(voiceSessionId)}/events`
 }
