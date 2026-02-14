@@ -61,6 +61,14 @@ class OpenAiLlmClientTest {
         assertEquals("gpt-4o-mini", payload.path("model").asText());
         assertEquals("sys", payload.path("messages").path(0).path("content").asText());
         assertEquals("user", payload.path("messages").path(1).path("content").asText());
+        assertEquals("json_schema", payload.path("response_format").path("type").asText());
+        JsonNode schema = payload.path("response_format").path("json_schema").path("schema");
+        assertEquals("object", schema.path("type").asText());
+        assertEquals(false, schema.path("additionalProperties").asBoolean());
+        JsonNode correctionPoints = schema.path("properties").path("correctionPoints");
+        assertEquals("array", correctionPoints.path("type").asText());
+        assertEquals(6, correctionPoints.path("minItems").asInt());
+        assertEquals(6, correctionPoints.path("maxItems").asInt());
     }
 
     @Test

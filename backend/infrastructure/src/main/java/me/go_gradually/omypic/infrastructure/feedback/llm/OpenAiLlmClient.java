@@ -48,12 +48,44 @@ public class OpenAiLlmClient implements LlmClient {
         Map<String, Object> payload = new HashMap<>();
         payload.put("model", resolveChatModel(model));
         payload.put("temperature", 0.2);
-        payload.put("response_format", Map.of("type", "json_object"));
+        payload.put("response_format", feedbackResponseFormat());
         payload.put("messages", List.of(
                 Map.of("role", "system", "content", systemPrompt),
                 Map.of("role", "user", "content", userPrompt)
         ));
         return payload;
+    }
+
+    private Map<String, Object> feedbackResponseFormat() {
+        Map<String, Object> properties = new HashMap<>();
+        properties.put("summary", Map.of("type", "string"));
+        properties.put("correctionPoints", Map.of(
+                "type", "array",
+                "minItems", 6,
+                "maxItems", 6,
+                "items", Map.of("type", "string")
+        ));
+        properties.put("exampleAnswer", Map.of("type", "string"));
+        properties.put("rulebookEvidence", Map.of(
+                "type", "array",
+                "items", Map.of("type", "string")
+        ));
+
+        Map<String, Object> schema = new HashMap<>();
+        schema.put("type", "object");
+        schema.put("additionalProperties", false);
+        schema.put("required", List.of("summary", "correctionPoints", "exampleAnswer", "rulebookEvidence"));
+        schema.put("properties", properties);
+
+        Map<String, Object> jsonSchema = new HashMap<>();
+        jsonSchema.put("name", "feedback_response");
+        jsonSchema.put("strict", true);
+        jsonSchema.put("schema", schema);
+
+        return Map.of(
+                "type", "json_schema",
+                "json_schema", jsonSchema
+        );
     }
 
     private String resolveChatModel(String model) {
