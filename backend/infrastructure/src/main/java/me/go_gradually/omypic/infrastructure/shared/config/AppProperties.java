@@ -363,7 +363,7 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
 
     public static class Voice {
         private String sttModel = "gpt-4o-mini-transcribe";
-        private String feedbackModel = "gpt-4o-mini";
+        private String feedbackModel = "gpt-5-nano";
         private String feedbackLanguage = "ko";
         private String ttsModel = "gpt-4o-mini-tts";
         private String ttsVoice = "alloy";

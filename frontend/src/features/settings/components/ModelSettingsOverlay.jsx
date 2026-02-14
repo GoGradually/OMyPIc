@@ -83,6 +83,8 @@ export function ModelSettingsOverlay({
 
             <p className="tiny-meta">음성 세션 기능은 OpenAI API Key가 필요합니다.</p>
             <p className="tiny-meta">저장 + 검증은 API Key 권한 확인이며, 모델 유효성은 별도로 확인됩니다.</p>
+            <p className="tiny-meta">기본 설정(gpt-5-nano) 기준으로 세션 1회당 약 50원이 사용됩니다.</p>
+            <p className="tiny-meta">실제 비용은 발화 길이와 선택 모델에 따라 달라질 수 있습니다.</p>
         </div>
     )
 }

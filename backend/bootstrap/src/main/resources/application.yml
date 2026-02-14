@@ -54,7 +54,7 @@ omypic:
     wrongnote-window-size: 100
   voice:
     stt-model: gpt-4o-mini-transcribe
-    feedback-model: gpt-4o-mini
+    feedback-model: gpt-5-nano
     feedback-language: ko
     tts-model: gpt-4o-mini-tts
     tts-voice: alloy
