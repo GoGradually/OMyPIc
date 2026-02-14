@@ -16,8 +16,13 @@ function parseTagInput(rawInput) {
 export function useQuestionManager({onGroupsRefreshed} = {}) {
     const [questionGroups, setQuestionGroups] = useState([])
     const [activeGroupId, setActiveGroupId] = useState('')
+    const [isCreateGroupModalOpen, setIsCreateGroupModalOpen] = useState(false)
     const [newGroupName, setNewGroupName] = useState('')
     const [newGroupTagsInput, setNewGroupTagsInput] = useState('')
+    const [isEditGroupModalOpen, setIsEditGroupModalOpen] = useState(false)
+    const [editingGroupId, setEditingGroupId] = useState('')
+    const [editingGroupName, setEditingGroupName] = useState('')
+    const [editingGroupTagsInput, setEditingGroupTagsInput] = useState('')
     const [newQuestion, setNewQuestion] = useState('')
     const [newQuestionType, setNewQuestionType] = useState('')
 
@@ -34,6 +39,36 @@ export function useQuestionManager({onGroupsRefreshed} = {}) {
         setEditingQuestionId('')
         setEditingQuestionText('')
         setEditingQuestionType('')
+    }, [])
+
+    const openCreateGroupModal = useCallback(() => {
+        setNewGroupName('')
+        setNewGroupTagsInput('')
+        setIsCreateGroupModalOpen(true)
+    }, [])
+
+    const closeCreateGroupModal = useCallback(() => {
+        setIsCreateGroupModalOpen(false)
+        setNewGroupName('')
+        setNewGroupTagsInput('')
+    }, [])
+
+    const openEditGroupModal = useCallback((group) => {
+        if (!group || !group.id) {
+            return
+        }
+        setActiveGroupId(group.id)
+        setEditingGroupId(group.id)
+        setEditingGroupName(group.name || '')
+        setEditingGroupTagsInput((group.tags || []).join(', '))
+        setIsEditGroupModalOpen(true)
+    }, [])
+
+    const closeEditGroupModal = useCallback(() => {
+        setIsEditGroupModalOpen(false)
+        setEditingGroupId('')
+        setEditingGroupName('')
+        setEditingGroupTagsInput('')
     }, [])
 
     const refreshQuestionGroups = useCallback(async () => {
@@ -66,16 +101,43 @@ export function useQuestionManager({onGroupsRefreshed} = {}) {
         })
         setNewGroupName('')
         setNewGroupTagsInput('')
+        setIsCreateGroupModalOpen(false)
         await refreshQuestionGroups()
     }, [newGroupName, newGroupTagsInput, refreshQuestionGroups])
 
-    const deleteGroup = useCallback(async () => {
-        if (!activeGroupId) {
+    const deleteGroup = useCallback(async (groupId) => {
+        const targetGroupId = groupId || activeGroupId
+        if (!targetGroupId) {
             return
         }
-        await callApi(`/api/question-groups/${activeGroupId}`, {method: 'DELETE'})
+        await callApi(`/api/question-groups/${targetGroupId}`, {method: 'DELETE'})
+        if (targetGroupId === editingGroupId) {
+            closeEditGroupModal()
+        }
         await refreshQuestionGroups()
-    }, [activeGroupId, refreshQuestionGroups])
+    }, [activeGroupId, editingGroupId, closeEditGroupModal, refreshQuestionGroups])
+
+    const saveEditedGroup = useCallback(async () => {
+        if (!editingGroupId || !editingGroupName.trim()) {
+            return
+        }
+        await callApi(`/api/question-groups/${editingGroupId}`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                name: editingGroupName,
+                tags: parseTagInput(editingGroupTagsInput)
+            })
+        })
+        setIsEditGroupModalOpen(false)
+        setEditingGroupId('')
+        await refreshQuestionGroups()
+    }, [
+        editingGroupId,
+        editingGroupName,
+        editingGroupTagsInput,
+        refreshQuestionGroups
+    ])
 
     const addQuestion = useCallback(async () => {
         if (!activeGroupId || !newQuestion.trim()) {
@@ -137,10 +199,16 @@ export function useQuestionManager({onGroupsRefreshed} = {}) {
         activeGroupId,
         setActiveGroupId,
         activeQuestionGroup,
+        isCreateGroupModalOpen,
         newGroupName,
         setNewGroupName,
         newGroupTagsInput,
         setNewGroupTagsInput,
+        isEditGroupModalOpen,
+        editingGroupName,
+        setEditingGroupName,
+        editingGroupTagsInput,
+        setEditingGroupTagsInput,
         newQuestion,
         setNewQuestion,
         newQuestionType,
@@ -151,8 +219,13 @@ export function useQuestionManager({onGroupsRefreshed} = {}) {
         editingQuestionType,
         setEditingQuestionType,
         refreshQuestionGroups,
+        openCreateGroupModal,
+        closeCreateGroupModal,
         createGroup,
+        openEditGroupModal,
+        closeEditGroupModal,
         deleteGroup,
+        saveEditedGroup,
         addQuestion,
         startEditQuestion,
         cancelEditQuestion,

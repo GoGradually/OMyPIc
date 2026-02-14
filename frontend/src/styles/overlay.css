@@ -171,6 +171,89 @@
     font-weight: 700;
 }
 
+.crud-section {
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    background: #f9fbff;
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+}
+
+.crud-section h3 {
+    margin: 0;
+    font-family: 'Sora', 'IBM Plex Sans KR', sans-serif;
+    font-size: 17px;
+    letter-spacing: -0.02em;
+}
+
+.question-group-list-panel {
+    gap: 12px;
+}
+
+.question-group-list-items li {
+    align-items: stretch;
+}
+
+.question-group-list-items li.is-active {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+}
+
+.group-row-select {
+    border: 0;
+    background: transparent;
+    text-align: left;
+    display: grid;
+    gap: 4px;
+    padding: 0;
+    cursor: pointer;
+}
+
+.group-row-select strong {
+    color: var(--text);
+    font-size: 14px;
+}
+
+.group-row-select small {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.inline-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: rgba(11, 18, 30, 0.46);
+    display: grid;
+    place-items: center;
+    padding: 16px;
+}
+
+.inline-modal {
+    width: min(520px, 96vw);
+    border-radius: 16px;
+    border: 1px solid var(--line);
+    background: #f4f8ff;
+    box-shadow: 0 20px 46px rgba(5, 18, 40, 0.3);
+    display: grid;
+    gap: 10px;
+    padding: 16px;
+}
+
+.inline-modal h3 {
+    margin: 0;
+    font-family: 'Sora', 'IBM Plex Sans KR', sans-serif;
+    font-size: 19px;
+    letter-spacing: -0.02em;
+}
+
+.inline-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
 @media (max-width: 1120px) {
     .workspace {
         grid-template-columns: 1fr;
@@ -231,5 +314,11 @@
 
     .count-banner {
         font-size: 21px;
+    }
+
+    .crud-section,
+    .inline-modal {
+        border-radius: 10px;
+        padding: 10px;
     }
 }

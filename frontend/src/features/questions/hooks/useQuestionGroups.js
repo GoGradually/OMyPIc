@@ -13,8 +13,8 @@ export function useQuestionGroups({
         onGroupsRefreshed: learningMode.refreshTagStats
     })
 
-    const deleteGroup = useCallback(async () => {
-        await questionManager.deleteGroup()
+    const deleteGroup = useCallback(async (groupId) => {
+        await questionManager.deleteGroup(groupId)
         setCurrentQuestion(null)
     }, [questionManager.deleteGroup])
 
