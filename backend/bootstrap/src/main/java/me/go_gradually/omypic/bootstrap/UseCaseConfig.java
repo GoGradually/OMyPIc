@@ -18,8 +18,6 @@ import me.go_gradually.omypic.application.shared.port.AsyncExecutor;
 import me.go_gradually.omypic.application.shared.port.MetricsPort;
 import me.go_gradually.omypic.application.stt.policy.SttPolicy;
 import me.go_gradually.omypic.application.stt.port.SttGateway;
-import me.go_gradually.omypic.application.stt.port.SttJobStorePort;
-import me.go_gradually.omypic.application.stt.usecase.SttJobUseCase;
 import me.go_gradually.omypic.application.stt.usecase.SttUseCase;
 import me.go_gradually.omypic.application.voice.policy.VoicePolicy;
 import me.go_gradually.omypic.application.voice.port.TtsGateway;
@@ -90,14 +88,6 @@ public class UseCaseConfig {
                                  SttPolicy sttPolicy,
                                  MetricsPort metricsPort) {
         return new SttUseCase(sttGateway, sttPolicy, metricsPort);
-    }
-
-    @Bean
-    public SttJobUseCase sttJobUseCase(SttUseCase sttUseCase,
-                                       SessionStorePort sessionStore,
-                                       SttJobStorePort jobStore,
-                                       AsyncExecutor asyncExecutor) {
-        return new SttJobUseCase(sttUseCase, sessionStore, jobStore, asyncExecutor);
     }
 
     @Bean
