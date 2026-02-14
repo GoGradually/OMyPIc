@@ -49,7 +49,6 @@ omypic:
       prefix-padding-ms: 300
       silence-duration-ms: 1500
       threshold: 0.5
-    feedback-provider: openai
     feedback-model: gpt-4o-mini
     feedback-language: ko
     tts-voice: alloy
@@ -57,7 +56,3 @@ omypic:
   integrations:
     openai:
       base-url: ${OMYPIC_OPENAI_BASE_URL:https://api.openai.com}
-    gemini:
-      base-url: ${OMYPIC_GEMINI_BASE_URL:https://generativelanguage.googleapis.com}
-    anthropic:
-      base-url: ${OMYPIC_ANTHROPIC_BASE_URL:https://api.anthropic.com}
