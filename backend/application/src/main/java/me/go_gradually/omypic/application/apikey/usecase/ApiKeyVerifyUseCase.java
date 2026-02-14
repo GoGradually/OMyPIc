@@ -7,6 +7,7 @@ import me.go_gradually.omypic.application.apikey.port.ApiKeyProbePort;
 import java.util.Locale;
 
 public class ApiKeyVerifyUseCase {
+    private static final String OPENAI_PROVIDER = "openai";
     private final ApiKeyProbePort probePort;
 
     public ApiKeyVerifyUseCase(ApiKeyProbePort probePort) {
@@ -16,7 +17,7 @@ public class ApiKeyVerifyUseCase {
     public ApiKeyVerifyResult verify(ApiKeyVerifyCommand command) {
         String provider = normalizeProvider(command.getProvider());
         String apiKey = command.getApiKey();
-        String formatError = validateFormat(provider, apiKey);
+        String formatError = validateFormat(apiKey);
         if (formatError != null) {
             return ApiKeyVerifyResult.failure(provider, formatError);
         }
@@ -41,18 +42,17 @@ public class ApiKeyVerifyUseCase {
         if (provider == null || provider.isBlank()) {
             throw new IllegalArgumentException("Provider is required");
         }
-        return provider.trim().toLowerCase(Locale.ROOT);
+        String normalized = provider.trim().toLowerCase(Locale.ROOT);
+        if (!OPENAI_PROVIDER.equals(normalized)) {
+            throw new IllegalArgumentException("Unsupported provider: only openai is allowed");
+        }
+        return normalized;
     }
 
-    private String validateFormat(String provider, String apiKey) {
+    private String validateFormat(String apiKey) {
         if (apiKey == null || apiKey.isBlank()) {
             return "API key is required";
         }
-        return switch (provider) {
-            case "openai" -> apiKey.startsWith("sk-") ? null : "OpenAI key must start with sk-";
-            case "anthropic" -> apiKey.startsWith("sk-ant-") ? null : "Anthropic key must start with sk-ant-";
-            case "gemini" -> apiKey.startsWith("AIza") ? null : "Gemini key must start with AIza";
-            default -> "Unsupported provider";
-        };
+        return apiKey.startsWith("sk-") ? null : "OpenAI key must start with sk-";
     }
 }
