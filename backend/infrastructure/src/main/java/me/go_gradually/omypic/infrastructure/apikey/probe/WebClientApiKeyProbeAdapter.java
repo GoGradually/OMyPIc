@@ -10,32 +10,25 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 @Component
 public class WebClientApiKeyProbeAdapter implements ApiKeyProbePort {
     private final WebClient openAiWebClient;
-    private final WebClient geminiWebClient;
-    private final WebClient anthropicWebClient;
+    private static final String OPENAI_PROVIDER = "openai";
 
-    public WebClientApiKeyProbeAdapter(@Qualifier("openAiWebClient") WebClient openAiWebClient,
-                                       @Qualifier("geminiWebClient") WebClient geminiWebClient,
-                                       @Qualifier("anthropicWebClient") WebClient anthropicWebClient) {
+    public WebClientApiKeyProbeAdapter(@Qualifier("openAiWebClient") WebClient openAiWebClient) {
         this.openAiWebClient = openAiWebClient;
-        this.geminiWebClient = geminiWebClient;
-        this.anthropicWebClient = anthropicWebClient;
     }
 
     @Override
     public void probe(String provider, String apiKey, String model) throws Exception {
+        validateProvider(provider);
         try {
-            probeProvider(provider, apiKey);
+            probeOpenAi(apiKey);
         } catch (WebClientResponseException ex) {
             throw verificationFailed(ex.getStatusCode());
         }
     }
 
-    private void probeProvider(String provider, String apiKey) {
-        switch (provider) {
-            case "openai" -> probeOpenAi(apiKey);
-            case "gemini" -> probeGemini(apiKey);
-            case "anthropic" -> probeAnthropic(apiKey);
-            default -> throw new IllegalArgumentException("Unsupported provider");
+    private void validateProvider(String provider) {
+        if (provider == null || !OPENAI_PROVIDER.equalsIgnoreCase(provider.trim())) {
+            throw new IllegalArgumentException("Unsupported provider: only openai is allowed");
         }
     }
 
@@ -43,24 +36,6 @@ public class WebClientApiKeyProbeAdapter implements ApiKeyProbePort {
         openAiWebClient.get()
                 .uri("/v1/models")
                 .header("Authorization", "Bearer " + apiKey)
-                .retrieve()
-                .toBodilessEntity()
-                .block();
-    }
-
-    private void probeGemini(String apiKey) {
-        geminiWebClient.get()
-                .uri("/v1beta/models?key=" + apiKey)
-                .retrieve()
-                .toBodilessEntity()
-                .block();
-    }
-
-    private void probeAnthropic(String apiKey) {
-        anthropicWebClient.get()
-                .uri("/v1/models")
-                .header("x-api-key", apiKey)
-                .header("anthropic-version", "2023-06-01")
                 .retrieve()
                 .toBodilessEntity()
                 .block();

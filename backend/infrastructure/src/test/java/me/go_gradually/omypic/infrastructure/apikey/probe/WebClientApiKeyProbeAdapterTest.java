@@ -48,19 +48,14 @@ class WebClientApiKeyProbeAdapterTest {
     }
 
     @Test
-    void probe_gemini_usesQueryKey() throws Exception {
-        server.enqueue(new MockResponse().setResponseCode(200));
+    void probe_throwsWhenProviderUnsupported() {
         WebClientApiKeyProbeAdapter adapter = adapterWithSingleServer();
-
-        adapter.probe("gemini", "AIza-test", null);
-
-        RecordedRequest request = server.takeRequest();
-        assertEquals("/v1beta/models?key=AIza-test", request.getPath());
+        assertThrows(IllegalArgumentException.class, () -> adapter.probe("gemini", "AIza-test", null));
     }
 
     private WebClientApiKeyProbeAdapter adapterWithSingleServer() {
         String base = server.url("/").toString();
         WebClient webClient = WebClient.builder().baseUrl(base).build();
-        return new WebClientApiKeyProbeAdapter(webClient, webClient, webClient);
+        return new WebClientApiKeyProbeAdapter(webClient);
     }
 }
