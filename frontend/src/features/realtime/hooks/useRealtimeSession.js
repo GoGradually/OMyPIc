@@ -11,6 +11,7 @@ const INITIAL_AUDIO_DEVICE_STATUS = {
     lastCheckedAt: ''
 }
 const AUDIO_PROCESS_BUFFER_SIZE = 2048
+const FEEDBACK_PROVIDER = 'openai'
 
 function getCurrentTimeLabel() {
     return new Date().toLocaleTimeString('ko-KR', {hour12: false})
@@ -18,7 +19,6 @@ function getCurrentTimeLabel() {
 
 export function useRealtimeSession({
                                        sessionId,
-                                       provider,
                                        feedbackModel,
                                        realtimeConversationModel,
                                        realtimeSttModel,
@@ -44,7 +44,6 @@ export function useRealtimeSession({
     const questionPromptRef = useRef(onQuestionPrompt)
 
     const settingsRef = useRef({
-        provider,
         feedbackModel,
         realtimeConversationModel,
         realtimeSttModel,
@@ -85,14 +84,13 @@ export function useRealtimeSession({
 
     useEffect(() => {
         settingsRef.current = {
-            provider,
             feedbackModel,
             realtimeConversationModel,
             realtimeSttModel,
             feedbackLang,
             voice
         }
-    }, [provider, feedbackModel, realtimeConversationModel, realtimeSttModel, feedbackLang, voice])
+    }, [feedbackModel, realtimeConversationModel, realtimeSttModel, feedbackLang, voice])
 
     useEffect(() => {
         sessionPhaseRef.current = sessionPhase
@@ -154,7 +152,7 @@ export function useRealtimeSession({
             setRealtimeConnected(false)
         }
 
-        const openAiKey = await getApiKey('openai')
+        const openAiKey = await getApiKey()
         if (!openAiKey) {
             throw new Error('실시간 음성을 사용하려면 OpenAI API Key가 필요합니다.')
         }
@@ -181,14 +179,14 @@ export function useRealtimeSession({
         }
 
         const socketId = await ensureRealtimeConnected()
-        const feedbackApiKey = await getApiKey(settingsRef.current.provider)
+        const feedbackApiKey = await getApiKey()
 
         await sendRealtime(socketId, {
             type: 'session.update',
             data: {
                 conversationModel: settingsRef.current.realtimeConversationModel,
                 sttModel: settingsRef.current.realtimeSttModel,
-                feedbackProvider: settingsRef.current.provider,
+                feedbackProvider: FEEDBACK_PROVIDER,
                 feedbackModel: settingsRef.current.feedbackModel,
                 feedbackApiKey: feedbackApiKey || '',
                 feedbackLanguage: settingsRef.current.feedbackLang,
@@ -566,7 +564,6 @@ export function useRealtimeSession({
         syncRealtimeSettings().catch(() => {
         })
     }, [
-        provider,
         feedbackModel,
         realtimeConversationModel,
         realtimeSttModel,
