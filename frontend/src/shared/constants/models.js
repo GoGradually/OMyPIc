@@ -19,7 +19,8 @@ export const AUDIO_PERMISSION_LABELS = {
 
 export const PANEL_TITLES = {
     rulebook: '룰북 관리',
-    questions: '질문 그룹 및 모드 설정',
+    'question-manager': '질문 관리',
+    'learning-mode': '학습 모드 관리',
     wrongnotes: '오답 노트',
     model: '연결 설정'
 }

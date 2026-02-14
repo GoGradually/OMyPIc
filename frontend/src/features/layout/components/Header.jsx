@@ -2,7 +2,8 @@ import React from 'react'
 
 const QUICK_PANELS = [
     {key: 'rulebook', label: '룰북'},
-    {key: 'questions', label: '질문'},
+    {key: 'question-manager', label: '질문 관리'},
+    {key: 'learning-mode', label: '학습 모드'},
     {key: 'wrongnotes', label: '오답노트'},
     {key: 'model', label: '설정'}
 ]

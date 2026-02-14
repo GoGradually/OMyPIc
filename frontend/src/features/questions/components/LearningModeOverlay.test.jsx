@@ -2,7 +2,7 @@
 import React from 'react'
 import {afterEach, describe, expect, it, vi} from 'vitest'
 import {cleanup, render, screen} from '@testing-library/react'
-import {QuestionsOverlay} from './QuestionsOverlay.jsx'
+import {LearningModeOverlay} from './LearningModeOverlay.jsx'
 
 afterEach(() => {
     cleanup()
@@ -15,49 +15,17 @@ function buildProps(overrides = {}) {
         batchSize: 3,
         setBatchSize: vi.fn(),
         updateMode: vi.fn(),
-        nextQuestion: vi.fn(),
         tagStats: [],
         selectedGroupTags: [],
         toggleSelectedTag: vi.fn(),
-        activeGroupId: '',
-        newGroupName: '',
-        setNewGroupName: vi.fn(),
-        newGroupTagsInput: '',
-        setNewGroupTagsInput: vi.fn(),
-        questionGroups: [],
-        setActiveGroupId: vi.fn(),
-        createGroup: vi.fn(),
-        deleteGroup: vi.fn(),
-        newQuestion: '',
-        setNewQuestion: vi.fn(),
-        newQuestionType: '',
-        setNewQuestionType: vi.fn(),
-        addQuestion: vi.fn(),
-        activeQuestionGroup: null,
-        editingQuestionId: '',
-        editingQuestionText: '',
-        setEditingQuestionText: vi.fn(),
-        editingQuestionType: '',
-        setEditingQuestionType: vi.fn(),
-        startEditQuestion: vi.fn(),
-        saveEditedQuestion: vi.fn(),
-        cancelEditQuestion: vi.fn(),
-        removeQuestion: vi.fn(),
         ...overrides
     }
 }
 
-describe('QuestionsOverlay', () => {
-    it('removes legacy list selection UI labels', () => {
-        render(<QuestionsOverlay {...buildProps()} />)
-
-        expect(screen.queryByText('리스트 선택')).toBeNull()
-        expect(screen.queryByText('새 리스트 이름')).toBeNull()
-    })
-
+describe('LearningModeOverlay', () => {
     it('renders tag buttons from tag stats', () => {
         render(
-            <QuestionsOverlay
+            <LearningModeOverlay
                 {...buildProps({
                     tagStats: [
                         {tag: 'travel', groupCount: 2, selectable: true},
@@ -73,7 +41,7 @@ describe('QuestionsOverlay', () => {
 
     it('disables non-selectable tags', () => {
         render(
-            <QuestionsOverlay
+            <LearningModeOverlay
                 {...buildProps({
                     tagStats: [
                         {tag: 'travel', groupCount: 2, selectable: true},
@@ -87,5 +55,12 @@ describe('QuestionsOverlay', () => {
         const disabled = screen.getByRole('button', {name: 'legacy (0)'})
         expect(enabled.disabled).toBe(false)
         expect(disabled.disabled).toBe(true)
+    })
+
+    it('does not render question manager controls', () => {
+        render(<LearningModeOverlay {...buildProps()} />)
+
+        expect(screen.queryByText('새 질문 그룹 이름')).toBeNull()
+        expect(screen.queryByRole('button', {name: '다음 질문'})).toBeNull()
     })
 })

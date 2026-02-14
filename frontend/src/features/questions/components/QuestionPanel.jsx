@@ -1,6 +1,11 @@
 import React from 'react'
 
-export function QuestionPanel({currentQuestionLabel, modeSummary, onOpenQuestionsPanel}) {
+export function QuestionPanel({
+                                  currentQuestionLabel,
+                                  modeSummary,
+                                  onOpenQuestionManager,
+                                  onOpenLearningMode
+                              }) {
     return (
         <section className="panel question-panel">
             <div className="panel-head question-panel__head">
@@ -15,12 +20,20 @@ export function QuestionPanel({currentQuestionLabel, modeSummary, onOpenQuestion
                     <p className="mode-label">학습 모드</p>
                     <strong>{modeSummary}</strong>
                 </div>
-                <button
-                    className="control-button secondary"
-                    onClick={onOpenQuestionsPanel}
-                >
-                    모드/질문 그룹 관리
-                </button>
+                <div className="action-row">
+                    <button
+                        className="control-button secondary"
+                        onClick={onOpenLearningMode}
+                    >
+                        학습 모드 관리
+                    </button>
+                    <button
+                        className="control-button secondary"
+                        onClick={onOpenQuestionManager}
+                    >
+                        질문 관리
+                    </button>
+                </div>
             </div>
         </section>
     )

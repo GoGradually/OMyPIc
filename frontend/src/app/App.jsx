@@ -1,12 +1,6 @@
 import React, {useCallback, useEffect, useState} from 'react'
 import {getApiKey, setApiKey, verifyApiKey} from '../shared/api/http.js'
-import {
-    FEEDBACK_MODELS,
-    getModeSummary,
-    PANEL_TITLES,
-    VOICE_STT_MODELS,
-    VOICES
-} from '../shared/constants/models.js'
+import {FEEDBACK_MODELS, getModeSummary, PANEL_TITLES, VOICE_STT_MODELS, VOICES} from '../shared/constants/models.js'
 import {copyText} from '../shared/utils/clipboard.js'
 import {getCurrentQuestionLabel} from '../shared/utils/mode.js'
 import {useSessionId} from './providers/session.js'
@@ -27,7 +21,8 @@ import {RecentFeedbackPanel} from '../features/wrongnotes/components/RecentFeedb
 import {StatusBar} from '../features/layout/components/StatusBar.jsx'
 import {OverlayShell} from '../features/layout/components/OverlayShell.jsx'
 import {RulebookOverlay} from '../features/rulebooks/components/RulebookOverlay.jsx'
-import {QuestionsOverlay} from '../features/questions/components/QuestionsOverlay.jsx'
+import {QuestionManagerOverlay} from '../features/questions/components/QuestionManagerOverlay.jsx'
+import {LearningModeOverlay} from '../features/questions/components/LearningModeOverlay.jsx'
 import {WrongNotesOverlay} from '../features/wrongnotes/components/WrongNotesOverlay.jsx'
 import {ModelSettingsOverlay} from '../features/settings/components/ModelSettingsOverlay.jsx'
 
@@ -94,7 +89,6 @@ export default function App() {
         cancelEditQuestion,
         saveEditedQuestion,
         removeQuestion,
-        nextQuestion,
         updateMode,
         setCurrentQuestion
     } = useQuestionGroups({
@@ -216,18 +210,9 @@ export default function App() {
         )
     }
 
-    if (activePanel === 'questions') {
+    if (activePanel === 'question-manager') {
         overlayContent = (
-            <QuestionsOverlay
-                mode={mode}
-                setMode={setMode}
-                batchSize={batchSize}
-                setBatchSize={setBatchSize}
-                updateMode={updateMode}
-                nextQuestion={nextQuestion}
-                tagStats={tagStats}
-                selectedGroupTags={selectedGroupTags}
-                toggleSelectedTag={toggleSelectedTag}
+            <QuestionManagerOverlay
                 activeGroupId={activeGroupId}
                 newGroupName={newGroupName}
                 setNewGroupName={setNewGroupName}
@@ -252,6 +237,21 @@ export default function App() {
                 saveEditedQuestion={saveEditedQuestion}
                 cancelEditQuestion={cancelEditQuestion}
                 removeQuestion={removeQuestion}
+            />
+        )
+    }
+
+    if (activePanel === 'learning-mode') {
+        overlayContent = (
+            <LearningModeOverlay
+                mode={mode}
+                setMode={setMode}
+                batchSize={batchSize}
+                setBatchSize={setBatchSize}
+                updateMode={updateMode}
+                tagStats={tagStats}
+                selectedGroupTags={selectedGroupTags}
+                toggleSelectedTag={toggleSelectedTag}
             />
         )
     }
@@ -308,7 +308,8 @@ export default function App() {
                     <QuestionPanel
                         currentQuestionLabel={currentQuestionLabel}
                         modeSummary={modeSummary}
-                        onOpenQuestionsPanel={() => setActivePanel('questions')}
+                        onOpenQuestionManager={() => setActivePanel('question-manager')}
+                        onOpenLearningMode={() => setActivePanel('learning-mode')}
                     />
 
                     <TranscriptPanel
