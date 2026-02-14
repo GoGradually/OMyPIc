@@ -240,6 +240,10 @@ class VoiceChainIntegrationTest {
         }
 
         @Override
+        public void incrementFeedbackSchemaFallback() {
+        }
+
+        @Override
         public void incrementTtsError() {
         }
 
