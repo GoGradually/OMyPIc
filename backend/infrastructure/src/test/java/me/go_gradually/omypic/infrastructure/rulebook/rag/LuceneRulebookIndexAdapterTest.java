@@ -22,7 +22,7 @@ class LuceneRulebookIndexAdapterTest {
 
     @Test
     void search_returnsEmpty_whenEnabledSetIsEmpty() throws IOException {
-        LuceneRulebookIndexAdapter adapter = new LuceneRulebookIndexAdapter(dataDir(tempDir), embedding());
+        LuceneRulebookIndexAdapter adapter = new LuceneRulebookIndexAdapter(dataDir(tempDir), embedding("hash", "v1"));
 
         List<RulebookContext> result = adapter.search("anything", 3, Set.of());
 
@@ -31,7 +31,7 @@ class LuceneRulebookIndexAdapterTest {
 
     @Test
     void search_returnsEmpty_whenIndexDoesNotExist() throws IOException {
-        LuceneRulebookIndexAdapter adapter = new LuceneRulebookIndexAdapter(dataDir(tempDir), embedding());
+        LuceneRulebookIndexAdapter adapter = new LuceneRulebookIndexAdapter(dataDir(tempDir), embedding("hash", "v1"));
 
         List<RulebookContext> result = adapter.search("alpha", 3, Set.of(RulebookId.of("r1")));
 
@@ -40,7 +40,7 @@ class LuceneRulebookIndexAdapterTest {
 
     @Test
     void indexAndSearch_filtersByEnabledRulebookIds_andRespectsTopK() throws IOException {
-        LuceneRulebookIndexAdapter adapter = new LuceneRulebookIndexAdapter(dataDir(tempDir), embedding());
+        LuceneRulebookIndexAdapter adapter = new LuceneRulebookIndexAdapter(dataDir(tempDir), embedding("hash", "v1"));
 
         adapter.indexRulebookChunks(RulebookId.of("r1"), "r1.md", List.of("alpha first", "alpha second"));
         adapter.indexRulebookChunks(RulebookId.of("r2"), "r2.md", List.of("beta only"));
@@ -53,11 +53,23 @@ class LuceneRulebookIndexAdapterTest {
         assertTrue(result.get(0).text().contains("alpha"));
     }
 
+    @Test
+    void search_resetsIndex_whenEmbeddingMetadataChanges() throws IOException {
+        LuceneRulebookIndexAdapter hashAdapter = new LuceneRulebookIndexAdapter(dataDir(tempDir), embedding("hash", "v1"));
+        hashAdapter.indexRulebookChunks(RulebookId.of("r1"), "r1.md", List.of("alpha first"));
+
+        LuceneRulebookIndexAdapter fasttextAdapter =
+                new LuceneRulebookIndexAdapter(dataDir(tempDir), embedding("fasttext", "cc.ko.300.vec.gz"));
+        List<RulebookContext> result = fasttextAdapter.search("alpha", 3, Set.of(RulebookId.of("r1")));
+
+        assertTrue(result.isEmpty());
+    }
+
     private DataDirProvider dataDir(Path path) {
         return () -> path.toString();
     }
 
-    private EmbeddingPort embedding() {
+    private EmbeddingPort embedding(String provider, String modelVersion) {
         return new EmbeddingPort() {
             @Override
             public float[] embed(String text) {
@@ -77,6 +89,16 @@ class LuceneRulebookIndexAdapterTest {
             @Override
             public int dimension() {
                 return 2;
+            }
+
+            @Override
+            public String provider() {
+                return provider;
+            }
+
+            @Override
+            public String modelVersion() {
+                return modelVersion;
             }
         };
     }

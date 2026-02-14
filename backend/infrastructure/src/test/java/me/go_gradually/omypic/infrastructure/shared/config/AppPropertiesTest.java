@@ -4,6 +4,7 @@ import me.go_gradually.omypic.application.stt.model.VadSettings;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AppPropertiesTest {
 
@@ -20,6 +21,15 @@ class AppPropertiesTest {
 
         properties.getRag().setEmbeddingDim(32);
         properties.getRag().setMaxContextChunks(9);
+        properties.getRag().setProvider("fasttext");
+        properties.getRag().setModelPath("/tmp/models/ko.vec.gz");
+        properties.getRag().setModelVersion("ko.vec.gz");
+        properties.getRag().setModelSha256("abc123");
+        properties.getRag().setDownloadUrl("https://example.com/ko.vec.gz");
+        properties.getRag().setDownloadTimeoutSeconds(45);
+        properties.getRag().setDownloadRetryMax(3);
+        properties.getRag().setAllowHashFallback(true);
+        properties.getRag().setModelMaxVocab(321);
 
         properties.getFeedback().setSummaryMaxChars(333);
         properties.getFeedback().setExampleMinRatio(0.7);
@@ -43,6 +53,15 @@ class AppPropertiesTest {
         assertEquals(0.8, vadSettings.threshold());
 
         assertEquals(9, properties.getMaxContextChunks());
+        assertEquals("fasttext", properties.getRag().getProvider());
+        assertEquals("/tmp/models/ko.vec.gz", properties.getRag().getModelPath());
+        assertEquals("ko.vec.gz", properties.getRag().getModelVersion());
+        assertEquals("abc123", properties.getRag().getModelSha256());
+        assertEquals("https://example.com/ko.vec.gz", properties.getRag().getDownloadUrl());
+        assertEquals(45, properties.getRag().getDownloadTimeoutSeconds());
+        assertEquals(3, properties.getRag().getDownloadRetryMax());
+        assertTrue(properties.getRag().isAllowHashFallback());
+        assertEquals(321, properties.getRag().getModelMaxVocab());
         assertEquals(333, properties.getSummaryMaxChars());
         assertEquals(0.7, properties.getExampleMinRatio());
         assertEquals(1.5, properties.getExampleMaxRatio());

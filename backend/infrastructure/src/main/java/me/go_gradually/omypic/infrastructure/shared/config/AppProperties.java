@@ -212,8 +212,25 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
     }
 
     public static class Rag {
-        private int embeddingDim = 384;
+        private String provider = "fasttext";
+        private int embeddingDim = 300;
         private int maxContextChunks = 4;
+        private String modelPath = "";
+        private String modelVersion = "cc.ko.300.vec.gz";
+        private String modelSha256 = "9d71f0ae144e0f89dd233bfa7eca421be26bd1e5dd18e2cc56888a04be982d97";
+        private String downloadUrl = "https://dl.fbaipublicfiles.com/fasttext/vectors-crawl/cc.ko.300.vec.gz";
+        private int downloadTimeoutSeconds = 1800;
+        private int downloadRetryMax = 2;
+        private boolean allowHashFallback = false;
+        private int modelMaxVocab = 200000;
+
+        public String getProvider() {
+            return provider;
+        }
+
+        public void setProvider(String provider) {
+            this.provider = provider;
+        }
 
         public int getEmbeddingDim() {
             return embeddingDim;
@@ -229,6 +246,70 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
 
         public void setMaxContextChunks(int maxContextChunks) {
             this.maxContextChunks = maxContextChunks;
+        }
+
+        public String getModelPath() {
+            return modelPath;
+        }
+
+        public void setModelPath(String modelPath) {
+            this.modelPath = modelPath;
+        }
+
+        public String getModelVersion() {
+            return modelVersion;
+        }
+
+        public void setModelVersion(String modelVersion) {
+            this.modelVersion = modelVersion;
+        }
+
+        public String getModelSha256() {
+            return modelSha256;
+        }
+
+        public void setModelSha256(String modelSha256) {
+            this.modelSha256 = modelSha256;
+        }
+
+        public String getDownloadUrl() {
+            return downloadUrl;
+        }
+
+        public void setDownloadUrl(String downloadUrl) {
+            this.downloadUrl = downloadUrl;
+        }
+
+        public int getDownloadTimeoutSeconds() {
+            return downloadTimeoutSeconds;
+        }
+
+        public void setDownloadTimeoutSeconds(int downloadTimeoutSeconds) {
+            this.downloadTimeoutSeconds = downloadTimeoutSeconds;
+        }
+
+        public int getDownloadRetryMax() {
+            return downloadRetryMax;
+        }
+
+        public void setDownloadRetryMax(int downloadRetryMax) {
+            this.downloadRetryMax = downloadRetryMax;
+        }
+
+        public boolean isAllowHashFallback() {
+            return allowHashFallback;
+        }
+
+        public void setAllowHashFallback(boolean allowHashFallback) {
+            this.allowHashFallback = allowHashFallback;
+        }
+
+        public int getModelMaxVocab() {
+            return modelMaxVocab;
+        }
+
+        public void setModelMaxVocab(int modelMaxVocab) {
+            this.modelMaxVocab = modelMaxVocab;
         }
     }
 

@@ -2,12 +2,14 @@ package me.go_gradually.omypic.infrastructure.rulebook.rag;
 
 import me.go_gradually.omypic.application.rulebook.port.EmbeddingPort;
 import me.go_gradually.omypic.infrastructure.shared.config.AppProperties;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
 @Component
+@ConditionalOnProperty(prefix = "omypic.rag", name = "provider", havingValue = "hash")
 public class LocalHashEmbeddingAdapter implements EmbeddingPort {
     private final int dimension;
 
@@ -43,6 +45,16 @@ public class LocalHashEmbeddingAdapter implements EmbeddingPort {
     @Override
     public int dimension() {
         return dimension;
+    }
+
+    @Override
+    public String provider() {
+        return "hash";
+    }
+
+    @Override
+    public String modelVersion() {
+        return "local-hash-v1";
     }
 
     private int hash(String token) {

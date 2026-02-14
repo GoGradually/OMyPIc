@@ -19,16 +19,25 @@ import org.apache.lucene.store.FSDirectory;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Properties;
 import java.util.Set;
 
 @Component
 public class LuceneRulebookIndexAdapter implements RulebookIndexPort {
+    private static final String META_FILE = "index-meta.properties";
+    private static final String META_PROVIDER = "provider";
+    private static final String META_MODEL_VERSION = "modelVersion";
+    private static final String META_DIMENSION = "dimension";
     private final Path indexPath;
     private final EmbeddingPort embeddingService;
+    private final Object indexLock = new Object();
 
     public LuceneRulebookIndexAdapter(DataDirProvider dataDirProvider, EmbeddingPort embeddingService) {
         this.indexPath = Path.of(dataDirProvider.getDataDir(), "indexes", "rulebooks");
@@ -42,6 +51,7 @@ public class LuceneRulebookIndexAdapter implements RulebookIndexPort {
 
     @Override
     public void indexRulebookChunks(RulebookId rulebookId, String filename, List<String> chunks) throws IOException {
+        ensureIndexCompatibility();
         try (IndexWriter writer = createWriter()) {
             addChunks(writer, rulebookId, filename, chunks);
             writer.commit();
@@ -53,6 +63,7 @@ public class LuceneRulebookIndexAdapter implements RulebookIndexPort {
         if (enabledRulebookIds.isEmpty()) {
             return List.of();
         }
+        ensureIndexCompatibility();
         Set<String> enabledIds = enabledRulebookIds.stream()
                 .map(RulebookId::value)
                 .collect(java.util.stream.Collectors.toSet());
@@ -121,5 +132,74 @@ public class LuceneRulebookIndexAdapter implements RulebookIndexPort {
         }
         results.add(new RulebookContext(RulebookId.of(rulebookId), doc.get("filename"), doc.get("text")));
         return true;
+    }
+
+    private void ensureIndexCompatibility() throws IOException {
+        synchronized (indexLock) {
+            Properties expected = expectedMetadata();
+            Properties current = readMetadata();
+            if (isCompatible(current, expected)) {
+                return;
+            }
+            resetIndexDirectory();
+            writeMetadata(expected);
+        }
+    }
+
+    private Properties expectedMetadata() {
+        Properties props = new Properties();
+        props.setProperty(META_PROVIDER, embeddingService.provider());
+        props.setProperty(META_MODEL_VERSION, embeddingService.modelVersion());
+        props.setProperty(META_DIMENSION, String.valueOf(embeddingService.dimension()));
+        return props;
+    }
+
+    private Properties readMetadata() throws IOException {
+        Path metaPath = indexPath.resolve(META_FILE);
+        Properties props = new Properties();
+        if (!Files.exists(metaPath)) {
+            return props;
+        }
+        try (InputStream in = Files.newInputStream(metaPath)) {
+            props.load(in);
+        }
+        return props;
+    }
+
+    private boolean isCompatible(Properties current, Properties expected) {
+        if (current.isEmpty()) {
+            return false;
+        }
+        return expected.getProperty(META_PROVIDER).equals(current.getProperty(META_PROVIDER))
+                && expected.getProperty(META_MODEL_VERSION).equals(current.getProperty(META_MODEL_VERSION))
+                && expected.getProperty(META_DIMENSION).equals(current.getProperty(META_DIMENSION));
+    }
+
+    private void writeMetadata(Properties props) throws IOException {
+        Path metaPath = indexPath.resolve(META_FILE);
+        try (OutputStream out = Files.newOutputStream(metaPath)) {
+            props.store(out, "Rulebook index metadata");
+        }
+    }
+
+    private void resetIndexDirectory() throws IOException {
+        if (!Files.exists(indexPath)) {
+            Files.createDirectories(indexPath);
+            return;
+        }
+        try (var walk = Files.walk(indexPath)) {
+            walk.sorted(Comparator.reverseOrder())
+                    .filter(path -> !path.equals(indexPath))
+                    .forEach(this::deletePath);
+        }
+        Files.createDirectories(indexPath);
+    }
+
+    private void deletePath(Path path) {
+        try {
+            Files.deleteIfExists(path);
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to reset index path: " + path, e);
+        }
     }
 }
