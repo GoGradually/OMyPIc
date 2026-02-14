@@ -35,8 +35,17 @@ omypic:
       silence-duration-ms: 200
       threshold: 0.5
   rag:
-    embedding-dim: 384
+    provider: ${OMYPIC_RAG_PROVIDER:fasttext}
+    embedding-dim: 300
     max-context-chunks: 4
+    model-path: ${OMYPIC_RAG_MODEL_PATH:}
+    model-version: ${OMYPIC_RAG_MODEL_VERSION:cc.ko.300.vec.gz}
+    model-sha256: ${OMYPIC_RAG_MODEL_SHA256:9d71f0ae144e0f89dd233bfa7eca421be26bd1e5dd18e2cc56888a04be982d97}
+    download-url: ${OMYPIC_RAG_DOWNLOAD_URL:https://dl.fbaipublicfiles.com/fasttext/vectors-crawl/cc.ko.300.vec.gz}
+    download-timeout-seconds: 1800
+    download-retry-max: 2
+    allow-hash-fallback: ${OMYPIC_RAG_ALLOW_HASH_FALLBACK:false}
+    model-max-vocab: 200000
   feedback:
     summary-max-chars: 400
     example-min-ratio: 0.8

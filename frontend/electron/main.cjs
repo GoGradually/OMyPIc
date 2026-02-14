@@ -29,6 +29,42 @@ function getBundledMongoPath() {
     return resolveResource(path.join('mongodb', 'bin', binary))
 }
 
+function resolveBundledEmbeddingModel() {
+    if (process.env.OMYPIC_RAG_MODEL_PATH) {
+        return {
+            path: process.env.OMYPIC_RAG_MODEL_PATH,
+            version: process.env.OMYPIC_RAG_MODEL_VERSION || null,
+            sha256: process.env.OMYPIC_RAG_MODEL_SHA256 || null
+        }
+    }
+    const modelsDir = resolveResource('models')
+    if (!fs.existsSync(modelsDir)) {
+        return null
+    }
+    const entries = fs.readdirSync(modelsDir, {withFileTypes: true})
+        .filter((entry) => entry.isFile() && entry.name !== 'manifest.json')
+        .map((entry) => entry.name)
+        .sort()
+    if (entries.length === 0) {
+        return null
+    }
+    const selected = entries[0]
+    const manifestPath = path.join(modelsDir, 'manifest.json')
+    let manifest = {}
+    if (fs.existsSync(manifestPath)) {
+        try {
+            manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
+        } catch (_error) {
+            manifest = {}
+        }
+    }
+    return {
+        path: path.join(modelsDir, selected),
+        version: manifest.filename || selected,
+        sha256: manifest.sha256 || null
+    }
+}
+
 function waitForTcpPort(port, host = '127.0.0.1', timeoutMs = 30000, intervalMs = 300) {
     const deadline = Date.now() + timeoutMs
     return new Promise((resolve, reject) => {
@@ -126,15 +162,27 @@ async function startBackend() {
     const bundledJavaPath = getBundledJavaPath()
     const javaCommand = fs.existsSync(bundledJavaPath) ? bundledJavaPath : 'java'
     const dataDir = process.env.OMYPIC_DATA_DIR || path.join(app.getPath('userData'), 'omypic-data')
+    const bundledModel = resolveBundledEmbeddingModel()
     fs.mkdirSync(dataDir, {recursive: true})
+
+    const backendEnv = {
+        ...process.env,
+        OMYPIC_MONGODB_URI: MONGO_URI,
+        OMYPIC_DATA_DIR: dataDir
+    }
+    if (bundledModel) {
+        backendEnv.OMYPIC_RAG_MODEL_PATH = bundledModel.path
+        if (!backendEnv.OMYPIC_RAG_MODEL_VERSION && bundledModel.version) {
+            backendEnv.OMYPIC_RAG_MODEL_VERSION = bundledModel.version
+        }
+        if (!backendEnv.OMYPIC_RAG_MODEL_SHA256 && bundledModel.sha256) {
+            backendEnv.OMYPIC_RAG_MODEL_SHA256 = bundledModel.sha256
+        }
+    }
 
     backendProcess = spawn(javaCommand, ['-jar', jarPath], {
         stdio: 'inherit',
-        env: {
-            ...process.env,
-            OMYPIC_MONGODB_URI: MONGO_URI,
-            OMYPIC_DATA_DIR: dataDir
-        }
+        env: backendEnv
     })
     backendProcess.on('error', (error) => {
         console.error('[omypic] backend process error', error)

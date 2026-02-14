@@ -35,7 +35,8 @@ npm run dev
 2. JAR를 `electron/resources/backend/omypic-backend.jar`로 복사
 3. 현재 OS/아키텍처용 MongoDB 바이너리 다운로드 및 sha256 검증
 4. 현재 OS/아키텍처용 Temurin JRE17 다운로드 및 sha256 검증
-5. 리소스를 `electron/resources`로 정리
+5. (옵션) 사전학습 임베딩 모델을 `electron/resources/models/`에 복사
+6. 리소스를 `electron/resources`로 정리
 
 ```bash
 cd frontend
@@ -49,6 +50,13 @@ npm run electron:build:win
 
 # macOS 설치형 (DMG)
 npm run electron:build:mac
+
+# 오프라인 배포용: 임베딩 모델 번들 포함
+OMYPIC_BUNDLE_EMBEDDING=1 \
+OMYPIC_EMBEDDING_MODEL_SOURCE=/absolute/path/to/cc.ko.300.vec.gz \
+OMYPIC_EMBEDDING_MODEL_SHA256=<sha256> \
+OMYPIC_EMBEDDING_MODEL_VERSION=cc.ko.300.vec.gz \
+npm run electron:build
 ```
 
 산출물은 `frontend/dist/` 하위에 생성됩니다.
@@ -74,6 +82,23 @@ Windows 설치형은 Windows 환경에서, macOS DMG는 macOS 환경에서 빌�
   - 기본값: `mongodb://127.0.0.1:27017/omypic`
 - `OMYPIC_DATA_DIR`
   - 기본값: Electron userData 하위 `omypic-data`
+- `OMYPIC_RAG_MODEL_PATH`
+  - 기본값: 미지정
+  - 패키지 앱에서 번들 모델이 있으면 Electron이 자동 주입
+- `OMYPIC_RAG_PROVIDER`
+  - 기본값: `fasttext`
+- `OMYPIC_RAG_MODEL_VERSION`
+  - 기본값: `cc.ko.300.vec.gz`
+- `OMYPIC_RAG_MODEL_SHA256`
+  - 기본값: `cc.ko.300.vec.gz` 고정 SHA-256
+  - 번들 모델 사용 시 `manifest.json`에서 자동 주입
+- `OMYPIC_RAG_DOWNLOAD_URL`
+  - 기본값: fastText 공식 배포 URL (`cc.ko.300.vec.gz`)
+- `OMYPIC_RAG_ALLOW_HASH_FALLBACK`
+  - 기본값: `false`
+
+별도 설정이 없으면 첫 실행 시 모델이 자동 다운로드됩니다.
+모델 파일이 크기 때문에(약 1.27GB) 네트워크 환경에 따라 초기 기동 시간이 길어질 수 있습니다.
 
 ### 기동 Override
 
@@ -82,6 +107,17 @@ Windows 설치형은 Windows 환경에서, macOS DMG는 macOS 환경에서 빌�
 - `OMYPIC_MONGODB_BIN`
   - 지정 시 해당 `mongod` 경로 실행
 - `OMYPIC_BACKEND_URL` 또는 `OMYPIC_MONGODB_URI`를 외부 서버로 지정하면 로컬 번들 Backend/MongoDB를 기동하지 않고 외부 서버를 사용합니다.
+
+### 패키징 옵션
+
+- `OMYPIC_BUNDLE_EMBEDDING`
+  - `1`이면 임베딩 모델 파일을 `electron/resources/models`에 포함
+- `OMYPIC_EMBEDDING_MODEL_SOURCE`
+  - 번들 포함할 모델 파일 경로(필수 when `OMYPIC_BUNDLE_EMBEDDING=1`)
+- `OMYPIC_EMBEDDING_MODEL_SHA256`
+  - 번들 파일 sha256 검증값(권장)
+- `OMYPIC_EMBEDDING_MODEL_VERSION`
+  - 번들 파일명 override(기본: source 파일명)
 
 ## 6) 코드서명 정책
 

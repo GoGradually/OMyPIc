@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import {createHash} from 'node:crypto'
-import {chmod, copyFile, cp, mkdir, readdir, rm, stat} from 'node:fs/promises'
+import {chmod, copyFile, cp, mkdir, readdir, rm, stat, writeFile} from 'node:fs/promises'
 import {accessSync, createReadStream, createWriteStream} from 'node:fs'
 import path from 'node:path'
 import {fileURLToPath} from 'node:url'
@@ -282,14 +282,67 @@ async function copyJreBinary() {
     console.log(`[prepare] jre binary copied: ${targetJava}`)
 }
 
+function normalizeSha256(value) {
+    return (value || '').trim().toLowerCase()
+}
+
+async function copyEmbeddingModel() {
+    const bundleEmbedding = process.env.OMYPIC_BUNDLE_EMBEDDING === '1'
+    const targetDir = path.join(resourcesRoot, 'models')
+    await rm(targetDir, {recursive: true, force: true})
+    if (!bundleEmbedding) {
+        console.log('[prepare] embedding model bundling disabled')
+        return
+    }
+
+    const sourceInput = process.env.OMYPIC_EMBEDDING_MODEL_SOURCE
+    if (!sourceInput) {
+        throw new Error('OMYPIC_EMBEDDING_MODEL_SOURCE is required when OMYPIC_BUNDLE_EMBEDDING=1')
+    }
+    const sourcePath = path.isAbsolute(sourceInput) ? sourceInput : path.resolve(projectRoot, sourceInput)
+    if (!pathExistsSync(sourcePath)) {
+        throw new Error(`Embedding model source not found: ${sourcePath}`)
+    }
+
+    const sourceStat = await stat(sourcePath)
+    if (!sourceStat.isFile()) {
+        throw new Error(`Embedding model source must be a file: ${sourcePath}`)
+    }
+
+    const expectedSha = normalizeSha256(process.env.OMYPIC_EMBEDDING_MODEL_SHA256)
+    const sourceSha = await fileSha256(sourcePath)
+    if (expectedSha && expectedSha !== sourceSha) {
+        throw new Error(`Embedding model sha256 mismatch at source. expected=${expectedSha} actual=${sourceSha}`)
+    }
+
+    const targetName = process.env.OMYPIC_EMBEDDING_MODEL_VERSION || path.basename(sourcePath)
+    const targetPath = path.join(targetDir, targetName)
+    await mkdir(targetDir, {recursive: true})
+    await copyFile(sourcePath, targetPath)
+
+    const targetSha = await fileSha256(targetPath)
+    if (expectedSha && expectedSha !== targetSha) {
+        throw new Error(`Embedding model sha256 mismatch after copy. expected=${expectedSha} actual=${targetSha}`)
+    }
+
+    const manifest = {
+        filename: targetName,
+        sha256: targetSha
+    }
+    await writeFile(path.join(targetDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+    console.log(`[prepare] embedding model copied: ${targetPath}`)
+}
+
 async function main() {
     await mkdir(resourcesRoot, {recursive: true})
     await rm(path.join(resourcesRoot, 'backend'), {recursive: true, force: true})
     await rm(path.join(resourcesRoot, 'mongodb'), {recursive: true, force: true})
     await rm(path.join(resourcesRoot, 'jre'), {recursive: true, force: true})
+    await rm(path.join(resourcesRoot, 'models'), {recursive: true, force: true})
     await copyBackendJar()
     await copyMongoBinary()
     await copyJreBinary()
+    await copyEmbeddingModel()
     console.log('[prepare] all resources are ready')
 }
 
