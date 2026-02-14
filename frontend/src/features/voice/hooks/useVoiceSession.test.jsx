@@ -635,4 +635,181 @@ describe('useVoiceSession', () => {
         })
         unmount()
     })
+
+    it('retries chunk upload with the same sequence until it succeeds', async () => {
+        vi.useFakeTimers()
+        try {
+            const {result, unmount} = renderHook(() => useVoiceSession({
+                sessionId: 's1',
+                feedbackModel: 'gpt-4o-mini',
+                voiceSttModel: 'gpt-4o-mini-transcribe',
+                feedbackLang: 'ko',
+                voice: 'alloy',
+                onStatus: vi.fn(),
+                onFeedback: vi.fn(),
+                refreshWrongNotes: vi.fn(async () => {
+                }),
+                onQuestionPrompt: vi.fn()
+            }))
+
+            await act(async () => {
+                await result.current.startSession()
+            })
+            await act(async () => {
+                activeEventSource.emit('tts.audio', {
+                    role: 'question',
+                    audio: 'AQID',
+                    mimeType: 'audio/wav',
+                    sequence: 1
+                })
+            })
+            await act(async () => {
+                audioInstances[audioInstances.length - 1].onended()
+            })
+
+            sendVoiceAudioChunk
+                .mockRejectedValueOnce(new Error('temporary'))
+                .mockResolvedValueOnce(undefined)
+
+            act(() => {
+                emitAudioFrame(0.1)
+                emitAudioFrame(0)
+                emitAudioFrame(0)
+            })
+
+            await act(async () => {
+                await Promise.resolve()
+            })
+            expect(sendVoiceAudioChunk).toHaveBeenCalledTimes(1)
+
+            const firstSequence = sendVoiceAudioChunk.mock.calls[0][1].sequence
+
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(500)
+            })
+            await act(async () => {
+                await Promise.resolve()
+            })
+
+            expect(sendVoiceAudioChunk).toHaveBeenCalledTimes(2)
+
+            const secondSequence = sendVoiceAudioChunk.mock.calls[1][1].sequence
+            expect(secondSequence).toBe(firstSequence)
+            expect(result.current.sessionActive).toBe(true)
+            unmount()
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('stops session after chunk upload retries are exhausted', async () => {
+        vi.useFakeTimers()
+        try {
+            const onStatus = vi.fn()
+            const {result, unmount} = renderHook(() => useVoiceSession({
+                sessionId: 's1',
+                feedbackModel: 'gpt-4o-mini',
+                voiceSttModel: 'gpt-4o-mini-transcribe',
+                feedbackLang: 'ko',
+                voice: 'alloy',
+                onStatus,
+                onFeedback: vi.fn(),
+                refreshWrongNotes: vi.fn(async () => {
+                }),
+                onQuestionPrompt: vi.fn()
+            }))
+
+            await act(async () => {
+                await result.current.startSession()
+            })
+            await act(async () => {
+                activeEventSource.emit('tts.audio', {
+                    role: 'question',
+                    audio: 'AQID',
+                    mimeType: 'audio/wav',
+                    sequence: 1
+                })
+            })
+            await act(async () => {
+                audioInstances[audioInstances.length - 1].onended()
+            })
+
+            sendVoiceAudioChunk.mockRejectedValue(new Error('network down'))
+
+            act(() => {
+                emitAudioFrame(0.1)
+                emitAudioFrame(0)
+                emitAudioFrame(0)
+            })
+            await act(async () => {
+                await Promise.resolve()
+            })
+
+            expect(sendVoiceAudioChunk).toHaveBeenCalledTimes(1)
+
+            const retryDelays = [500, 1000, 2000, 4000, 4000]
+            for (const delay of retryDelays) {
+                await act(async () => {
+                    await vi.advanceTimersByTimeAsync(delay)
+                })
+            }
+            await act(async () => {
+                await Promise.resolve()
+            })
+
+            expect(result.current.sessionActive).toBe(false)
+            expect(result.current.speechState).toBe('IDLE')
+            expect(stopVoiceSession).not.toHaveBeenCalled()
+            expect(onStatus).toHaveBeenCalledWith('오디오 전송 재시도에 실패해 세션을 종료했습니다.')
+            unmount()
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('stops session when captured turn exceeds the max duration', async () => {
+        const {result, unmount} = renderHook(() => useVoiceSession({
+            sessionId: 's1',
+            feedbackModel: 'gpt-4o-mini',
+            voiceSttModel: 'gpt-4o-mini-transcribe',
+            feedbackLang: 'ko',
+            voice: 'alloy',
+            onStatus: vi.fn(),
+            onFeedback: vi.fn(),
+            refreshWrongNotes: vi.fn(async () => {
+            }),
+            onQuestionPrompt: vi.fn()
+        }))
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+        await act(async () => {
+            activeEventSource.emit('tts.audio', {
+                role: 'question',
+                audio: 'AQID',
+                mimeType: 'audio/wav',
+                sequence: 1
+            })
+        })
+        await act(async () => {
+            audioInstances[audioInstances.length - 1].onended()
+        })
+
+        act(() => {
+            for (let i = 0; i < 151; i += 1) {
+                emitAudioFrame(0.1)
+            }
+        })
+
+        await waitFor(() => {
+            expect(stopVoiceSession).toHaveBeenCalledWith(
+                'voice-1',
+                {forced: true, reason: 'turn_duration_exceeded'}
+            )
+        })
+        expect(result.current.sessionActive).toBe(false)
+        expect(sendVoiceAudioChunk).not.toHaveBeenCalled()
+        unmount()
+    })
 })

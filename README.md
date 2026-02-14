@@ -129,3 +129,10 @@ Windows 설치형은 Windows 환경에서, macOS DMG는 macOS 환경에서 빌�
 - API Key는 Electron에서 OS Keychain(`keytar`)에 저장됩니다.
 - Backend에는 저장하지 않고 요청 시 헤더로 전달됩니다.
 - 현재 앱은 OpenAI API Key만 지원합니다.
+
+## 8) 음성 청크 전송 보장
+
+- 클라이언트는 음성 turn 청크를 HTTP `2xx` 응답 전까지 유지합니다(at-least-once).
+- 업로드 실패 시 지수 백오프로 재시도합니다: `0.5s -> 1s -> 2s -> 4s -> 4s` (최대 5회).
+- 같은 청크는 동일 `sequence`로 재전송되며, 서버는 세션 단위로 중복 `sequence`를 무시합니다.
+- turn 캡처 길이는 최대 2분 30초로 제한되며, 초과 시 세션을 종료해 메모리 사용 폭증을 방지합니다.

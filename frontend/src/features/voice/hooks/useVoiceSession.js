@@ -7,11 +7,15 @@ import {bindVoiceEvents} from './bindVoiceEvents.js'
 import {
     AUDIO_PROCESS_BUFFER_SIZE,
     DEFAULT_SAMPLE_RATE,
+    MAX_TURN_DURATION_MS,
     MIN_TURN_DURATION_MS,
     NO_WINDOW_ID,
     SPEECH_STATE,
     VAD_RMS_THRESHOLD,
     VAD_SILENCE_MS,
+    VOICE_CHUNK_RETRY_BASE_DELAY_MS,
+    VOICE_CHUNK_RETRY_MAX_DELAY_MS,
+    VOICE_CHUNK_UPLOAD_MAX_RETRIES,
     VOICE_RECONNECT_BASE_DELAY_MS,
     VOICE_RECONNECT_MAX_ATTEMPTS,
     VOICE_RECONNECT_MAX_DELAY_MS
@@ -68,6 +72,9 @@ export function useVoiceSession({
     const pendingAudioSizeRef = useRef(0)
     const chunkSequenceRef = useRef(0)
     const flushInFlightRef = useRef(false)
+    const inFlightTurnRef = useRef(null)
+    const chunkRetryTimerRef = useRef(null)
+    const flushPendingAudioRef = useRef(null)
     const sampleRateRef = useRef(DEFAULT_SAMPLE_RATE)
     const speechActiveRef = useRef(false)
     const silenceDurationMsRef = useRef(0)
@@ -121,7 +128,6 @@ export function useVoiceSession({
     const resetPendingAudio = useCallback(() => {
         pendingAudioChunksRef.current = []
         pendingAudioSizeRef.current = 0
-        flushInFlightRef.current = false
         speechActiveRef.current = false
         silenceDurationMsRef.current = 0
         turnDurationMsRef.current = 0
@@ -174,8 +180,22 @@ export function useVoiceSession({
         setStatus
     })
 
+    const clearChunkRetryTimer = useCallback(() => {
+        if (chunkRetryTimerRef.current !== null) {
+            clearTimeout(chunkRetryTimerRef.current)
+            chunkRetryTimerRef.current = null
+        }
+    }, [])
+
+    const clearInFlightTurn = useCallback(() => {
+        clearChunkRetryTimer()
+        inFlightTurnRef.current = null
+        flushInFlightRef.current = false
+    }, [clearChunkRetryTimer])
+
     const stopCapture = useCallback((statusMessage = '') => {
         resetPendingAudio()
+        clearInFlightTurn()
         clearTtsPlayback()
 
         if (processorRef.current) {
@@ -205,7 +225,7 @@ export function useVoiceSession({
         }
         refreshAudioDeviceStatus().catch(() => {
         })
-    }, [clearTtsPlayback, refreshAudioDeviceStatus, resetPendingAudio, setStatus])
+    }, [clearInFlightTurn, clearTtsPlayback, refreshAudioDeviceStatus, resetPendingAudio, setStatus])
 
     const clearReconnectTimer = useCallback(() => {
         if (reconnectTimerRef.current !== null) {
@@ -220,7 +240,97 @@ export function useVoiceSession({
         reconnectingRef.current = false
     }, [clearReconnectTimer])
 
+    const stopDueToChunkUploadFailure = useCallback((message = '오디오 전송 재시도에 실패해 세션을 종료했습니다.') => {
+        const stop = stopSessionRef.current
+        if (!stop) {
+            setStatus(message)
+            return
+        }
+        stop({
+            forced: false,
+            notifyServer: false,
+            reason: 'audio_chunk_upload_failed',
+            statusMessage: message
+        }).catch(() => {
+        })
+    }, [setStatus])
+
+    const uploadInFlightTurn = useCallback(async () => {
+        const turn = inFlightTurnRef.current
+        if (!turn) {
+            return {ok: true, uploadedTurn: null}
+        }
+        if (flushInFlightRef.current) {
+            return {ok: false, uploadedTurn: turn}
+        }
+
+        flushInFlightRef.current = true
+        try {
+            await sendVoiceAudioChunk(turn.voiceSessionId, {
+                pcm16Base64: turn.pcm16Base64,
+                sampleRate: turn.sampleRate,
+                sequence: turn.sequence
+            })
+            if (inFlightTurnRef.current?.sequence === turn.sequence) {
+                inFlightTurnRef.current = null
+            }
+            clearChunkRetryTimer()
+            return {ok: true, uploadedTurn: turn}
+        } catch (_error) {
+            return {ok: false, uploadedTurn: turn}
+        } finally {
+            flushInFlightRef.current = false
+        }
+    }, [clearChunkRetryTimer])
+
+    const scheduleChunkRetry = useCallback(() => {
+        const turn = inFlightTurnRef.current
+        if (!turn || chunkRetryTimerRef.current !== null) {
+            return
+        }
+
+        if (turn.retryCount >= VOICE_CHUNK_UPLOAD_MAX_RETRIES) {
+            clearInFlightTurn()
+            stopDueToChunkUploadFailure()
+            return
+        }
+
+        turn.retryCount += 1
+        setStatus(`오디오 조각 전송 재시도 중입니다. (${turn.retryCount}/${VOICE_CHUNK_UPLOAD_MAX_RETRIES})`)
+        const delayMs = Math.min(
+            VOICE_CHUNK_RETRY_BASE_DELAY_MS * (2 ** (turn.retryCount - 1)),
+            VOICE_CHUNK_RETRY_MAX_DELAY_MS
+        )
+
+        chunkRetryTimerRef.current = setTimeout(() => {
+            chunkRetryTimerRef.current = null
+            if (!sessionActiveRef.current || !voiceSessionIdRef.current || localStopRef.current || serverStopRef.current) {
+                return
+            }
+            uploadInFlightTurn()
+                .then(({ok, uploadedTurn}) => {
+                    if (!ok) {
+                        scheduleChunkRetry()
+                        return
+                    }
+                    if (pendingAudioSizeRef.current > 0 && flushPendingAudioRef.current) {
+                        flushPendingAudioRef.current({
+                            force: true,
+                            expectedWindowId: uploadedTurn?.capturedWindowId ?? null
+                        }).catch(() => {
+                        })
+                    }
+                })
+                .catch(() => {
+                    scheduleChunkRetry()
+                })
+        }, delayMs)
+    }, [clearInFlightTurn, setStatus, stopDueToChunkUploadFailure, uploadInFlightTurn])
+
     const flushPendingAudio = useCallback(async ({force = false, expectedWindowId = null} = {}) => {
+        if (inFlightTurnRef.current) {
+            return
+        }
         const voiceSessionId = voiceSessionIdRef.current
         if (!voiceSessionId) {
             return
@@ -246,40 +356,65 @@ export function useVoiceSession({
         const durationMs = turnDurationMsRef.current
         const sampleRate = sampleRateRef.current || DEFAULT_SAMPLE_RATE
 
+        if (durationMs < MIN_TURN_DURATION_MS) {
+            resetPendingAudio()
+            return
+        }
+        if (durationMs > MAX_TURN_DURATION_MS) {
+            resetPendingAudio()
+            const stop = stopSessionRef.current
+            if (!stop) {
+                setStatus('답변 길이가 너무 길어 세션을 종료했습니다. (최대 2분 30초)')
+                return
+            }
+            stop({
+                forced: true,
+                notifyServer: true,
+                reason: 'turn_duration_exceeded',
+                statusMessage: '답변 길이가 너무 길어 세션을 종료했습니다. (최대 2분 30초)'
+            }).catch(() => {
+            })
+            return
+        }
+
+        const merged = joinByteChunks(chunks, totalSize)
+        const nextSequence = ++chunkSequenceRef.current
+
         pendingAudioChunksRef.current = []
         pendingAudioSizeRef.current = 0
         speechActiveRef.current = false
         silenceDurationMsRef.current = 0
         turnDurationMsRef.current = 0
 
-        if (durationMs < MIN_TURN_DURATION_MS) {
-            return
+        updateSpeechState(SPEECH_STATE.WAITING_TTS)
+        inFlightTurnRef.current = {
+            voiceSessionId,
+            pcm16Base64: toBase64(merged),
+            sampleRate,
+            sequence: nextSequence,
+            capturedWindowId,
+            retryCount: 0
         }
 
-        updateSpeechState(SPEECH_STATE.WAITING_TTS)
-        const merged = joinByteChunks(chunks, totalSize)
-        flushInFlightRef.current = true
-        try {
-            if (capturedWindowId !== answerWindowIdRef.current) {
-                return
-            }
-            await sendVoiceAudioChunk(voiceSessionId, {
-                pcm16Base64: toBase64(merged),
-                sampleRate,
-                sequence: ++chunkSequenceRef.current
-            })
-        } catch (_error) {
-            setStatus('오디오 조각 전송에 실패했습니다.')
-        } finally {
-            flushInFlightRef.current = false
-            if (pendingAudioSizeRef.current > 0) {
-                setTimeout(() => {
-                    flushPendingAudio({force: true, expectedWindowId: capturedWindowId}).catch(() => {
-                    })
-                }, 0)
-            }
+        const {ok, uploadedTurn} = await uploadInFlightTurn()
+        if (!ok) {
+            scheduleChunkRetry()
+            return
         }
-    }, [canCaptureInState, resetPendingAudio, setStatus, updateSpeechState])
+        if (pendingAudioSizeRef.current > 0 && flushPendingAudioRef.current) {
+            setTimeout(() => {
+                flushPendingAudioRef.current({
+                    force: true,
+                    expectedWindowId: uploadedTurn?.capturedWindowId ?? null
+                }).catch(() => {
+                })
+            }, 0)
+        }
+    }, [canCaptureInState, scheduleChunkRetry, setStatus, resetPendingAudio, updateSpeechState, uploadInFlightTurn])
+
+    useEffect(() => {
+        flushPendingAudioRef.current = flushPendingAudio
+    }, [flushPendingAudio])
 
     const closeEventSource = useCallback(() => {
         if (eventSourceRef.current) {
@@ -305,8 +440,6 @@ export function useVoiceSession({
         resetPendingAudio()
         sessionActiveRef.current = false
         setSessionActive(false)
-
-        await flushPendingAudio({force: true})
         stopCapture('')
 
         const voiceSessionId = voiceSessionIdRef.current
@@ -324,7 +457,7 @@ export function useVoiceSession({
         if (statusMessage) {
             setStatus(statusMessage)
         }
-    }, [closeEventSource, flushPendingAudio, resetPendingAudio, resetReconnectState, setStatus, stopCapture, updateSpeechState])
+    }, [closeEventSource, resetPendingAudio, resetReconnectState, setStatus, stopCapture, updateSpeechState])
 
     useEffect(() => {
         stopSessionRef.current = stopSession
@@ -468,6 +601,8 @@ export function useVoiceSession({
             localStopRef.current = false
             serverStopRef.current = false
             resetReconnectState()
+            clearInFlightTurn()
+            chunkSequenceRef.current = 0
             answerWindowIdRef.current = 0
             captureWindowIdRef.current = NO_WINDOW_ID
             updateSpeechState(SPEECH_STATE.WAITING_TTS)
@@ -525,6 +660,22 @@ export function useVoiceSession({
                     pendingAudioChunksRef.current.push(bytes)
                     pendingAudioSizeRef.current += bytes.length
                     turnDurationMsRef.current += frameDurationMs
+                    if (turnDurationMsRef.current > MAX_TURN_DURATION_MS) {
+                        resetPendingAudio()
+                        const stop = stopSessionRef.current
+                        if (!stop) {
+                            setStatus('답변 길이가 너무 길어 세션을 종료했습니다. (최대 2분 30초)')
+                            return
+                        }
+                        stop({
+                            forced: true,
+                            notifyServer: true,
+                            reason: 'turn_duration_exceeded',
+                            statusMessage: '답변 길이가 너무 길어 세션을 종료했습니다. (최대 2분 30초)'
+                        }).catch(() => {
+                        })
+                        return
+                    }
                     return
                 }
 
@@ -536,6 +687,22 @@ export function useVoiceSession({
                 pendingAudioChunksRef.current.push(bytes)
                 pendingAudioSizeRef.current += bytes.length
                 turnDurationMsRef.current += frameDurationMs
+                if (turnDurationMsRef.current > MAX_TURN_DURATION_MS) {
+                    resetPendingAudio()
+                    const stop = stopSessionRef.current
+                    if (!stop) {
+                        setStatus('답변 길이가 너무 길어 세션을 종료했습니다. (최대 2분 30초)')
+                        return
+                    }
+                    stop({
+                        forced: true,
+                        notifyServer: true,
+                        reason: 'turn_duration_exceeded',
+                        statusMessage: '답변 길이가 너무 길어 세션을 종료했습니다. (최대 2분 30초)'
+                    }).catch(() => {
+                    })
+                    return
+                }
                 if (silenceDurationMsRef.current >= VAD_SILENCE_MS) {
                     flushPendingAudio({
                         force: true,
@@ -592,6 +759,7 @@ export function useVoiceSession({
     }, [
         bindSessionEvents,
         canCaptureInState,
+        clearInFlightTurn,
         closeEventSource,
         flushPendingAudio,
         refreshAudioDeviceStatus,
