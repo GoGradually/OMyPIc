@@ -432,6 +432,7 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
 
     public static class OpenAi {
         private String baseUrl = "https://api.openai.com";
+        private Logging logging = new Logging();
 
         public String getBaseUrl() {
             return baseUrl;
@@ -439,6 +440,44 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
 
         public void setBaseUrl(String baseUrl) {
             this.baseUrl = baseUrl;
+        }
+
+        public Logging getLogging() {
+            return logging;
+        }
+
+        public void setLogging(Logging logging) {
+            this.logging = logging;
+        }
+
+        public static class Logging {
+            private int responsePreviewChars = 1024;
+            private boolean fullBody = false;
+            private boolean logSuccessAtFine = true;
+
+            public int getResponsePreviewChars() {
+                return responsePreviewChars;
+            }
+
+            public void setResponsePreviewChars(int responsePreviewChars) {
+                this.responsePreviewChars = responsePreviewChars;
+            }
+
+            public boolean isFullBody() {
+                return fullBody;
+            }
+
+            public void setFullBody(boolean fullBody) {
+                this.fullBody = fullBody;
+            }
+
+            public boolean isLogSuccessAtFine() {
+                return logSuccessAtFine;
+            }
+
+            public void setLogSuccessAtFine(boolean logSuccessAtFine) {
+                this.logSuccessAtFine = logSuccessAtFine;
+            }
         }
     }
 

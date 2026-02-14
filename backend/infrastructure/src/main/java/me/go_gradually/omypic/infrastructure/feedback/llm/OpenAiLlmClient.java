@@ -3,6 +3,7 @@ package me.go_gradually.omypic.infrastructure.feedback.llm;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import me.go_gradually.omypic.application.feedback.port.LlmClient;
+import me.go_gradually.omypic.infrastructure.shared.config.AppProperties;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -14,18 +15,22 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 @Component
 public class OpenAiLlmClient implements LlmClient {
     private static final String DEFAULT_CHAT_MODEL = "gpt-4o-mini";
+    private static final String CHAT_COMPLETIONS_ENDPOINT = "/v1/chat/completions";
     private static final Logger log = Logger.getLogger(OpenAiLlmClient.class.getName());
     private final WebClient webClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final OpenAiModelParameterPolicyResolver modelParameterPolicyResolver = new OpenAiModelParameterPolicyResolver();
+    private final OpenAiLlmLogFormatter logFormatter;
 
-    public OpenAiLlmClient(@Qualifier("openAiWebClient") WebClient webClient) {
+    public OpenAiLlmClient(@Qualifier("openAiWebClient") WebClient webClient, AppProperties properties) {
         this.webClient = webClient;
+        this.logFormatter = OpenAiLlmLogFormatter.from(properties);
     }
 
     @Override
@@ -42,7 +47,7 @@ public class OpenAiLlmClient implements LlmClient {
     private String requestOpenAi(String apiKey, String model, String systemPrompt, String userPrompt) {
         Map<String, Object> payload = requestPayload(model, systemPrompt, userPrompt);
         try {
-            return requestOpenAiOnce(apiKey, payload);
+            return executeRequestWithLogging(apiKey, payload, 1);
         } catch (WebClientResponseException e) {
             if (e.getStatusCode().value() != 400) {
                 throw e;
@@ -57,13 +62,101 @@ public class OpenAiLlmClient implements LlmClient {
                     + String.valueOf(payload.get("model"))
                     + " removed="
                     + unsupportedParam);
-            return requestOpenAiOnce(apiKey, retriedPayload);
+            return executeRequestWithLogging(apiKey, retriedPayload, 2);
         }
+    }
+
+    private String executeRequestWithLogging(String apiKey, Map<String, Object> payload, int attempt) {
+        logRequest(payload, attempt);
+        long startedAt = System.nanoTime();
+        try {
+            String response = requestOpenAiOnce(apiKey, payload);
+            logSuccess(payload, attempt, startedAt, response);
+            return response;
+        } catch (WebClientResponseException e) {
+            logFailure(payload, attempt, startedAt, e);
+            throw e;
+        } catch (RuntimeException e) {
+            long latencyMs = elapsedMillis(startedAt);
+            log.warning(() -> "openai.llm.response failure model="
+                    + String.valueOf(payload.get("model"))
+                    + " endpoint="
+                    + CHAT_COMPLETIONS_ENDPOINT
+                    + " attempt="
+                    + attempt
+                    + " latencyMs="
+                    + latencyMs
+                    + " reason="
+                    + defaultMessage(e.getMessage()));
+            throw e;
+        }
+    }
+
+    private void logRequest(Map<String, Object> payload, int attempt) {
+        if (!log.isLoggable(Level.FINE)) {
+            return;
+        }
+        String model = String.valueOf(payload.get("model"));
+        String optional = logFormatter.optionalParameterSummary(payload, modelParameterPolicyResolver.retryRemovableParameters());
+        log.fine(() -> "openai.llm.request endpoint="
+                + CHAT_COMPLETIONS_ENDPOINT
+                + " model="
+                + model
+                + " attempt="
+                + attempt
+                + " optionalParameters="
+                + optional);
+    }
+
+    private void logSuccess(Map<String, Object> payload, int attempt, long startedAt, String responseBody) {
+        if (!logFormatter.shouldLogSuccessAtFine() || !log.isLoggable(Level.FINE)) {
+            return;
+        }
+        long latencyMs = elapsedMillis(startedAt);
+        log.fine(() -> "openai.llm.response success model="
+                + String.valueOf(payload.get("model"))
+                + " endpoint="
+                + CHAT_COMPLETIONS_ENDPOINT
+                + " attempt="
+                + attempt
+                + " status=200"
+                + " latencyMs="
+                + latencyMs
+                + " bodyPreview="
+                + logFormatter.responsePreview(responseBody));
+    }
+
+    private void logFailure(Map<String, Object> payload, int attempt, long startedAt, WebClientResponseException e) {
+        long latencyMs = elapsedMillis(startedAt);
+        String body = e.getResponseBodyAsString();
+        OpenAiErrorInfo errorInfo = parseOpenAiError(body);
+        log.warning(() -> "openai.llm.response failure model="
+                + String.valueOf(payload.get("model"))
+                + " endpoint="
+                + CHAT_COMPLETIONS_ENDPOINT
+                + " attempt="
+                + attempt
+                + " status="
+                + e.getStatusCode().value()
+                + " latencyMs="
+                + latencyMs
+                + " errorCode="
+                + safeValue(errorInfo.code())
+                + " errorParam="
+                + safeValue(errorInfo.param())
+                + " errorMessage="
+                + safeValue(errorInfo.message())
+                + " bodyPreview="
+                + logFormatter.responsePreview(body));
+    }
+
+    private long elapsedMillis(long startedAt) {
+        return (System.nanoTime() - startedAt) / 1_000_000L;
     }
 
     private String requestOpenAiOnce(String apiKey, Map<String, Object> payload) {
         return webClient.post()
-                .uri("/v1/chat/completions")
+                .uri(CHAT_COMPLETIONS_ENDPOINT)
                 .header("Authorization", "Bearer " + apiKey)
                 .bodyValue(payload)
                 .retrieve()
@@ -159,18 +252,27 @@ public class OpenAiLlmClient implements LlmClient {
         if (body == null || body.isBlank()) {
             return null;
         }
+        OpenAiErrorInfo info = parseOpenAiError(body);
+        if ("unsupported_parameter".equalsIgnoreCase(info.code()) && !info.param().isBlank()) {
+            return info.param();
+        }
+        return inferParameterFromMessage(info.message());
+    }
+
+    private OpenAiErrorInfo parseOpenAiError(String body) {
+        if (body == null || body.isBlank()) {
+            return new OpenAiErrorInfo("", "", "");
+        }
         try {
             JsonNode root = objectMapper.readTree(body);
             JsonNode error = root.path("error");
-            String code = error.path("code").asText("");
-            String param = normalizeParameterName(error.path("param").asText(""));
-            if ("unsupported_parameter".equalsIgnoreCase(code) && !param.isBlank()) {
-                return param;
-            }
-            String message = error.path("message").asText("");
-            return inferParameterFromMessage(message);
+            return new OpenAiErrorInfo(
+                    error.path("code").asText(""),
+                    normalizeParameterName(error.path("param").asText("")),
+                    error.path("message").asText("")
+            );
         } catch (Exception ignored) {
-            return inferParameterFromMessage(body);
+            return new OpenAiErrorInfo("", "", body);
         }
     }
 
@@ -209,6 +311,14 @@ public class OpenAiLlmClient implements LlmClient {
         return normalized;
     }
 
+    private String safeValue(String value) {
+        return value == null ? "" : value;
+    }
+
+    private String defaultMessage(String message) {
+        return message == null || message.isBlank() ? "unknown" : message;
+    }
+
     private String extractContent(String response) throws Exception {
         JsonNode root = objectMapper.readTree(response);
         JsonNode content = root.path("choices").path(0).path("message").path("content");
@@ -216,5 +326,8 @@ public class OpenAiLlmClient implements LlmClient {
             throw new IllegalStateException("OpenAI response missing content");
         }
         return content.asText();
+    }
+
+    private record OpenAiErrorInfo(String code, String param, String message) {
     }
 }

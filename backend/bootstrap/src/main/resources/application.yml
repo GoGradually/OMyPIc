@@ -62,3 +62,7 @@ omypic:
   integrations:
     openai:
       base-url: ${OMYPIC_OPENAI_BASE_URL:https://api.openai.com}
+      logging:
+        response-preview-chars: ${OMYPIC_OPENAI_LOG_RESPONSE_PREVIEW_CHARS:1024}
+        full-body: ${OMYPIC_OPENAI_LOG_FULL_BODY:false}
+        log-success-at-fine: ${OMYPIC_OPENAI_LOG_SUCCESS_AT_FINE:true}

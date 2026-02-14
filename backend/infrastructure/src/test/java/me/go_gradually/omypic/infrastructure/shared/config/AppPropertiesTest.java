@@ -37,6 +37,9 @@ class AppPropertiesTest {
         properties.getFeedback().setWrongnoteSummaryMaxChars(88);
         properties.getFeedback().setWrongnoteWindowSize(33);
         properties.getIntegrations().getOpenai().setBaseUrl("http://openai.local");
+        properties.getIntegrations().getOpenai().getLogging().setResponsePreviewChars(777);
+        properties.getIntegrations().getOpenai().getLogging().setFullBody(true);
+        properties.getIntegrations().getOpenai().getLogging().setLogSuccessAtFine(false);
         properties.getVoice().setSttModel("gpt-4o-mini-transcribe");
         properties.getVoice().setFeedbackModel("gpt-4o-mini");
         properties.getVoice().setFeedbackLanguage("ko");
@@ -68,6 +71,9 @@ class AppPropertiesTest {
         assertEquals(88, properties.getWrongnoteSummaryMaxChars());
         assertEquals(33, properties.getWrongnoteWindowSize());
         assertEquals("http://openai.local", properties.getIntegrations().getOpenai().getBaseUrl());
+        assertEquals(777, properties.getIntegrations().getOpenai().getLogging().getResponsePreviewChars());
+        assertTrue(properties.getIntegrations().getOpenai().getLogging().isFullBody());
+        assertEquals(false, properties.getIntegrations().getOpenai().getLogging().isLogSuccessAtFine());
         assertEquals("gpt-4o-mini-transcribe", properties.voiceSttModel());
         assertEquals("gpt-4o-mini", properties.voiceFeedbackModel());
         assertEquals("ko", properties.voiceFeedbackLanguage());
