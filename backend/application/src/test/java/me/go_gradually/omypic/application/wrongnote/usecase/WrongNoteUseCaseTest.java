@@ -124,14 +124,16 @@ class WrongNoteUseCaseTest {
     }
 
     @Test
-    void addFeedback_recordsIndependentFillerAdjectiveAdverbPoints() {
+    void addFeedback_recordsRecommendationPoints() {
         stubAddFeedbackDependencies();
         useCase.addFeedback(Feedback.of(
                 "summary",
                 List.of(
                         "Grammar: tense",
                         "Expression: clearer wording",
-                        "Logic: add reason",
+                        "Logic: add reason"
+                ),
+                List.of(
                         "Filler: Well: Use this to start naturally.",
                         "Adjective: impressive - Use it for vivid detail.",
                         "Adverb: definitely - Use it for confidence."

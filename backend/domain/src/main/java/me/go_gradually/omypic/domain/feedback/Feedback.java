@@ -16,24 +16,35 @@ public final class Feedback {
     private static final List<String> CATEGORY_ORDER = List.of("Grammar", "Expression", "Logic");
     private final String summary;
     private final List<String> correctionPoints;
+    private final List<String> recommendation;
     private final String exampleAnswer;
     private final List<String> rulebookEvidence;
 
     private Feedback(String summary,
                      List<String> correctionPoints,
+                     List<String> recommendation,
                      String exampleAnswer,
                      List<String> rulebookEvidence) {
         this.summary = summary == null ? "" : summary;
         this.correctionPoints = List.copyOf(correctionPoints == null ? List.of() : correctionPoints);
+        this.recommendation = List.copyOf(recommendation == null ? List.of() : recommendation);
         this.exampleAnswer = exampleAnswer == null ? "" : exampleAnswer;
         this.rulebookEvidence = List.copyOf(rulebookEvidence == null ? List.of() : rulebookEvidence);
     }
 
     public static Feedback of(String summary,
                               List<String> correctionPoints,
+                              List<String> recommendation,
                               String exampleAnswer,
                               List<String> rulebookEvidence) {
-        return new Feedback(summary, correctionPoints, exampleAnswer, rulebookEvidence);
+        return new Feedback(summary, correctionPoints, recommendation, exampleAnswer, rulebookEvidence);
+    }
+
+    public static Feedback of(String summary,
+                              List<String> correctionPoints,
+                              String exampleAnswer,
+                              List<String> rulebookEvidence) {
+        return new Feedback(summary, correctionPoints, List.of(), exampleAnswer, rulebookEvidence);
     }
 
     public Feedback normalized(FeedbackConstraints constraints,
@@ -42,9 +53,10 @@ public final class Feedback {
                                List<RulebookContext> contexts) {
         String normalizedSummary = normalizeSummary(language, constraints.summaryMaxChars());
         List<String> points = normalizeCorrectionPoints(language);
+        List<String> recommendations = normalizeRecommendationPoints(language);
         String example = normalizeExampleAnswer(userText, language, constraints.exampleMinRatio(), constraints.exampleMaxRatio());
         List<String> evidence = normalizeRulebookEvidence(contexts);
-        return Feedback.of(normalizedSummary, points, example, evidence);
+        return Feedback.of(normalizedSummary, points, recommendations, example, evidence);
     }
 
     private String normalizeSummary(FeedbackLanguage language, int summaryMaxChars) {
@@ -85,13 +97,7 @@ public final class Feedback {
     }
 
     private List<String> normalizeCorrectionPoints(FeedbackLanguage language) {
-        List<String> rawPoints = correctionPoints.stream()
-                .filter(p -> p != null && !p.isBlank())
-                .map(String::trim)
-                .collect(Collectors.toCollection(ArrayList::new));
-        String fillerPoint = resolveFillerPoint(rawPoints, language);
-        String adjectivePoint = resolveAdjectivePoint(rawPoints, language);
-        String adverbPoint = resolveAdverbPoint(rawPoints, language);
+        List<String> rawPoints = collectRawPoints();
         List<String> points = rawPoints.stream()
                 .filter(point -> !isAuxiliaryPoint(point))
                 .collect(Collectors.toCollection(ArrayList::new));
@@ -100,10 +106,29 @@ public final class Feedback {
         fillUntilThree(points, language);
         trimToMax(points, 3);
         ensureCategoryCoverageByReplacement(points, language);
-        points.add(fillerPoint);
-        points.add(adjectivePoint);
-        points.add(adverbPoint);
         return points;
+    }
+
+    private List<String> normalizeRecommendationPoints(FeedbackLanguage language) {
+        List<String> rawPoints = collectRawPoints();
+        return List.of(
+                resolveFillerPoint(rawPoints, language),
+                resolveAdjectivePoint(rawPoints, language),
+                resolveAdverbPoint(rawPoints, language)
+        );
+    }
+
+    private List<String> collectRawPoints() {
+        List<String> rawPoints = new ArrayList<>();
+        correctionPoints.stream()
+                .filter(p -> p != null && !p.isBlank())
+                .map(String::trim)
+                .forEach(rawPoints::add);
+        recommendation.stream()
+                .filter(p -> p != null && !p.isBlank())
+                .map(String::trim)
+                .forEach(rawPoints::add);
+        return rawPoints;
     }
 
     private boolean isAuxiliaryPoint(String point) {
@@ -420,6 +445,10 @@ public final class Feedback {
 
     public List<String> getCorrectionPoints() {
         return Collections.unmodifiableList(correctionPoints);
+    }
+
+    public List<String> getRecommendation() {
+        return Collections.unmodifiableList(recommendation);
     }
 
     public String getExampleAnswer() {

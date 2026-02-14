@@ -14,6 +14,7 @@ function normalizeItem(item = {}) {
         answerText: item.answerText || '',
         summary: item.summary || '',
         correctionPoints: item.correctionPoints || [],
+        recommendation: item.recommendation || [],
         exampleAnswer: item.exampleAnswer || '',
         rulebookEvidence: item.rulebookEvidence || []
     }
@@ -43,6 +44,7 @@ export function buildFeedbackFromVoice(data) {
         items,
         summary: primary.summary,
         correctionPoints: primary.correctionPoints,
+        recommendation: primary.recommendation,
         exampleAnswer: primary.exampleAnswer,
         rulebookEvidence: primary.rulebookEvidence
     }

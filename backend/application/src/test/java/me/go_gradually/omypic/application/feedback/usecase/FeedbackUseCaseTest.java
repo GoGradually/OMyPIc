@@ -79,16 +79,16 @@ class FeedbackUseCaseTest {
         when(rulebookUseCase.searchContexts("This is my answer."))
                 .thenReturn(List.of(RulebookContext.of(RulebookId.of("r1"), "rulebook.md", "always include evidence")));
         when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
-                .thenReturn("```json\n{\"summary\":\"summary\",\"correctionPoints\":[\"Grammar: tense\",\"Expression: clearer wording\",\"Logic: add reason\",\"Filler: Well - Use this to start naturally.\",\"Adjective: impressive - Use it for vivid detail.\",\"Adverb: definitely - Use it for confidence.\"],\"exampleAnswer\":\"tiny\",\"rulebookEvidence\":[]}\n```");
+                .thenReturn("```json\n{\"summary\":\"summary\",\"correctionPoints\":[\"Grammar: tense\",\"Expression: clearer wording\",\"Logic: add reason\"],\"recommendation\":[\"Filler: Well - Use this to start naturally.\",\"Adjective: impressive - Use it for vivid detail.\",\"Adverb: definitely - Use it for confidence.\"],\"exampleAnswer\":\"tiny\",\"rulebookEvidence\":[]}\n```");
 
         FeedbackResult result = useCase.generateFeedback("key", command("s2", "OpenAI", "en", "This is my answer."));
 
         assertTrue(result.isGenerated());
         Feedback feedback = result.getFeedback();
-        assertEquals(6, feedback.getCorrectionPoints().size());
-        assertTrue(feedback.getCorrectionPoints().stream().anyMatch(point -> point.startsWith("Filler:")));
-        assertTrue(feedback.getCorrectionPoints().stream().anyMatch(point -> point.startsWith("Adjective:")));
-        assertTrue(feedback.getCorrectionPoints().stream().anyMatch(point -> point.startsWith("Adverb:")));
+        assertEquals(3, feedback.getCorrectionPoints().size());
+        assertTrue(feedback.getRecommendation().stream().anyMatch(point -> point.startsWith("Filler:")));
+        assertTrue(feedback.getRecommendation().stream().anyMatch(point -> point.startsWith("Adjective:")));
+        assertTrue(feedback.getRecommendation().stream().anyMatch(point -> point.startsWith("Adverb:")));
         assertEquals(1, feedback.getRulebookEvidence().size());
         assertTrue(feedback.getRulebookEvidence().get(0).startsWith("[rulebook.md]"));
         assertTrue(feedback.getExampleAnswer().length() >= 14);
@@ -108,7 +108,7 @@ class FeedbackUseCaseTest {
         when(sessionStore.getOrCreate(SessionId.of("s-batch"))).thenReturn(state);
         when(rulebookUseCase.searchContexts(anyString())).thenReturn(List.of());
         when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
-                .thenReturn("{\"summary\":\"summary\",\"correctionPoints\":[\"Grammar\",\"Expression\",\"Logic\"],\"exampleAnswer\":\"example answer\",\"rulebookEvidence\":[]}");
+                .thenReturn("{\"summary\":\"summary\",\"correctionPoints\":[\"Grammar\",\"Expression\",\"Logic\"],\"recommendation\":[\"Filler\",\"Adjective\",\"Adverb\"],\"exampleAnswer\":\"example answer\",\"rulebookEvidence\":[]}");
 
         state.appendSegment("first answer");
         FeedbackResult first = useCase.generateFeedback("key", command("s-batch", "openai", "en", "first answer"));
@@ -130,7 +130,7 @@ class FeedbackUseCaseTest {
         when(sessionStore.getOrCreate(SessionId.of("s3"))).thenReturn(state);
         when(rulebookUseCase.searchContexts(anyString())).thenReturn(List.of());
         when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
-                .thenReturn("{\"summary\":\"요약\",\"correctionPoints\":[\"Grammar\",\"Expression\",\"Logic\"],\"exampleAnswer\":\"예시 답변입니다\",\"rulebookEvidence\":[]}");
+                .thenReturn("{\"summary\":\"요약\",\"correctionPoints\":[\"Grammar\",\"Expression\",\"Logic\"],\"recommendation\":[\"Filler\",\"Adjective\",\"Adverb\"],\"exampleAnswer\":\"예시 답변입니다\",\"rulebookEvidence\":[]}");
 
         FeedbackCommand command = command("s3", "openai", null, "짧은 답변");
         FeedbackResult result = useCase.generateFeedback("key", command);
@@ -146,7 +146,7 @@ class FeedbackUseCaseTest {
         when(sessionStore.getOrCreate(SessionId.of("s4"))).thenReturn(state);
         when(rulebookUseCase.searchContexts(anyString())).thenReturn(List.of());
         when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
-                .thenReturn("{\"summary\":\"s\",\"correctionPoints\":[\"Grammar\",\"Expression\",\"Logic\"],\"exampleAnswer\":\"123456789\",\"rulebookEvidence\":[\"should be removed\"]}");
+                .thenReturn("{\"summary\":\"s\",\"correctionPoints\":[\"Grammar\",\"Expression\",\"Logic\"],\"recommendation\":[\"Filler\",\"Adjective\",\"Adverb\"],\"exampleAnswer\":\"123456789\",\"rulebookEvidence\":[\"should be removed\"]}");
 
         FeedbackResult result = useCase.generateFeedback("key", command("s4", "openai", "ko", "123456789"));
 
@@ -165,7 +165,8 @@ class FeedbackUseCaseTest {
         FeedbackResult result = useCase.generateFeedback("key", command("s4-fallback", "openai", "en", "answer text"));
 
         assertTrue(result.isGenerated());
-        assertEquals(6, result.getFeedback().getCorrectionPoints().size());
+        assertEquals(3, result.getFeedback().getCorrectionPoints().size());
+        assertEquals(3, result.getFeedback().getRecommendation().size());
         verify(metrics).incrementFeedbackSchemaFallback();
     }
 
@@ -176,7 +177,7 @@ class FeedbackUseCaseTest {
         when(sessionStore.getOrCreate(SessionId.of("s4-prompt"))).thenReturn(state);
         when(rulebookUseCase.searchContexts(anyString())).thenReturn(List.of());
         when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
-                .thenReturn("{\"summary\":\"summary\",\"correctionPoints\":[\"Grammar: tense\",\"Expression: wording\",\"Logic: reason\",\"Filler: Well - Use it naturally.\",\"Adjective: vivid - Use it for detail.\",\"Adverb: definitely - Use it for certainty.\"],\"exampleAnswer\":\"example answer\",\"rulebookEvidence\":[]}");
+                .thenReturn("{\"summary\":\"summary\",\"correctionPoints\":[\"Grammar: tense\",\"Expression: wording\",\"Logic: reason\"],\"recommendation\":[\"Filler: Well - Use it naturally.\",\"Adjective: vivid - Use it for detail.\",\"Adverb: definitely - Use it for certainty.\"],\"exampleAnswer\":\"example answer\",\"rulebookEvidence\":[]}");
 
         FeedbackResult result = useCase.generateFeedback("key", command("s4-prompt", "openai", "en", "answer text"));
 
@@ -185,9 +186,10 @@ class FeedbackUseCaseTest {
         verify(openAiClient).generate(anyString(), anyString(), systemPromptCaptor.capture(), anyString());
         String systemPrompt = systemPromptCaptor.getValue();
         assertTrue(systemPrompt.contains("JSON 객체 1개만 출력"));
-        assertTrue(systemPrompt.contains("summary, correctionPoints, exampleAnswer, rulebookEvidence 4개만"));
+        assertTrue(systemPrompt.contains("summary, correctionPoints, recommendation, exampleAnswer, rulebookEvidence 5개만"));
         assertTrue(systemPrompt.contains("correctionPoints는 반드시 JSON 배열([])이어야 한다"));
-        assertTrue(systemPrompt.contains("correctionPoints[5]는 반드시 \"Adverb:\"로 시작"));
+        assertTrue(systemPrompt.contains("recommendation은 반드시 JSON 배열([])이어야 한다"));
+        assertTrue(systemPrompt.contains("recommendation[2]는 반드시 \"Adverb:\"로 시작"));
     }
 
     @Test
@@ -222,7 +224,7 @@ class FeedbackUseCaseTest {
         when(rulebookUseCase.searchContextsForTurn(QuestionGroup.of("A"), "Question text\nAnswer text", 2))
                 .thenReturn(List.of(RulebookContext.of(RulebookId.of("r1"), "a.md", "group A rules")));
         when(openAiClient.generate(anyString(), anyString(), anyString(), anyString()))
-                .thenReturn("{\"summary\":\"summary\",\"correctionPoints\":[\"Grammar\",\"Expression\",\"Logic\"],\"exampleAnswer\":\"example answer\",\"rulebookEvidence\":[]}");
+                .thenReturn("{\"summary\":\"summary\",\"correctionPoints\":[\"Grammar\",\"Expression\",\"Logic\"],\"recommendation\":[\"Filler\",\"Adjective\",\"Adverb\"],\"exampleAnswer\":\"example answer\",\"rulebookEvidence\":[]}");
 
         Feedback feedback = useCase.generateFeedbackForTurn(
                 "key",

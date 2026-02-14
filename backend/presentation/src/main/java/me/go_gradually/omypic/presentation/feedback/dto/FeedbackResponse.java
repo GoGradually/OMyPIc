@@ -6,6 +6,7 @@ import java.util.List;
 public class FeedbackResponse {
     private String summary;
     private List<String> correctionPoints = new ArrayList<>();
+    private List<String> recommendation = new ArrayList<>();
     private String exampleAnswer;
     private List<String> rulebookEvidence = new ArrayList<>();
 
@@ -23,6 +24,14 @@ public class FeedbackResponse {
 
     public void setCorrectionPoints(List<String> correctionPoints) {
         this.correctionPoints = correctionPoints;
+    }
+
+    public List<String> getRecommendation() {
+        return recommendation;
+    }
+
+    public void setRecommendation(List<String> recommendation) {
+        this.recommendation = recommendation;
     }
 
     public String getExampleAnswer() {

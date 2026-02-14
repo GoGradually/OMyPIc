@@ -19,11 +19,26 @@ export function RecentFeedbackPanel({feedback, onOpenWrongnotes}) {
                         <div key={`${item.questionId || 'item'}-${idx}`} className="feedback-block">
                             {item.questionText && <div className="feedback-title">{item.questionText}</div>}
                             <p className="feedback-summary">{item.summary}</p>
-                            <ul className="bullet-list">
-                                {(item.correctionPoints || []).map((point, pointIndex) => (
-                                    <li key={`${idx}-${pointIndex}`}>{point}</li>
-                                ))}
-                            </ul>
+                            {item.correctionPoints && item.correctionPoints.length > 0 && (
+                                <>
+                                    <p className="tiny-meta">교정 포인트</p>
+                                    <ul className="bullet-list">
+                                        {item.correctionPoints.map((point, pointIndex) => (
+                                            <li key={`${idx}-correction-${pointIndex}`}>{point}</li>
+                                        ))}
+                                    </ul>
+                                </>
+                            )}
+                            {item.recommendation && item.recommendation.length > 0 && (
+                                <>
+                                    <p className="tiny-meta">추천 표현</p>
+                                    <ul className="bullet-list">
+                                        {item.recommendation.map((point, pointIndex) => (
+                                            <li key={`${idx}-recommendation-${pointIndex}`}>{point}</li>
+                                        ))}
+                                    </ul>
+                                </>
+                            )}
                         </div>
                     ))}
                 </>

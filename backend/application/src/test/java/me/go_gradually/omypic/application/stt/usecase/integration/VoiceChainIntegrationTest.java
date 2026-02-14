@@ -86,7 +86,7 @@ class VoiceChainIntegrationTest {
                 .thenReturn("This is my answer.");
         when(llmClient.provider()).thenReturn("openai");
         when(llmClient.generate(anyString(), anyString(), anyString(), anyString()))
-                .thenReturn("{\"summary\":\"summary\",\"correctionPoints\":[\"Grammar: tense\"],\"exampleAnswer\":\"tiny\",\"rulebookEvidence\":[]}");
+                .thenReturn("{\"summary\":\"summary\",\"correctionPoints\":[\"Grammar: tense\",\"Expression: clearer wording\",\"Logic: add one reason\"],\"recommendation\":[\"Filler: Well - Use it naturally.\",\"Adjective: vivid - Add detail.\",\"Adverb: definitely - Show confidence.\"],\"exampleAnswer\":\"tiny\",\"rulebookEvidence\":[]}");
         when(rulebookUseCase.searchContexts(anyString()))
                 .thenReturn(List.of(RulebookContext.of(RulebookId.of("r1"), "rulebook.md", "keep tense consistent")));
 

@@ -517,6 +517,7 @@ public class VoiceSessionUseCase {
         payload.put("answerText", item.answerText());
         payload.put("summary", item.feedback().getSummary());
         payload.put("correctionPoints", item.feedback().getCorrectionPoints());
+        payload.put("recommendation", item.feedback().getRecommendation());
         payload.put("exampleAnswer", item.feedback().getExampleAnswer());
         payload.put("rulebookEvidence", item.feedback().getRulebookEvidence());
         return payload;
@@ -634,6 +635,9 @@ public class VoiceSessionUseCase {
         }
         if (!feedback.getCorrectionPoints().isEmpty()) {
             builder.append(String.join("\n", feedback.getCorrectionPoints())).append('\n');
+        }
+        if (!feedback.getRecommendation().isEmpty()) {
+            builder.append(String.join("\n", feedback.getRecommendation())).append('\n');
         }
         if (!isBlank(feedback.getExampleAnswer())) {
             builder.append(feedback.getExampleAnswer());

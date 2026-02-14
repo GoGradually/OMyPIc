@@ -30,6 +30,9 @@ public class WrongNoteUseCase {
         for (String point : response.getCorrectionPoints()) {
             applyCorrectionPoint(window, point);
         }
+        for (String point : response.getRecommendation()) {
+            applyCorrectionPoint(window, point);
+        }
         recentQueueStore.saveGlobalQueue(window.snapshot());
     }
 

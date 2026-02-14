@@ -42,6 +42,7 @@ class FeedbackControllerTest {
                 .thenReturn(FeedbackResult.generated(Feedback.of(
                         "summary",
                         java.util.List.of("p1"),
+                        java.util.List.of("r1"),
                         "example",
                         java.util.List.of("e1")
                 )));
@@ -52,7 +53,8 @@ class FeedbackControllerTest {
                         .content(objectMapper.writeValueAsString(validRequest())))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.generated").value(true))
-                .andExpect(jsonPath("$.feedback.summary").value("summary"));
+                .andExpect(jsonPath("$.feedback.summary").value("summary"))
+                .andExpect(jsonPath("$.feedback.recommendation[0]").value("r1"));
 
         ArgumentCaptor<FeedbackCommand> captor = ArgumentCaptor.forClass(FeedbackCommand.class);
         verify(feedbackUseCase).generateFeedback(any(), captor.capture());

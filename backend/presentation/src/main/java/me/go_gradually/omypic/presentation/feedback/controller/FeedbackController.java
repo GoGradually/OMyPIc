@@ -43,6 +43,7 @@ public class FeedbackController {
         FeedbackResponse response = new FeedbackResponse();
         response.setSummary(feedback.getSummary());
         response.setCorrectionPoints(feedback.getCorrectionPoints());
+        response.setRecommendation(feedback.getRecommendation());
         response.setExampleAnswer(feedback.getExampleAnswer());
         response.setRulebookEvidence(feedback.getRulebookEvidence());
         return response;

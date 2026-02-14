@@ -28,7 +28,8 @@ describe('voiceEvent', () => {
                         questionGroup: 'A',
                         answerText: '답변',
                         summary: '요약',
-                        correctionPoints: ['a', 'b']
+                        correctionPoints: ['a', 'b'],
+                        recommendation: ['c']
                     }
                 ]
             },
@@ -58,12 +59,14 @@ describe('voiceEvent', () => {
                     answerText: '답변',
                     summary: '요약',
                     correctionPoints: ['a', 'b'],
+                    recommendation: ['c'],
                     exampleAnswer: '',
                     rulebookEvidence: []
                 }
             ],
             summary: '요약',
             correctionPoints: ['a', 'b'],
+            recommendation: ['c'],
             exampleAnswer: '',
             rulebookEvidence: []
         })
