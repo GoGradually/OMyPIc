@@ -1,6 +1,7 @@
 import React from 'react'
 import {RulebookOverlay} from '../../features/rulebooks/components/RulebookOverlay.jsx'
-import {QuestionManagerOverlay} from '../../features/questions/components/QuestionManagerOverlay.jsx'
+import {QuestionGroupManagerOverlay} from '../../features/questions/components/QuestionGroupManagerOverlay.jsx'
+import {GroupQuestionManagerOverlay} from '../../features/questions/components/GroupQuestionManagerOverlay.jsx'
 import {LearningModeOverlay} from '../../features/questions/components/LearningModeOverlay.jsx'
 import {WrongNotesOverlay} from '../../features/wrongnotes/components/WrongNotesOverlay.jsx'
 import {ModelSettingsOverlay} from '../../features/settings/components/ModelSettingsOverlay.jsx'
@@ -8,7 +9,8 @@ import {ModelSettingsOverlay} from '../../features/settings/components/ModelSett
 export function ActiveOverlayContent({
                                          activePanel,
                                          rulebookProps,
-                                         questionManagerProps,
+                                         questionGroupManagerProps,
+                                         groupQuestionManagerProps,
                                          learningModeProps,
                                          wrongNotesProps,
                                          modelSettingsProps
@@ -17,8 +19,12 @@ export function ActiveOverlayContent({
         return <RulebookOverlay {...rulebookProps}/>
     }
 
-    if (activePanel === 'question-manager') {
-        return <QuestionManagerOverlay {...questionManagerProps}/>
+    if (activePanel === 'question-group-manager') {
+        return <QuestionGroupManagerOverlay {...questionGroupManagerProps}/>
+    }
+
+    if (activePanel === 'group-question-manager') {
+        return <GroupQuestionManagerOverlay {...groupQuestionManagerProps}/>
     }
 
     if (activePanel === 'learning-mode') {

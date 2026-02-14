@@ -2,7 +2,7 @@
 import React from 'react'
 import {afterEach, describe, expect, it, vi} from 'vitest'
 import {cleanup, render, screen} from '@testing-library/react'
-import {QuestionManagerOverlay} from './QuestionManagerOverlay.jsx'
+import {GroupQuestionManagerOverlay} from './GroupQuestionManagerOverlay.jsx'
 
 afterEach(() => {
     cleanup()
@@ -11,14 +11,8 @@ afterEach(() => {
 function buildProps(overrides = {}) {
     return {
         activeGroupId: '',
-        newGroupName: '',
-        setNewGroupName: vi.fn(),
-        newGroupTagsInput: '',
-        setNewGroupTagsInput: vi.fn(),
         questionGroups: [],
         setActiveGroupId: vi.fn(),
-        createGroup: vi.fn(),
-        deleteGroup: vi.fn(),
         newQuestion: '',
         setNewQuestion: vi.fn(),
         newQuestionType: '',
@@ -38,19 +32,21 @@ function buildProps(overrides = {}) {
     }
 }
 
-describe('QuestionManagerOverlay', () => {
-    it('renders question group manager fields', () => {
-        render(<QuestionManagerOverlay {...buildProps()} />)
+describe('GroupQuestionManagerOverlay', () => {
+    it('renders question item controls', () => {
+        render(<GroupQuestionManagerOverlay {...buildProps()} />)
 
-        expect(screen.getByText('새 질문 그룹 이름')).toBeTruthy()
-        expect(screen.getByText('그룹 태그(쉼표 구분)')).toBeTruthy()
-        expect(screen.getByRole('button', {name: '그룹 생성'})).toBeTruthy()
+        expect(screen.getByText('질문 그룹 선택')).toBeTruthy()
+        expect(screen.getByRole('button', {name: '질문 추가'})).toBeTruthy()
+        expect(screen.getByText('질문 타입(선택)')).toBeTruthy()
     })
 
-    it('hides learning mode controls', () => {
-        render(<QuestionManagerOverlay {...buildProps()} />)
+    it('does not render question group creation controls', () => {
+        render(<GroupQuestionManagerOverlay {...buildProps()} />)
 
-        expect(screen.queryByText('출제 태그 선택')).toBeNull()
-        expect(screen.queryByRole('button', {name: '모드 적용'})).toBeNull()
+        expect(screen.queryByText('새 질문 그룹 이름')).toBeNull()
+        expect(screen.queryByText('그룹 태그(쉼표 구분)')).toBeNull()
+        expect(screen.queryByRole('button', {name: '그룹 생성'})).toBeNull()
+        expect(screen.queryByRole('button', {name: '그룹 삭제'})).toBeNull()
     })
 })

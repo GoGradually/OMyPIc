@@ -189,7 +189,7 @@ export function useAppViewModel() {
         deleteRulebook
     }
 
-    const questionManagerProps = {
+    const questionGroupManagerProps = {
         activeGroupId,
         newGroupName,
         setNewGroupName,
@@ -198,7 +198,13 @@ export function useAppViewModel() {
         questionGroups,
         setActiveGroupId,
         createGroup,
-        deleteGroup,
+        deleteGroup
+    }
+
+    const groupQuestionManagerProps = {
+        activeGroupId,
+        questionGroups,
+        setActiveGroupId,
         newQuestion,
         setNewQuestion,
         newQuestionType,
@@ -256,7 +262,8 @@ export function useAppViewModel() {
         overlayContentProps: {
             activePanel,
             rulebookProps,
-            questionManagerProps,
+            questionGroupManagerProps,
+            groupQuestionManagerProps,
             learningModeProps,
             wrongNotesProps,
             modelSettingsProps
@@ -279,7 +286,8 @@ export function useAppViewModel() {
         questionPanelProps: {
             currentQuestionLabel,
             modeSummary,
-            onOpenQuestionManager: () => setActivePanel('question-manager'),
+            onOpenQuestionGroupManager: () => setActivePanel('question-group-manager'),
+            onOpenGroupQuestionManager: () => setActivePanel('group-question-manager'),
             onOpenLearningMode: () => setActivePanel('learning-mode')
         },
         transcriptPanelProps: {

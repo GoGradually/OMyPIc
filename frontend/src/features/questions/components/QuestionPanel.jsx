@@ -3,7 +3,8 @@ import React from 'react'
 export function QuestionPanel({
                                   currentQuestionLabel,
                                   modeSummary,
-                                  onOpenQuestionManager,
+                                  onOpenQuestionGroupManager,
+                                  onOpenGroupQuestionManager,
                                   onOpenLearningMode
                               }) {
     return (
@@ -29,9 +30,15 @@ export function QuestionPanel({
                     </button>
                     <button
                         className="control-button secondary"
-                        onClick={onOpenQuestionManager}
+                        onClick={onOpenQuestionGroupManager}
                     >
-                        질문 관리
+                        질문 그룹/태그 관리
+                    </button>
+                    <button
+                        className="control-button secondary"
+                        onClick={onOpenGroupQuestionManager}
+                    >
+                        그룹 내 질문 관리
                     </button>
                 </div>
             </div>
