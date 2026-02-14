@@ -7,9 +7,6 @@ import me.go_gradually.omypic.application.feedback.port.LlmClient;
 import me.go_gradually.omypic.application.feedback.usecase.FeedbackUseCase;
 import me.go_gradually.omypic.application.question.port.QuestionGroupPort;
 import me.go_gradually.omypic.application.question.usecase.QuestionUseCase;
-import me.go_gradually.omypic.application.realtime.policy.RealtimePolicy;
-import me.go_gradually.omypic.application.realtime.port.RealtimeAudioGateway;
-import me.go_gradually.omypic.application.realtime.usecase.RealtimeVoiceUseCase;
 import me.go_gradually.omypic.application.rulebook.policy.RagPolicy;
 import me.go_gradually.omypic.application.rulebook.port.RulebookFileStore;
 import me.go_gradually.omypic.application.rulebook.port.RulebookIndexPort;
@@ -24,6 +21,9 @@ import me.go_gradually.omypic.application.stt.port.SttGateway;
 import me.go_gradually.omypic.application.stt.port.SttJobStorePort;
 import me.go_gradually.omypic.application.stt.usecase.SttJobUseCase;
 import me.go_gradually.omypic.application.stt.usecase.SttUseCase;
+import me.go_gradually.omypic.application.voice.policy.VoicePolicy;
+import me.go_gradually.omypic.application.voice.port.TtsGateway;
+import me.go_gradually.omypic.application.voice.usecase.VoiceSessionUseCase;
 import me.go_gradually.omypic.application.wrongnote.port.WrongNotePort;
 import me.go_gradually.omypic.application.wrongnote.port.WrongNoteRecentQueuePort;
 import me.go_gradually.omypic.application.wrongnote.usecase.WrongNoteUseCase;
@@ -101,20 +101,22 @@ public class UseCaseConfig {
     }
 
     @Bean
-    public RealtimeVoiceUseCase realtimeVoiceUseCase(RealtimeAudioGateway realtimeAudioGateway,
-                                                     FeedbackUseCase feedbackUseCase,
-                                                     SessionUseCase sessionUseCase,
-                                                     QuestionUseCase questionUseCase,
-                                                     AsyncExecutor asyncExecutor,
-                                                     RealtimePolicy realtimePolicy,
-                                                     MetricsPort metricsPort) {
-        return new RealtimeVoiceUseCase(
-                realtimeAudioGateway,
+    public VoiceSessionUseCase voiceSessionUseCase(SttUseCase sttUseCase,
+                                                   FeedbackUseCase feedbackUseCase,
+                                                   SessionUseCase sessionUseCase,
+                                                   QuestionUseCase questionUseCase,
+                                                   TtsGateway ttsGateway,
+                                                   AsyncExecutor asyncExecutor,
+                                                   VoicePolicy voicePolicy,
+                                                   MetricsPort metricsPort) {
+        return new VoiceSessionUseCase(
+                sttUseCase,
                 feedbackUseCase,
                 sessionUseCase,
                 questionUseCase,
+                ttsGateway,
                 asyncExecutor,
-                realtimePolicy,
+                voicePolicy,
                 metricsPort
         );
     }

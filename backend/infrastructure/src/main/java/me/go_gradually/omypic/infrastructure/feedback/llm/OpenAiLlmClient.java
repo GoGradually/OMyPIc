@@ -94,7 +94,7 @@ public class OpenAiLlmClient implements LlmClient {
             return DEFAULT_CHAT_MODEL;
         }
         String lowered = candidate.toLowerCase(Locale.ROOT);
-        if (lowered.startsWith("gpt-realtime") || lowered.contains("transcribe")) {
+        if (lowered.contains("transcribe")) {
             return DEFAULT_CHAT_MODEL;
         }
         return candidate;

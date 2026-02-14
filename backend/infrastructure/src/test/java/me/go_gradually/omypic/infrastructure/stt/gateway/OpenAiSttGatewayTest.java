@@ -49,6 +49,7 @@ class OpenAiSttGatewayTest {
         String body = request.getBody().readUtf8();
         assertTrue(body.contains("name=\"model\""));
         assertTrue(body.contains("whisper-1"));
+        assertTrue(body.contains("filename=audio.wav"));
         assertTrue(body.contains("name=\"prefix_padding_ms\""));
         assertTrue(body.contains("111"));
     }

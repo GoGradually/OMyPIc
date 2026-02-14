@@ -11,7 +11,7 @@ public interface MetricsPort {
 
     void recordQuestionNextLatency(Duration duration);
 
-    void recordRealtimeTurnLatency(Duration duration);
+    void recordVoiceTurnLatency(Duration duration);
 
     void recordRulebookUploadLatency(Duration duration);
 

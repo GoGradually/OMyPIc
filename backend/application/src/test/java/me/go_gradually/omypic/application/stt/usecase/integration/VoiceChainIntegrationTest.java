@@ -248,7 +248,7 @@ class VoiceChainIntegrationTest {
         }
 
         @Override
-        public void recordRealtimeTurnLatency(Duration duration) {
+        public void recordVoiceTurnLatency(Duration duration) {
         }
 
         @Override

@@ -6,12 +6,9 @@ import me.go_gradually.omypic.application.stt.model.SttEventSink;
 import me.go_gradually.omypic.application.stt.usecase.SttJobUseCase;
 import me.go_gradually.omypic.application.stt.usecase.SttUseCase;
 import me.go_gradually.omypic.presentation.stt.dto.SttUploadResponse;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
-import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
@@ -24,16 +21,13 @@ public class SttController {
     private final SttUseCase sttUseCase;
     private final SttJobUseCase jobUseCase;
     private final SessionUseCase sessionUseCase;
-    private final boolean restDisabled;
 
     public SttController(SttUseCase sttUseCase,
                          SttJobUseCase jobUseCase,
-                         SessionUseCase sessionUseCase,
-                         @Value("${omypic.realtime.rest-disabled:true}") boolean restDisabled) {
+                         SessionUseCase sessionUseCase) {
         this.sttUseCase = sttUseCase;
         this.jobUseCase = jobUseCase;
         this.sessionUseCase = sessionUseCase;
-        this.restDisabled = restDisabled;
     }
 
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -43,7 +37,6 @@ public class SttController {
                                     @RequestParam(value = "stream", defaultValue = "false") boolean stream,
                                     @RequestParam(value = "translate", defaultValue = "false") boolean translate,
                                     @RequestParam(value = "sessionId", required = false) String sessionId) {
-        assertLegacyRouteEnabled();
         SttCommand command = new SttCommand();
         try {
             command.setFileBytes(file.getBytes());
@@ -67,7 +60,6 @@ public class SttController {
 
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(@RequestParam("jobId") String jobId) {
-        assertLegacyRouteEnabled();
         SseEmitter emitter = new SseEmitter(Duration.ofMinutes(5).toMillis());
         AtomicBoolean open = new AtomicBoolean(true);
         SttEventSink sink = toEventSink(emitter, open);
@@ -102,11 +94,5 @@ public class SttController {
     private void closeSink(AtomicBoolean open, String jobId, SttEventSink sink) {
         open.set(false);
         jobUseCase.unregisterSink(jobId, sink);
-    }
-
-    private void assertLegacyRouteEnabled() {
-        if (restDisabled) {
-            throw new ResponseStatusException(HttpStatus.GONE, "Use websocket /api/realtime/voice");
-        }
     }
 }

@@ -36,8 +36,8 @@ public class MicrometerMetricsAdapter implements MetricsPort {
     }
 
     @Override
-    public void recordRealtimeTurnLatency(Duration duration) {
-        record("realtime.turn.latency", duration);
+    public void recordVoiceTurnLatency(Duration duration) {
+        record("voice.turn.latency", duration);
     }
 
     @Override

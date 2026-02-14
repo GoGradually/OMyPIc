@@ -19,7 +19,7 @@ class MicrometerMetricsAdapterTest {
         adapter.recordFeedbackLatency(Duration.ofMillis(20));
         adapter.recordTtsLatency(Duration.ofMillis(30));
         adapter.recordQuestionNextLatency(Duration.ofMillis(40));
-        adapter.recordRealtimeTurnLatency(Duration.ofMillis(50));
+        adapter.recordVoiceTurnLatency(Duration.ofMillis(50));
         adapter.recordRulebookUploadLatency(Duration.ofMillis(60));
 
         adapter.incrementSttRequest();
@@ -33,7 +33,7 @@ class MicrometerMetricsAdapterTest {
         assertEquals(1, registry.find("feedback.latency").timer().count());
         assertEquals(1, registry.find("tts.latency").timer().count());
         assertEquals(1, registry.find("question.next.latency").timer().count());
-        assertEquals(1, registry.find("realtime.turn.latency").timer().count());
+        assertEquals(1, registry.find("voice.turn.latency").timer().count());
         assertEquals(1, registry.find("rulebook.upload.latency").timer().count());
 
         assertEquals(1.0, registry.find("stt.requests").counter().count());

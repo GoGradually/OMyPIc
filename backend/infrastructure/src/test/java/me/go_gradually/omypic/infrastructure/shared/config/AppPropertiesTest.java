@@ -4,7 +4,6 @@ import me.go_gradually.omypic.application.stt.model.VadSettings;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 
 class AppPropertiesTest {
 
@@ -28,15 +27,12 @@ class AppPropertiesTest {
         properties.getFeedback().setWrongnoteSummaryMaxChars(88);
         properties.getFeedback().setWrongnoteWindowSize(33);
         properties.getIntegrations().getOpenai().setBaseUrl("http://openai.local");
-        properties.getRealtime().setConversationModel("gpt-realtime");
-        properties.getRealtime().setSttModel("gpt-4o-transcribe");
-        properties.getRealtime().getVad().setPrefixPaddingMs(444);
-        properties.getRealtime().getVad().setSilenceDurationMs(1555);
-        properties.getRealtime().getVad().setThreshold(0.45);
-        properties.getRealtime().setFeedbackModel("gpt-4o");
-        properties.getRealtime().setFeedbackLanguage("en");
-        properties.getRealtime().setTtsVoice("echo");
-        properties.getRealtime().setRestDisabled(false);
+        properties.getVoice().setSttModel("gpt-4o-mini-transcribe");
+        properties.getVoice().setFeedbackModel("gpt-4o-mini");
+        properties.getVoice().setFeedbackLanguage("ko");
+        properties.getVoice().setTtsModel("gpt-4o-mini-tts");
+        properties.getVoice().setTtsVoice("alloy");
+        properties.getVoice().setSilenceDurationMs(1666);
 
         assertEquals("/tmp/omypic", properties.getDataDir());
         assertEquals(1234L, properties.getMaxFileBytes());
@@ -53,14 +49,11 @@ class AppPropertiesTest {
         assertEquals(88, properties.getWrongnoteSummaryMaxChars());
         assertEquals(33, properties.getWrongnoteWindowSize());
         assertEquals("http://openai.local", properties.getIntegrations().getOpenai().getBaseUrl());
-        assertEquals("gpt-realtime", properties.realtimeConversationModel());
-        assertEquals("gpt-4o-transcribe", properties.realtimeSttModel());
-        assertEquals(444, properties.realtimeVadPrefixPaddingMs());
-        assertEquals(1555, properties.realtimeVadSilenceDurationMs());
-        assertEquals(0.45, properties.realtimeVadThreshold());
-        assertEquals("gpt-4o", properties.realtimeFeedbackModel());
-        assertEquals("en", properties.realtimeFeedbackLanguage());
-        assertEquals("echo", properties.realtimeTtsVoice());
-        assertFalse(properties.getRealtime().isRestDisabled());
+        assertEquals("gpt-4o-mini-transcribe", properties.voiceSttModel());
+        assertEquals("gpt-4o-mini", properties.voiceFeedbackModel());
+        assertEquals("ko", properties.voiceFeedbackLanguage());
+        assertEquals("gpt-4o-mini-tts", properties.voiceTtsModel());
+        assertEquals("alloy", properties.voiceTtsVoice());
+        assertEquals(1666, properties.voiceSilenceDurationMs());
     }
 }

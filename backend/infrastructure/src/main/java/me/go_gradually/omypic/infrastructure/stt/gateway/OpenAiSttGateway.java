@@ -43,8 +43,8 @@ public class OpenAiSttGateway implements SttGateway {
     private MultipartBodyBuilder multipartBody(byte[] fileBytes, String model, VadSettings vadSettings) {
         MultipartBodyBuilder builder = new MultipartBodyBuilder();
         builder.part("file", fileBytes)
-                .header("Content-Disposition", "form-data; name=file; filename=audio.webm")
-                .contentType(MediaType.APPLICATION_OCTET_STREAM);
+                .header("Content-Disposition", "form-data; name=file; filename=audio.wav")
+                .contentType(MediaType.parseMediaType("audio/wav"));
         builder.part("model", model);
         builder.part("response_format", "json");
         builder.part("prefix_padding_ms", String.valueOf(vadSettings.prefixPaddingMs()));

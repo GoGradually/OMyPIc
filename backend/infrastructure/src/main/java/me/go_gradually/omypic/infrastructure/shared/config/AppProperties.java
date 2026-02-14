@@ -1,20 +1,20 @@
 package me.go_gradually.omypic.infrastructure.shared.config;
 
 import me.go_gradually.omypic.application.feedback.policy.FeedbackPolicy;
-import me.go_gradually.omypic.application.realtime.policy.RealtimePolicy;
 import me.go_gradually.omypic.application.rulebook.policy.RagPolicy;
 import me.go_gradually.omypic.application.shared.policy.DataDirProvider;
 import me.go_gradually.omypic.application.stt.model.VadSettings;
 import me.go_gradually.omypic.application.stt.policy.SttPolicy;
+import me.go_gradually.omypic.application.voice.policy.VoicePolicy;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "omypic")
-public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, FeedbackPolicy, RealtimePolicy {
+public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, FeedbackPolicy, VoicePolicy {
     private String dataDir;
     private Stt stt = new Stt();
     private Rag rag = new Rag();
     private Feedback feedback = new Feedback();
-    private Realtime realtime = new Realtime();
+    private Voice voice = new Voice();
     private Integrations integrations = new Integrations();
 
     public String getDataDir() {
@@ -49,12 +49,12 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
         this.feedback = feedback;
     }
 
-    public Realtime getRealtime() {
-        return realtime;
+    public Voice getVoice() {
+        return voice;
     }
 
-    public void setRealtime(Realtime realtime) {
-        this.realtime = realtime;
+    public void setVoice(Voice voice) {
+        this.voice = voice;
     }
 
     public Integrations getIntegrations() {
@@ -113,43 +113,33 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
     }
 
     @Override
-    public String realtimeConversationModel() {
-        return realtime.getConversationModel();
+    public String voiceSttModel() {
+        return voice.getSttModel();
     }
 
     @Override
-    public String realtimeSttModel() {
-        return realtime.getSttModel();
+    public String voiceFeedbackModel() {
+        return voice.getFeedbackModel();
     }
 
     @Override
-    public int realtimeVadPrefixPaddingMs() {
-        return realtime.getVad().getPrefixPaddingMs();
+    public String voiceFeedbackLanguage() {
+        return voice.getFeedbackLanguage();
     }
 
     @Override
-    public int realtimeVadSilenceDurationMs() {
-        return realtime.getVad().getSilenceDurationMs();
+    public String voiceTtsModel() {
+        return voice.getTtsModel();
     }
 
     @Override
-    public double realtimeVadThreshold() {
-        return realtime.getVad().getThreshold();
+    public String voiceTtsVoice() {
+        return voice.getTtsVoice();
     }
 
     @Override
-    public String realtimeFeedbackModel() {
-        return realtime.getFeedbackModel();
-    }
-
-    @Override
-    public String realtimeFeedbackLanguage() {
-        return realtime.getFeedbackLanguage();
-    }
-
-    @Override
-    public String realtimeTtsVoice() {
-        return realtime.getTtsVoice();
+    public int voiceSilenceDurationMs() {
+        return voice.getSilenceDurationMs();
     }
 
     public static class Stt {
@@ -290,22 +280,13 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
         }
     }
 
-    public static class Realtime {
-        private String conversationModel = "gpt-realtime-mini";
+    public static class Voice {
         private String sttModel = "gpt-4o-mini-transcribe";
-        private RealtimeVad vad = new RealtimeVad();
         private String feedbackModel = "gpt-4o-mini";
         private String feedbackLanguage = "ko";
+        private String ttsModel = "gpt-4o-mini-tts";
         private String ttsVoice = "alloy";
-        private boolean restDisabled = true;
-
-        public String getConversationModel() {
-            return conversationModel;
-        }
-
-        public void setConversationModel(String conversationModel) {
-            this.conversationModel = conversationModel;
-        }
+        private int silenceDurationMs = 1500;
 
         public String getSttModel() {
             return sttModel;
@@ -313,14 +294,6 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
 
         public void setSttModel(String sttModel) {
             this.sttModel = sttModel;
-        }
-
-        public RealtimeVad getVad() {
-            return vad;
-        }
-
-        public void setVad(RealtimeVad vad) {
-            this.vad = vad;
         }
 
         public String getFeedbackModel() {
@@ -339,6 +312,14 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
             this.feedbackLanguage = feedbackLanguage;
         }
 
+        public String getTtsModel() {
+            return ttsModel;
+        }
+
+        public void setTtsModel(String ttsModel) {
+            this.ttsModel = ttsModel;
+        }
+
         public String getTtsVoice() {
             return ttsVoice;
         }
@@ -347,42 +328,12 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
             this.ttsVoice = ttsVoice;
         }
 
-        public boolean isRestDisabled() {
-            return restDisabled;
-        }
-
-        public void setRestDisabled(boolean restDisabled) {
-            this.restDisabled = restDisabled;
-        }
-    }
-
-    public static class RealtimeVad {
-        private int prefixPaddingMs = 300;
-        private int silenceDurationMs = 1500;
-        private double threshold = 0.5;
-
-        public int getPrefixPaddingMs() {
-            return prefixPaddingMs;
-        }
-
-        public void setPrefixPaddingMs(int prefixPaddingMs) {
-            this.prefixPaddingMs = prefixPaddingMs;
-        }
-
         public int getSilenceDurationMs() {
             return silenceDurationMs;
         }
 
         public void setSilenceDurationMs(int silenceDurationMs) {
             this.silenceDurationMs = silenceDurationMs;
-        }
-
-        public double getThreshold() {
-            return threshold;
-        }
-
-        public void setThreshold(double threshold) {
-            this.threshold = threshold;
         }
     }
 

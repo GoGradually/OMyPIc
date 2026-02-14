@@ -21,7 +21,7 @@ management:
         feedback.latency: true
         tts.latency: true
         question.next.latency: true
-        realtime.turn.latency: true
+        voice.turn.latency: true
         rulebook.upload.latency: true
 
 omypic:
@@ -42,17 +42,13 @@ omypic:
     example-min-ratio: 0.8
     example-max-ratio: 1.2
     wrongnote-summary-max-chars: 255
-  realtime:
-    conversation-model: gpt-realtime-mini
+  voice:
     stt-model: gpt-4o-mini-transcribe
-    vad:
-      prefix-padding-ms: 300
-      silence-duration-ms: 1500
-      threshold: 0.5
     feedback-model: gpt-4o-mini
     feedback-language: ko
+    tts-model: gpt-4o-mini-tts
     tts-voice: alloy
-    rest-disabled: true
+    silence-duration-ms: 1500
   integrations:
     openai:
       base-url: ${OMYPIC_OPENAI_BASE_URL:https://api.openai.com}

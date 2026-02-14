@@ -86,7 +86,7 @@ class OpenAiLlmClientTest {
     }
 
     @Test
-    void generate_remapsRealtimeModelToChatModel() throws Exception {
+    void generate_remapsTranscribeModelToChatModel() throws Exception {
         server.enqueue(new MockResponse()
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"choices\":[{\"message\":{\"content\":\"{\\\"summary\\\":\\\"ok\\\"}\"}}]}"));
@@ -95,7 +95,7 @@ class OpenAiLlmClientTest {
                 .baseUrl(server.url("/").toString())
                 .build());
 
-        client.generate("api-key", "gpt-realtime-mini", "sys", "user");
+        client.generate("api-key", "gpt-4o-mini-transcribe", "sys", "user");
 
         JsonNode payload = objectMapper.readTree(server.takeRequest().getBody().readUtf8());
         assertEquals("gpt-4o-mini", payload.path("model").asText());
