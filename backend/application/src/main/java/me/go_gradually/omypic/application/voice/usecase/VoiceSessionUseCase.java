@@ -75,20 +75,26 @@ public class VoiceSessionUseCase {
     }
 
     public String open(VoiceSessionOpenCommand command) {
+        validateOpenCommand(command);
+        sessionUseCase.getOrCreate(command.getSessionId());
+        RuntimeContext context = createRuntimeContext(command);
+        contextByVoiceSessionId.put(context.voiceSessionId, context);
+        return context.voiceSessionId;
+    }
+
+    private void validateOpenCommand(VoiceSessionOpenCommand command) {
         if (command == null || isBlank(command.getSessionId()) || isBlank(command.getApiKey())) {
             throw new IllegalArgumentException("sessionId and apiKey are required");
         }
-        sessionUseCase.getOrCreate(command.getSessionId());
-        RuntimeSettings settings = RuntimeSettings.resolve(command, voicePolicy);
-        String voiceSessionId = UUID.randomUUID().toString();
-        RuntimeContext context = new RuntimeContext(
-                voiceSessionId,
+    }
+
+    private RuntimeContext createRuntimeContext(VoiceSessionOpenCommand command) {
+        return new RuntimeContext(
+                UUID.randomUUID().toString(),
                 command.getSessionId(),
                 command.getApiKey(),
-                settings
+                RuntimeSettings.resolve(command, voicePolicy)
         );
-        contextByVoiceSessionId.put(voiceSessionId, context);
-        return voiceSessionId;
     }
 
     public void registerSink(String voiceSessionId, VoiceEventSink sink) {
@@ -163,10 +169,18 @@ public class VoiceSessionUseCase {
         if (context.isInactive()) {
             return;
         }
+        emitSessionReady(context);
+        initializeQuestionFlow(context);
+    }
+
+    private void emitSessionReady(RuntimeContext context) {
         context.emit("session.ready", Map.of(
                 "sessionId", context.sessionId,
                 "voiceSessionId", context.voiceSessionId
         ));
+    }
+
+    private void initializeQuestionFlow(RuntimeContext context) {
         try {
             sendQuestionPrompt(context);
         } catch (Exception e) {
@@ -178,16 +192,24 @@ public class VoiceSessionUseCase {
     private void sendQuestionPrompt(RuntimeContext context) {
         SessionState sessionState = sessionUseCase.getOrCreate(context.sessionId);
         NextQuestion nextQuestion = questionUseCase.nextQuestion(context.sessionId);
-        boolean exhausted = isQuestionExhausted(nextQuestion);
+        long turnId = emitInitialQuestionPrompt(context, sessionState.getMode(), nextQuestion);
+        continueOrStopAfterQuestionPrompt(context, nextQuestion, turnId);
+    }
+
+    private long emitInitialQuestionPrompt(RuntimeContext context, ModeType mode, NextQuestion question) {
+        boolean exhausted = isQuestionExhausted(question);
         long turnId = exhausted ? 0L : context.nextTurnId();
-        ModeType mode = sessionState.getMode();
-        context.emit("question.prompt", questionPayload(context.sessionId, turnId, mode, nextQuestion));
-        if (exhausted) {
+        context.emit("question.prompt", questionPayload(context.sessionId, turnId, mode, question));
+        return turnId;
+    }
+
+    private void continueOrStopAfterQuestionPrompt(RuntimeContext context, NextQuestion question, long turnId) {
+        if (isQuestionExhausted(question)) {
             stopInternal(context, false, SessionStopReason.QUESTION_EXHAUSTED.code());
             return;
         }
-        context.setCurrentQuestion(nextQuestion, turnId);
-        emitSpeech(context, turnId, "question", nextQuestion.getText());
+        context.setCurrentQuestion(question, turnId);
+        emitSpeech(context, turnId, "question", question.getText());
     }
 
     private void flushTurn(RuntimeContext context) {
@@ -209,35 +231,54 @@ public class VoiceSessionUseCase {
         Instant startedAt = Instant.now();
         long turnId = snapshot.turnId();
         try {
-            context.emit("turn.flush", Map.of(
-                    "sessionId", context.sessionId,
-                    "turnId", turnId,
-                    "bytes", snapshot.pcm16().length,
-                    "sampleRate", snapshot.sampleRate(),
-                    "durationMs", audioDurationMs(snapshot.pcm16().length, snapshot.sampleRate())
-            ));
-            String transcript = transcribe(snapshot, context);
-            if (isBlank(transcript)) {
-                context.emit("stt.skipped", Map.of(
-                        "sessionId", context.sessionId,
-                        "turnId", turnId,
-                        "reason", "empty_transcript"
-                ));
-                context.emit("error", errorPayload(context.sessionId, turnId, "음성이 인식되지 않았습니다."));
-                return;
-            }
-            context.emit("stt.final", Map.of(
-                    "sessionId", context.sessionId,
-                    "turnId", turnId,
-                    "text", transcript
-            ));
-            processTurnFlow(context, snapshot.question(), transcript, turnId);
-            metrics.recordVoiceTurnLatency(Duration.between(startedAt, Instant.now()));
+            processTurnPipeline(context, snapshot, turnId, startedAt);
         } catch (Exception e) {
             context.emit("error", errorPayload(context.sessionId, turnId, defaultMessage(e.getMessage())));
         } finally {
             completeTurnProcessing(context);
         }
+    }
+
+    private void processTurnPipeline(RuntimeContext context, AudioSnapshot snapshot, long turnId, Instant startedAt) {
+        emitTurnFlush(context, snapshot, turnId);
+        String transcript = transcribe(snapshot, context);
+        if (emitEmptyTranscriptIfNeeded(context, turnId, transcript)) {
+            return;
+        }
+        emitFinalTranscript(context, turnId, transcript);
+        processTurnFlow(context, snapshot.question(), transcript, turnId);
+        metrics.recordVoiceTurnLatency(Duration.between(startedAt, Instant.now()));
+    }
+
+    private void emitTurnFlush(RuntimeContext context, AudioSnapshot snapshot, long turnId) {
+        context.emit("turn.flush", Map.of(
+                "sessionId", context.sessionId,
+                "turnId", turnId,
+                "bytes", snapshot.pcm16().length,
+                "sampleRate", snapshot.sampleRate(),
+                "durationMs", audioDurationMs(snapshot.pcm16().length, snapshot.sampleRate())
+        ));
+    }
+
+    private boolean emitEmptyTranscriptIfNeeded(RuntimeContext context, long turnId, String transcript) {
+        if (!isBlank(transcript)) {
+            return false;
+        }
+        context.emit("stt.skipped", Map.of(
+                "sessionId", context.sessionId,
+                "turnId", turnId,
+                "reason", "empty_transcript"
+        ));
+        context.emit("error", errorPayload(context.sessionId, turnId, "음성이 인식되지 않았습니다."));
+        return true;
+    }
+
+    private void emitFinalTranscript(RuntimeContext context, long turnId, String transcript) {
+        context.emit("stt.final", Map.of(
+                "sessionId", context.sessionId,
+                "turnId", turnId,
+                "text", transcript
+        ));
     }
 
     private void processTurnFlow(RuntimeContext context,
@@ -377,25 +418,30 @@ public class VoiceSessionUseCase {
     }
 
     private List<FeedbackItem> generateFeedbackItems(RuntimeContext context, List<TurnInput> inputs) {
-        List<FeedbackItem> items = new ArrayList<>();
-        for (TurnInput input : inputs) {
-            Feedback feedback = feedbackUseCase.generateFeedbackForTurn(
-                    context.apiKey,
-                    feedbackCommand(context, input.answerText()),
-                    input.questionText(),
-                    input.questionGroup(),
-                    input.answerText(),
-                    MAX_RULEBOOK_DOCUMENTS_PER_TURN
-            );
-            items.add(new FeedbackItem(
-                    input.questionId(),
-                    input.questionText(),
-                    input.questionGroup(),
-                    input.answerText(),
-                    feedback
-            ));
-        }
-        return items;
+        return inputs.stream()
+                .map((input) -> generateFeedbackItem(context, input))
+                .toList();
+    }
+
+    private FeedbackItem generateFeedbackItem(RuntimeContext context, TurnInput input) {
+        return new FeedbackItem(
+                input.questionId(),
+                input.questionText(),
+                input.questionGroup(),
+                input.answerText(),
+                generateFeedback(context, input)
+        );
+    }
+
+    private Feedback generateFeedback(RuntimeContext context, TurnInput input) {
+        return feedbackUseCase.generateFeedbackForTurn(
+                context.apiKey,
+                feedbackCommand(context, input.answerText()),
+                input.questionText(),
+                input.questionGroup(),
+                input.answerText(),
+                MAX_RULEBOOK_DOCUMENTS_PER_TURN
+        );
     }
 
     private FeedbackCommand feedbackCommand(RuntimeContext context, String text) {
@@ -432,23 +478,42 @@ public class VoiceSessionUseCase {
     private byte[] toWav(byte[] pcm16, int sampleRate) {
         int safeRate = sampleRate > 0 ? sampleRate : DEFAULT_SAMPLE_RATE;
         int dataSize = pcm16.length;
-        int totalSize = 44 + dataSize;
-        ByteBuffer buffer = ByteBuffer.allocate(totalSize).order(ByteOrder.LITTLE_ENDIAN);
+        ByteBuffer buffer = wavBuffer(dataSize);
+        writeWavHeader(buffer, safeRate, dataSize);
+        buffer.put(pcm16);
+        return buffer.array();
+    }
+
+    private ByteBuffer wavBuffer(int dataSize) {
+        return ByteBuffer.allocate(44 + dataSize).order(ByteOrder.LITTLE_ENDIAN);
+    }
+
+    private void writeWavHeader(ByteBuffer buffer, int sampleRate, int dataSize) {
+        writeRiffHeader(buffer, dataSize);
+        writeFmtChunk(buffer, sampleRate);
+        writeDataChunk(buffer, dataSize);
+    }
+
+    private void writeRiffHeader(ByteBuffer buffer, int dataSize) {
         buffer.put("RIFF".getBytes());
         buffer.putInt(36 + dataSize);
         buffer.put("WAVE".getBytes());
+    }
+
+    private void writeFmtChunk(ByteBuffer buffer, int sampleRate) {
         buffer.put("fmt ".getBytes());
         buffer.putInt(16);
         buffer.putShort((short) 1);
         buffer.putShort((short) 1);
-        buffer.putInt(safeRate);
-        buffer.putInt(safeRate * 2);
+        buffer.putInt(sampleRate);
+        buffer.putInt(sampleRate * 2);
         buffer.putShort((short) 2);
         buffer.putShort((short) 16);
+    }
+
+    private void writeDataChunk(ByteBuffer buffer, int dataSize) {
         buffer.put("data".getBytes());
         buffer.putInt(dataSize);
-        buffer.put(pcm16);
-        return buffer.array();
     }
 
     private long audioDurationMs(int pcm16Size, int sampleRate) {
@@ -511,16 +576,24 @@ public class VoiceSessionUseCase {
 
     private Map<String, Object> feedbackItemPayload(FeedbackItem item) {
         Map<String, Object> payload = new LinkedHashMap<>();
+        appendFeedbackItemMeta(payload, item);
+        appendFeedbackItemContent(payload, item.feedback());
+        return payload;
+    }
+
+    private void appendFeedbackItemMeta(Map<String, Object> payload, FeedbackItem item) {
         payload.put("questionId", item.questionId());
         payload.put("questionText", item.questionText());
         payload.put("questionGroup", item.questionGroup() == null ? null : item.questionGroup().value());
         payload.put("answerText", item.answerText());
-        payload.put("summary", item.feedback().getSummary());
-        payload.put("correctionPoints", item.feedback().getCorrectionPoints());
-        payload.put("recommendation", item.feedback().getRecommendation());
-        payload.put("exampleAnswer", item.feedback().getExampleAnswer());
-        payload.put("rulebookEvidence", item.feedback().getRulebookEvidence());
-        return payload;
+    }
+
+    private void appendFeedbackItemContent(Map<String, Object> payload, Feedback feedback) {
+        payload.put("summary", feedback.getSummary());
+        payload.put("correctionPoints", feedback.getCorrectionPoints());
+        payload.put("recommendation", feedback.getRecommendation());
+        payload.put("exampleAnswer", feedback.getExampleAnswer());
+        payload.put("rulebookEvidence", feedback.getRulebookEvidence());
     }
 
     private Map<String, Object> nextActionPayload(SessionFlowPolicy.SessionAction action) {
@@ -576,37 +649,57 @@ public class VoiceSessionUseCase {
         if (context.isInactive() || isBlank(text)) {
             return;
         }
-        Instant start = Instant.now();
-        String phase = isBlank(role) ? "question" : role;
+        String phase = resolveSpeechPhase(role);
         try {
-            byte[] wav = ttsGateway.synthesize(
-                    context.apiKey,
-                    context.settings.ttsModel(),
-                    context.settings.ttsVoice(),
-                    text
-            );
-            if (wav == null || wav.length == 0) {
-                return;
-            }
-            metrics.recordTtsLatency(Duration.between(start, Instant.now()));
-            context.emit("tts.audio", Map.of(
-                    "sessionId", context.sessionId,
-                    "turnId", turnId,
-                    "role", phase,
-                    "phase", phase,
-                    "sequence", context.nextTtsSequence(),
-                    "text", text,
-                    "audio", Base64.getEncoder().encodeToString(wav),
-                    "mimeType", "audio/wav"
-            ));
+            emitSpeechAudio(context, turnId, phase, text);
         } catch (Exception e) {
-            metrics.incrementTtsError();
-            context.emit("tts.error", Map.of(
-                    "sessionId", context.sessionId,
-                    "turnId", turnId,
-                    "message", defaultMessage(e.getMessage())
-            ));
+            emitSpeechError(context, turnId, e);
         }
+    }
+
+    private String resolveSpeechPhase(String role) {
+        return isBlank(role) ? "question" : role;
+    }
+
+    private void emitSpeechAudio(RuntimeContext context, long turnId, String phase, String text) throws Exception {
+        Instant start = Instant.now();
+        byte[] wav = synthesizeSpeech(context, text);
+        if (wav == null || wav.length == 0) {
+            return;
+        }
+        metrics.recordTtsLatency(Duration.between(start, Instant.now()));
+        emitSpeechEvent(context, turnId, phase, text, wav);
+    }
+
+    private byte[] synthesizeSpeech(RuntimeContext context, String text) throws Exception {
+        return ttsGateway.synthesize(
+                context.apiKey,
+                context.settings.ttsModel(),
+                context.settings.ttsVoice(),
+                text
+        );
+    }
+
+    private void emitSpeechEvent(RuntimeContext context, long turnId, String phase, String text, byte[] wav) {
+        context.emit("tts.audio", Map.of(
+                "sessionId", context.sessionId,
+                "turnId", turnId,
+                "role", phase,
+                "phase", phase,
+                "sequence", context.nextTtsSequence(),
+                "text", text,
+                "audio", Base64.getEncoder().encodeToString(wav),
+                "mimeType", "audio/wav"
+        ));
+    }
+
+    private void emitSpeechError(RuntimeContext context, long turnId, Exception e) {
+        metrics.incrementTtsError();
+        context.emit("tts.error", Map.of(
+                "sessionId", context.sessionId,
+                "turnId", turnId,
+                "message", defaultMessage(e.getMessage())
+        ));
     }
 
     private String toTtsText(List<FeedbackItem> items) {
@@ -616,34 +709,43 @@ public class VoiceSessionUseCase {
         if (items.size() == 1) {
             return toTtsText(items.get(0).feedback());
         }
+        return joinFeedbackSpeech(items);
+    }
+
+    private String joinFeedbackSpeech(List<FeedbackItem> items) {
         StringBuilder builder = new StringBuilder();
-        for (int i = 0; i < items.size(); i += 1) {
-            FeedbackItem item = items.get(i);
-            builder.append("Feedback ").append(i + 1).append('\n');
-            if (!isBlank(item.questionText())) {
-                builder.append(item.questionText()).append('\n');
-            }
-            builder.append(toTtsText(item.feedback())).append('\n');
+        for (int index = 0; index < items.size(); index += 1) {
+            appendFeedbackSpeech(builder, items.get(index), index + 1);
         }
         return builder.toString().trim();
     }
 
+    private void appendFeedbackSpeech(StringBuilder builder, FeedbackItem item, int order) {
+        builder.append("Feedback ").append(order).append('\n');
+        if (!isBlank(item.questionText())) {
+            builder.append(item.questionText()).append('\n');
+        }
+        builder.append(toTtsText(item.feedback())).append('\n');
+    }
+
     private String toTtsText(Feedback feedback) {
-        StringBuilder builder = new StringBuilder();
-        if (!isBlank(feedback.getSummary())) {
-            builder.append(feedback.getSummary()).append('\n');
-        }
-        if (!feedback.getCorrectionPoints().isEmpty()) {
-            builder.append(String.join("\n", feedback.getCorrectionPoints())).append('\n');
-        }
-        if (!feedback.getRecommendation().isEmpty()) {
-            builder.append(String.join("\n", feedback.getRecommendation())).append('\n');
-        }
-        if (!isBlank(feedback.getExampleAnswer())) {
-            builder.append(feedback.getExampleAnswer());
-        }
-        String text = builder.toString().trim();
+        String text = String.join("\n", ttsSections(feedback)).trim();
         return text.isEmpty() ? "No feedback available." : text;
+    }
+
+    private List<String> ttsSections(Feedback feedback) {
+        List<String> sections = new ArrayList<>();
+        appendIfPresent(sections, feedback.getSummary());
+        appendIfPresent(sections, String.join("\n", feedback.getCorrectionPoints()));
+        appendIfPresent(sections, String.join("\n", feedback.getRecommendation()));
+        appendIfPresent(sections, feedback.getExampleAnswer());
+        return sections;
+    }
+
+    private void appendIfPresent(List<String> sections, String text) {
+        if (!isBlank(text)) {
+            sections.add(text);
+        }
     }
 
     private void stopInternal(RuntimeContext context, boolean forced, String reason) {

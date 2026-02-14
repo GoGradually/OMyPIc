@@ -35,6 +35,14 @@ public class FeedbackUseCase {
     private static final List<String> REQUIRED_RECOMMENDATION_CATEGORIES = List.of(
             "Filler", "Adjective", "Adverb"
     );
+    private static final Map<String, List<String>> CATEGORY_KEYWORDS = Map.of(
+            "Grammar", List.of("grammar", "grammer", "문법"),
+            "Expression", List.of("expression", "표현"),
+            "Logic", List.of("logic", "논리"),
+            "Filler", List.of("filler", "필러"),
+            "Adjective", List.of("adjective", "형용사"),
+            "Adverb", List.of("adverb", "부사")
+    );
     private static final String NO_STRATEGY = "(등록된 전략/룰북 문서가 없습니다)";
     private static final String NO_RULEBOOK_DOC = "(문서 없음)";
     private static final String BASE_COACH_PROMPT_TEMPLATE = """
@@ -395,19 +403,12 @@ JSON 타입 계약(반드시 동일하게 준수):
     }
 
     private boolean hasCategory(String point, String category) {
-        if (point == null) {
+        if (point == null || category == null) {
             return false;
         }
         String lowered = point.toLowerCase(Locale.ROOT);
-        return switch (category) {
-            case "Grammar" -> lowered.contains("grammar") || lowered.contains("grammer") || lowered.contains("문법");
-            case "Expression" -> lowered.contains("expression") || lowered.contains("표현");
-            case "Logic" -> lowered.contains("logic") || lowered.contains("논리");
-            case "Filler" -> lowered.contains("filler") || lowered.contains("필러");
-            case "Adjective" -> lowered.contains("adjective") || lowered.contains("형용사");
-            case "Adverb" -> lowered.contains("adverb") || lowered.contains("부사");
-            default -> false;
-        };
+        List<String> keywords = CATEGORY_KEYWORDS.getOrDefault(category, List.of());
+        return keywords.stream().anyMatch(lowered::contains);
     }
 
     private List<String> toStringList(JsonNode arrayNode) {
