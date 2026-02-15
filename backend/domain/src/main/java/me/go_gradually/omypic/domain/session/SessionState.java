@@ -18,6 +18,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class SessionState {
     private final SessionId sessionId;
     private final Deque<String> sttSegments = new ArrayDeque<>();
+    private final Deque<LlmPromptContext.TurnRecord> llmRecentTurns = new ArrayDeque<>();
     private final Set<String> selectedGroupTags = new LinkedHashSet<>();
     private final List<String> candidateGroupOrder = new ArrayList<>();
     private final Map<String, Integer> groupQuestionIndices = new ConcurrentHashMap<>();
@@ -26,7 +27,12 @@ public class SessionState {
     private int continuousBatchSize = 3;
     private int completedGroupCountSinceLastFeedback = 0;
     private int currentGroupCursor = 0;
+    private int llmTurnCountSinceRebase = 0;
+    private boolean llmBootstrapped = false;
     private FeedbackLanguage feedbackLanguage = FeedbackLanguage.of("ko");
+    private String llmConversationId = "";
+    private String llmLastResponseId = "";
+    private String llmSummary = "";
 
     public SessionState(SessionId sessionId) {
         if (sessionId == null) {
@@ -157,6 +163,56 @@ public class SessionState {
         this.feedbackLanguage = feedbackLanguage == null ? FeedbackLanguage.of("ko") : feedbackLanguage;
     }
 
+    public LlmConversationState conversationState() {
+        return new LlmConversationState(llmConversationId, llmLastResponseId, llmTurnCountSinceRebase);
+    }
+
+    public void updateConversationState(LlmConversationState state) {
+        LlmConversationState safe = state == null ? LlmConversationState.empty() : state;
+        this.llmConversationId = safe.conversationId();
+        this.llmLastResponseId = safe.responseId();
+        this.llmTurnCountSinceRebase = safe.turnCountSinceRebase();
+    }
+
+    public void resetConversationState() {
+        resetConversationState(true);
+    }
+
+    public void resetConversationState(boolean clearBootstrapFlag) {
+        updateConversationState(LlmConversationState.empty());
+        if (clearBootstrapFlag) {
+            llmBootstrapped = false;
+        }
+    }
+
+    public boolean isLlmBootstrapped() {
+        return llmBootstrapped;
+    }
+
+    public void markLlmBootstrapped() {
+        llmBootstrapped = true;
+    }
+
+    public void setLlmSummary(String summary) {
+        this.llmSummary = normalize(summary);
+    }
+
+    public LlmPromptContext buildPromptContext() {
+        return new LlmPromptContext(llmSummary, new ArrayList<>(llmRecentTurns));
+    }
+
+    public void appendLlmTurn(String question, String answer, String feedbackSummary, int maxRecentTurns) {
+        llmRecentTurns.addLast(new LlmPromptContext.TurnRecord(question, answer, feedbackSummary));
+        int limit = Math.max(1, maxRecentTurns);
+        while (llmRecentTurns.size() > limit) {
+            llmRecentTurns.removeFirst();
+        }
+    }
+
+    public boolean shouldRebaseConversation(int threshold) {
+        return llmTurnCountSinceRebase >= Math.max(1, threshold);
+    }
+
     public String currentCandidateGroupId() {
         if (currentGroupCursor < 0 || currentGroupCursor >= candidateGroupOrder.size()) {
             return null;
@@ -193,5 +249,9 @@ public class SessionState {
         QuestionItem item = group.getQuestions().get(index);
         markQuestionAsked(group.getId().value());
         return Optional.of(item);
+    }
+
+    private String normalize(String value) {
+        return value == null ? "" : value.trim();
     }
 }

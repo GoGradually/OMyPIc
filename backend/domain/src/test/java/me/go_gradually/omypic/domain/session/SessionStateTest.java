@@ -1,5 +1,4 @@
 package me.go_gradually.omypic.domain.session;
-
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -53,5 +52,46 @@ class SessionStateTest {
         assertTrue(state.shouldGenerateResidualContinuousFeedback(true, false));
         assertFalse(state.shouldGenerateResidualContinuousFeedback(true, true));
         assertFalse(state.shouldGenerateResidualContinuousFeedback(false, false));
+    }
+
+    @Test
+    void conversationState_updatesAndResets() {
+        SessionState state = new SessionState(SessionId.of("session-4"));
+        state.updateConversationState(new LlmConversationState("conv-1", "resp-1", 2));
+        state.markLlmBootstrapped();
+
+        assertEquals("conv-1", state.conversationState().conversationId());
+        assertEquals("resp-1", state.conversationState().responseId());
+        assertTrue(state.shouldRebaseConversation(2));
+        assertTrue(state.isLlmBootstrapped());
+
+        state.resetConversationState();
+        assertEquals("", state.conversationState().conversationId());
+        assertEquals(0, state.conversationState().turnCountSinceRebase());
+        assertFalse(state.isLlmBootstrapped());
+    }
+
+    @Test
+    void resetConversationState_withoutClearingBootstrap_keepsFlag() {
+        SessionState state = new SessionState(SessionId.of("session-4b"));
+        state.markLlmBootstrapped();
+        state.updateConversationState(new LlmConversationState("conv-1", "resp-1", 2));
+
+        state.resetConversationState(false);
+
+        assertTrue(state.isLlmBootstrapped());
+        assertEquals("", state.conversationState().conversationId());
+    }
+
+    @Test
+    void appendLlmTurn_keepsRecentWindow() {
+        SessionState state = new SessionState(SessionId.of("session-5"));
+        state.appendLlmTurn("q1", "a1", "s1", 2);
+        state.appendLlmTurn("q2", "a2", "s2", 2);
+        state.appendLlmTurn("q3", "a3", "s3", 2);
+
+        assertEquals(2, state.buildPromptContext().recentTurns().size());
+        assertEquals("q2", state.buildPromptContext().recentTurns().get(0).question());
+        assertEquals("q3", state.buildPromptContext().recentTurns().get(1).question());
     }
 }
