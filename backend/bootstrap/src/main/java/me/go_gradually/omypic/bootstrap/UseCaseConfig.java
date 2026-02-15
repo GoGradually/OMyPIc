@@ -25,6 +25,7 @@ import me.go_gradually.omypic.application.voice.usecase.VoiceSessionUseCase;
 import me.go_gradually.omypic.application.wrongnote.port.WrongNotePort;
 import me.go_gradually.omypic.application.wrongnote.port.WrongNoteRecentQueuePort;
 import me.go_gradually.omypic.application.wrongnote.usecase.WrongNoteUseCase;
+import me.go_gradually.omypic.infrastructure.shared.config.AppProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -79,8 +80,17 @@ public class UseCaseConfig {
                                            FeedbackPolicy feedbackPolicy,
                                            MetricsPort metricsPort,
                                            SessionStorePort sessionStore,
-                                           WrongNoteUseCase wrongNoteUseCase) {
-        return new FeedbackUseCase(llmClients, rulebookUseCase, feedbackPolicy, metricsPort, sessionStore, wrongNoteUseCase);
+                                           WrongNoteUseCase wrongNoteUseCase,
+                                           AppProperties properties) {
+        return new FeedbackUseCase(
+                llmClients,
+                rulebookUseCase,
+                feedbackPolicy,
+                metricsPort,
+                sessionStore,
+                wrongNoteUseCase,
+                properties.getIntegrations().getOpenai().getConversationRebaseTurns()
+        );
     }
 
     @Bean

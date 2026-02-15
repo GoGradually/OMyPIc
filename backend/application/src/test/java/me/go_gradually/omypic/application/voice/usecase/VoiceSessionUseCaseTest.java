@@ -37,6 +37,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -91,7 +92,7 @@ class VoiceSessionUseCaseTest {
             return null;
         }).when(asyncExecutor).execute(any(Runnable.class));
 
-        when(sttUseCase.transcribe(any(SttCommand.class))).thenReturn("answer text");
+        lenient().when(sttUseCase.transcribe(any(SttCommand.class))).thenReturn("answer text");
         lenient().when(feedbackUseCase.generateFeedbackForTurn(
                 anyString(),
                 any(FeedbackCommand.class),
@@ -100,12 +101,12 @@ class VoiceSessionUseCaseTest {
                 anyString(),
                 anyInt()
         )).thenReturn(sampleFeedback());
-        when(ttsGateway.synthesize(anyString(), anyString(), anyString(), anyString()))
+        lenient().when(ttsGateway.synthesize(anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(new byte[]{1, 2, 3, 4});
     }
 
     @Test
-    void immediateMode_emitsFeedbackSpeechBeforeNextQuestionSpeech() {
+    void immediateMode_emitsFeedbackSpeechBeforeNextQuestionSpeech() throws Exception {
         SessionState state = new SessionState(SessionId.of("s1"));
         state.applyModeUpdate(ModeType.IMMEDIATE, null);
         when(sessionUseCase.getOrCreate("s1")).thenReturn(state);
@@ -117,6 +118,8 @@ class VoiceSessionUseCaseTest {
         String voiceSessionId = useCase.open(openCommand("s1"));
         List<EventRecord> events = new ArrayList<>();
         useCase.registerSink(voiceSessionId, capture(events));
+        verify(feedbackUseCase, times(1))
+                .bootstrapConversation(anyString(), any(FeedbackCommand.class), anyString());
 
         events.clear();
         useCase.appendAudio(audioChunk(voiceSessionId));
@@ -273,6 +276,28 @@ class VoiceSessionUseCaseTest {
         useCase.appendAudio(audioChunk(voiceSessionId, 4L));
 
         verify(sttUseCase, times(1)).transcribe(any(SttCommand.class));
+    }
+
+    @Test
+    void initializeSession_stopsWhenBootstrapFails() throws Exception {
+        SessionState state = new SessionState(SessionId.of("s1"));
+        state.applyModeUpdate(ModeType.IMMEDIATE, null);
+        when(sessionUseCase.getOrCreate("s1")).thenReturn(state);
+        doThrow(new IllegalStateException("bootstrap failed"))
+                .when(feedbackUseCase)
+                .bootstrapConversation(anyString(), any(FeedbackCommand.class), anyString());
+
+        String voiceSessionId = useCase.open(openCommand("s1"));
+        List<EventRecord> events = new ArrayList<>();
+        useCase.registerSink(voiceSessionId, capture(events));
+
+        int readyIndex = firstIndex(events, event -> "session.ready".equals(event.type()));
+        int errorIndex = firstIndex(events, event -> "error".equals(event.type()));
+        int stoppedIndex = firstIndex(events, event -> "session.stopped".equals(event.type()));
+
+        assertEquals(-1, readyIndex);
+        assertTrue(errorIndex >= 0);
+        assertTrue(stoppedIndex > errorIndex);
     }
 
     private VoiceSessionOpenCommand openCommand(String sessionId) {

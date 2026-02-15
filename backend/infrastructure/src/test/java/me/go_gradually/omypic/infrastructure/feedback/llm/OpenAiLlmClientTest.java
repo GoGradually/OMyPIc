@@ -2,7 +2,9 @@ package me.go_gradually.omypic.infrastructure.feedback.llm;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import me.go_gradually.omypic.domain.session.LlmConversationState;
 import me.go_gradually.omypic.application.feedback.port.LlmGenerateResult;
+import me.go_gradually.omypic.domain.session.LlmPromptContext;
 import me.go_gradually.omypic.infrastructure.shared.config.AppProperties;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -38,8 +40,157 @@ class OpenAiLlmClientTest {
     }
 
     @Test
+    void bootstrap_startsConversationWithInstructions() throws Exception {
+        enqueueResponsesResponse("ok", "resp-boot", "conv-boot");
+
+        OpenAiLlmClient client = client();
+        LlmConversationState state = client.bootstrap(
+                "api-key",
+                "gpt-4o-mini",
+                "base coach prompt",
+                LlmConversationState.empty()
+        );
+
+        assertEquals("conv-boot", state.conversationId());
+        assertEquals("resp-boot", state.responseId());
+
+        JsonNode payload = objectMapper.readTree(server.takeRequest().getBody().readUtf8());
+        assertEquals("base coach prompt", payload.path("instructions").asText());
+    }
+
+    @Test
     void generate_mapsStructuredResponse() throws Exception {
-        enqueueChatResponse("""
+        enqueueResponsesResponse(minimalStructuredResponse(), "resp-1", "conv-1");
+
+        OpenAiLlmClient client = client();
+        LlmGenerateResult result = client.generate(
+                "api-key",
+                "gpt-4o-mini",
+                "sys",
+                "user",
+                LlmConversationState.empty(),
+                LlmPromptContext.empty()
+        );
+
+        assertEquals("요약", result.feedback().getSummary());
+        assertEquals("시제가 흔들림", result.feedback().getCorrections().grammar().issue());
+        assertEquals("Well", result.feedback().getRecommendations().filler().term());
+        assertTrue(result.schemaFallbackReasons().isEmpty());
+        assertEquals("conv-1", result.conversationState().conversationId());
+        assertEquals("resp-1", result.conversationState().responseId());
+
+        RecordedRequest request = server.takeRequest();
+        assertEquals("POST", request.getMethod());
+        assertEquals("/v1/responses", request.getPath());
+        assertEquals("Bearer api-key", request.getHeader("Authorization"));
+    }
+
+    @Test
+    void generate_reusesConversationWhenProvided() throws Exception {
+        enqueueResponsesResponse(minimalStructuredResponse(), "resp-2", "conv-1");
+
+        OpenAiLlmClient client = client();
+        client.generate(
+                "api-key",
+                "gpt-4o-mini",
+                "sys",
+                "user",
+                new LlmConversationState("conv-1", "resp-1", 1),
+                LlmPromptContext.empty()
+        );
+
+        JsonNode payload = objectMapper.readTree(server.takeRequest().getBody().readUtf8());
+        assertEquals("conv-1", payload.path("conversation").asText());
+        assertEquals("resp-1", payload.path("previous_response_id").asText());
+    }
+
+    @Test
+    void generate_retriesAndFallsBackWhenStructuredConversionFails() throws Exception {
+        enqueueResponsesResponse("not-json", "resp-1", "conv-1");
+        enqueueResponsesResponse("still-not-json", "resp-2", "conv-1");
+
+        OpenAiLlmClient client = client();
+        LlmGenerateResult result = client.generate(
+                "api-key",
+                "gpt-4o-mini",
+                "sys",
+                "user",
+                LlmConversationState.empty(),
+                LlmPromptContext.empty()
+        );
+
+        assertTrue(result.schemaFallbackReasons().contains("structured_output_conversion_failed"));
+        assertTrue(result.schemaFallbackReasons().contains("fallback_parse_failed"));
+    }
+
+    @Test
+    void generate_sendsTemperatureForLegacyModels() throws Exception {
+        enqueueResponsesResponse(minimalStructuredResponse(), "resp-1", "conv-1");
+
+        OpenAiLlmClient client = client();
+        client.generate(
+                "api-key",
+                "gpt-4o-mini",
+                "sys",
+                "user",
+                LlmConversationState.empty(),
+                LlmPromptContext.empty()
+        );
+
+        JsonNode payload = objectMapper.readTree(server.takeRequest().getBody().readUtf8());
+        assertEquals("gpt-4o-mini", payload.path("model").asText());
+        assertTrue(payload.has("temperature"));
+        assertEquals(0.2, payload.path("temperature").asDouble());
+    }
+
+    @Test
+    void generate_doesNotSendTemperatureForGpt5Family() throws Exception {
+        enqueueResponsesResponse(minimalStructuredResponse(), "resp-1", "conv-1");
+
+        OpenAiLlmClient client = client();
+        client.generate(
+                "api-key",
+                "gpt-5-mini",
+                "sys",
+                "user",
+                LlmConversationState.empty(),
+                LlmPromptContext.empty()
+        );
+
+        JsonNode payload = objectMapper.readTree(server.takeRequest().getBody().readUtf8());
+        assertEquals("gpt-5-mini", payload.path("model").asText());
+        assertFalse(payload.has("temperature"));
+    }
+
+    private OpenAiLlmClient client() {
+        AppProperties properties = new AppProperties();
+        properties.getIntegrations().getOpenai().setBaseUrl(server.url("/").toString());
+        properties.getIntegrations().getOpenai().setResponsesEnabled(true);
+        properties.getIntegrations().getOpenai().getLogging().setResponsePreviewChars(512);
+        properties.getIntegrations().getOpenai().getLogging().setFullBody(false);
+        properties.getIntegrations().getOpenai().getLogging().setLogSuccessAtFine(true);
+        return new OpenAiLlmClient(properties);
+    }
+
+    private void enqueueResponsesResponse(String outputText, String responseId, String conversationId) {
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody("""
+                        {
+                          "id":"%s",
+                          "conversation":"%s",
+                          "output_text":%s
+                        }
+                        """.formatted(responseId, conversationId, jsonString(outputText))));
+    }
+
+    private String jsonString(String text) {
+        String escaped = text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
+        return "\"" + escaped + "\"";
+    }
+
+    private String minimalStructuredResponse() {
+        return """
                 {
                   "summary":"요약",
                   "corrections":{
@@ -54,113 +205,6 @@ class OpenAiLlmClientTest {
                   },
                   "exampleAnswer":"example",
                   "rulebookEvidence":["[a.md] evidence"]
-                }
-                """);
-
-        OpenAiLlmClient client = client();
-        LlmGenerateResult result = client.generate("api-key", "gpt-4o-mini", "sys", "user");
-
-        assertEquals("요약", result.feedback().getSummary());
-        assertEquals("시제가 흔들림", result.feedback().getCorrections().grammar().issue());
-        assertEquals("Well", result.feedback().getRecommendations().filler().term());
-        assertTrue(result.schemaFallbackReasons().isEmpty());
-
-        RecordedRequest request = server.takeRequest();
-        assertEquals("POST", request.getMethod());
-        assertEquals("/v1/chat/completions", request.getPath());
-        assertEquals("Bearer api-key", request.getHeader("Authorization"));
-    }
-
-    @Test
-    void generate_retriesAndFallsBackWhenStructuredConversionFails() throws Exception {
-        enqueueChatResponse("not-json");
-        enqueueChatResponse("still-not-json");
-
-        OpenAiLlmClient client = client();
-        LlmGenerateResult result = client.generate("api-key", "gpt-4o-mini", "sys", "user");
-
-        assertTrue(result.schemaFallbackReasons().contains("structured_output_conversion_failed"));
-        assertTrue(result.schemaFallbackReasons().contains("fallback_parse_failed"));
-    }
-
-    @Test
-    void generate_sendsTemperatureForLegacyModels() throws Exception {
-        enqueueChatResponse(minimalStructuredResponse());
-
-        OpenAiLlmClient client = client();
-        client.generate("api-key", "gpt-4o-mini", "sys", "user");
-
-        JsonNode payload = objectMapper.readTree(server.takeRequest().getBody().readUtf8());
-        assertEquals("gpt-4o-mini", payload.path("model").asText());
-        assertTrue(payload.has("temperature"));
-        assertEquals(0.2, payload.path("temperature").asDouble());
-    }
-
-    @Test
-    void generate_doesNotSendTemperatureForGpt5Family() throws Exception {
-        enqueueChatResponse(minimalStructuredResponse());
-
-        OpenAiLlmClient client = client();
-        client.generate("api-key", "gpt-5-mini", "sys", "user");
-
-        JsonNode payload = objectMapper.readTree(server.takeRequest().getBody().readUtf8());
-        assertEquals("gpt-5-mini", payload.path("model").asText());
-        assertFalse(payload.has("temperature"));
-    }
-
-    private OpenAiLlmClient client() {
-        AppProperties properties = new AppProperties();
-        properties.getIntegrations().getOpenai().setBaseUrl(server.url("/").toString());
-        properties.getIntegrations().getOpenai().getLogging().setResponsePreviewChars(512);
-        properties.getIntegrations().getOpenai().getLogging().setFullBody(false);
-        properties.getIntegrations().getOpenai().getLogging().setLogSuccessAtFine(true);
-        return new OpenAiLlmClient(properties);
-    }
-
-    private void enqueueChatResponse(String content) {
-        server.enqueue(new MockResponse()
-                .setHeader("Content-Type", "application/json")
-                .setBody("""
-                        {
-                          "id":"chatcmpl-test",
-                          "object":"chat.completion",
-                          "created":1730000000,
-                          "model":"gpt-4o-mini",
-                          "choices":[
-                            {
-                              "index":0,
-                              "message":{
-                                "role":"assistant",
-                                "content":%s
-                              },
-                              "finish_reason":"stop"
-                            }
-                          ]
-                        }
-                        """.formatted(jsonString(content))));
-    }
-
-    private String jsonString(String text) {
-        String escaped = text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
-        return "\"" + escaped + "\"";
-    }
-
-    private String minimalStructuredResponse() {
-        return """
-                {
-                  "summary":"요약",
-                  "corrections":{
-                    "grammar":{"issue":"a","fix":"b"},
-                    "expression":{"issue":"c","fix":"d"},
-                    "logic":{"issue":"e","fix":"f"}
-                  },
-                  "recommendations":{
-                    "filler":{"term":"Well","usage":"u1"},
-                    "adjective":{"term":"vivid","usage":"u2"},
-                    "adverb":{"term":"definitely","usage":"u3"}
-                  },
-                  "exampleAnswer":"example",
-                  "rulebookEvidence":[]
                 }
                 """;
     }

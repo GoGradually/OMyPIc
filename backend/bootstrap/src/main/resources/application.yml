@@ -62,6 +62,8 @@ omypic:
   integrations:
     openai:
       base-url: ${OMYPIC_OPENAI_BASE_URL:https://api.openai.com}
+      responses-enabled: ${OMYPIC_OPENAI_RESPONSES_ENABLED:true}
+      conversation-rebase-turns: ${OMYPIC_OPENAI_CONVERSATION_REBASE_TURNS:6}
       logging:
         response-preview-chars: ${OMYPIC_OPENAI_LOG_RESPONSE_PREVIEW_CHARS:1024}
         full-body: ${OMYPIC_OPENAI_LOG_FULL_BODY:false}

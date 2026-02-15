@@ -432,6 +432,8 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
 
     public static class OpenAi {
         private String baseUrl = "https://api.openai.com";
+        private boolean responsesEnabled = true;
+        private int conversationRebaseTurns = 6;
         private Logging logging = new Logging();
 
         public String getBaseUrl() {
@@ -440,6 +442,22 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
 
         public void setBaseUrl(String baseUrl) {
             this.baseUrl = baseUrl;
+        }
+
+        public boolean isResponsesEnabled() {
+            return responsesEnabled;
+        }
+
+        public void setResponsesEnabled(boolean responsesEnabled) {
+            this.responsesEnabled = responsesEnabled;
+        }
+
+        public int getConversationRebaseTurns() {
+            return conversationRebaseTurns;
+        }
+
+        public void setConversationRebaseTurns(int conversationRebaseTurns) {
+            this.conversationRebaseTurns = conversationRebaseTurns;
         }
 
         public Logging getLogging() {

@@ -4,6 +4,7 @@ import me.go_gradually.omypic.application.feedback.model.FeedbackCommand;
 import me.go_gradually.omypic.application.feedback.model.FeedbackResult;
 import me.go_gradually.omypic.application.feedback.policy.FeedbackPolicy;
 import me.go_gradually.omypic.application.feedback.port.LlmClient;
+import me.go_gradually.omypic.domain.session.LlmConversationState;
 import me.go_gradually.omypic.application.feedback.port.LlmGenerateResult;
 import me.go_gradually.omypic.application.feedback.usecase.FeedbackUseCase;
 import me.go_gradually.omypic.application.rulebook.usecase.RulebookUseCase;
@@ -87,7 +88,9 @@ class VoiceChainIntegrationTest {
         when(sttGateway.transcribe(any(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyBoolean(), any()))
                 .thenReturn("This is my answer.");
         when(llmClient.provider()).thenReturn("openai");
-        when(llmClient.generate(anyString(), anyString(), anyString(), anyString()))
+        when(llmClient.bootstrap(anyString(), anyString(), anyString(), any()))
+                .thenReturn(new LlmConversationState("conv-1", "boot-resp", 0));
+        when(llmClient.generate(anyString(), anyString(), anyString(), anyString(), any(), any()))
                 .thenReturn(new LlmGenerateResult(
                         Feedback.of(
                                 "summary",
@@ -96,7 +99,9 @@ class VoiceChainIntegrationTest {
                                 "tiny",
                                 List.of()
                         ),
-                        List.of()
+                        List.of(),
+                        LlmConversationState.empty(),
+                        "summary"
                 ));
         when(rulebookUseCase.searchContexts(anyString()))
                 .thenReturn(List.of(RulebookContext.of(RulebookId.of("r1"), "rulebook.md", "keep tense consistent")));

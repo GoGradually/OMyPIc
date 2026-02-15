@@ -4,7 +4,9 @@ import me.go_gradually.omypic.application.feedback.model.FeedbackCommand;
 import me.go_gradually.omypic.application.feedback.model.FeedbackResult;
 import me.go_gradually.omypic.application.feedback.policy.FeedbackPolicy;
 import me.go_gradually.omypic.application.feedback.port.LlmClient;
+import me.go_gradually.omypic.domain.session.LlmConversationState;
 import me.go_gradually.omypic.application.feedback.port.LlmGenerateResult;
+import me.go_gradually.omypic.domain.session.LlmPromptContext;
 import me.go_gradually.omypic.application.rulebook.usecase.RulebookUseCase;
 import me.go_gradually.omypic.application.session.port.SessionStorePort;
 import me.go_gradually.omypic.application.shared.port.MetricsPort;
@@ -31,6 +33,9 @@ public class FeedbackUseCase {
     private static final String OPENAI_PROVIDER = "openai";
     private static final String NO_STRATEGY = "(등록된 전략/룰북 문서가 없습니다)";
     private static final String NO_RULEBOOK_DOC = "(문서 없음)";
+    private static final int DEFAULT_CONVERSATION_REBASE_TURNS = 6;
+    private static final int RECENT_TURNS_LIMIT = 6;
+    private static final String EMPTY_SYSTEM_PROMPT = "";
     private static final String BASE_COACH_PROMPT_TEMPLATE = """
 지금부터 너는 OPIc(Oral Proficiency Interview Computer) 학습용 선생님이다.
 
@@ -80,7 +85,8 @@ Function 35%%, Content&Context 35%%, Text Type 20%%, Accuracy 10%%
 
 위에 설명된 내용이 사용자가 취하고 있는 OPIc 고득점 전략이다.
 해당 전략을 바탕으로, 사용자의 답변이 전략을 잘 지켰는지 피드백을 수행한다.
-또한, 단어 사용의 자연스러움이나 문법적 오류 등을 피드백한다.
+또한, 단어 사용의 자연스러움이나 사용된 문장의 구체적인 문법적 오류 등을 피드백한다.
+사용자의 답변이 구어체로 잘 표현되어 있는지도 피드백한다. 지나치게 외운 답변처럼 들리는 딱딱한 답변이 아닌지, 실제로 말하는 것처럼 자연스러운지 피드백한다.
 마지막으로, 사용자의 답변에 들어갈 법한 좋은 표현으로 filler words와 adjective, adverb를 각각 추천하고 사용법을 설명하라.
 
 ---
@@ -141,6 +147,7 @@ JSON 타입 계약(반드시 동일하게 준수):
     private final MetricsPort metrics;
     private final SessionStorePort sessionStore;
     private final WrongNoteUseCase wrongNoteUseCase;
+    private final int conversationRebaseTurns;
 
     public FeedbackUseCase(List<LlmClient> clientList,
                            RulebookUseCase rulebookUseCase,
@@ -148,12 +155,31 @@ JSON 타입 계약(반드시 동일하게 준수):
                            MetricsPort metrics,
                            SessionStorePort sessionStore,
                            WrongNoteUseCase wrongNoteUseCase) {
+        this(
+                clientList,
+                rulebookUseCase,
+                feedbackPolicy,
+                metrics,
+                sessionStore,
+                wrongNoteUseCase,
+                DEFAULT_CONVERSATION_REBASE_TURNS
+        );
+    }
+
+    public FeedbackUseCase(List<LlmClient> clientList,
+                           RulebookUseCase rulebookUseCase,
+                           FeedbackPolicy feedbackPolicy,
+                           MetricsPort metrics,
+                           SessionStorePort sessionStore,
+                           WrongNoteUseCase wrongNoteUseCase,
+                           int conversationRebaseTurns) {
         this.clients = clientList.stream().collect(Collectors.toMap(LlmClient::provider, c -> c));
         this.rulebookUseCase = rulebookUseCase;
         this.feedbackPolicy = feedbackPolicy;
         this.metrics = metrics;
         this.sessionStore = sessionStore;
         this.wrongNoteUseCase = wrongNoteUseCase;
+        this.conversationRebaseTurns = Math.max(1, conversationRebaseTurns);
     }
 
     public FeedbackResult generateFeedback(String apiKey, FeedbackCommand command) {
@@ -166,7 +192,7 @@ JSON 타입 계약(반드시 동일하게 준수):
         String inputText = state.resolveFeedbackInputText(command.getText());
         PromptInput promptInput = PromptInput.fromGeneral(inputText);
         List<RulebookContext> contexts = rulebookUseCase.searchContexts(inputText);
-        return FeedbackResult.generated(generateFeedbackInternal(apiKey, command, language, promptInput, contexts));
+        return FeedbackResult.generated(generateFeedbackInternal(apiKey, command, state, language, promptInput, contexts));
     }
 
     public Feedback generateFeedbackForTurn(String apiKey,
@@ -176,10 +202,11 @@ JSON 타입 계약(반드시 동일하게 준수):
                                             String answerText,
                                             int maxRulebookDocuments) {
         FeedbackLanguage language = FeedbackLanguage.of(command.getFeedbackLanguage());
+        SessionState state = sessionStore.getOrCreate(SessionId.of(command.getSessionId()));
         String query = buildTurnQuery(questionText, answerText);
         PromptInput promptInput = PromptInput.fromTurn(questionText, answerText);
         List<RulebookContext> contexts = rulebookUseCase.searchContextsForTurn(questionGroup, query, maxRulebookDocuments);
-        return generateFeedbackInternal(apiKey, command, language, promptInput, contexts);
+        return generateFeedbackInternal(apiKey, command, state, language, promptInput, contexts);
     }
 
     public PrefetchedTurnPrompt prefetchTurnPrompt(String questionId,
@@ -210,6 +237,7 @@ JSON 타입 계약(반드시 동일하게 준수):
             throw new IllegalArgumentException("prefetch is required");
         }
         FeedbackLanguage language = FeedbackLanguage.of(command.getFeedbackLanguage());
+        SessionState state = sessionStore.getOrCreate(SessionId.of(command.getSessionId()));
         List<RulebookContext> safeContexts = safeContexts(prefetch.contexts());
         String safeAnswer = trimText(answerText);
         String languageValue = language.value();
@@ -218,16 +246,43 @@ JSON 타입 계약(반드시 동일하게 준수):
         return generateFeedbackFromPrompts(
                 apiKey,
                 command,
+                state,
                 language,
                 safeAnswer,
                 safeContexts,
                 systemPrompt,
-                userPrompt
+                userPrompt,
+                prefetch.questionText()
         );
+    }
+
+    public void bootstrapConversation(String apiKey,
+                                      FeedbackCommand command,
+                                      String feedbackLanguage) throws Exception {
+        if (command == null || command.getSessionId() == null || command.getSessionId().isBlank()) {
+            throw new IllegalArgumentException("sessionId is required");
+        }
+        SessionState state = sessionStore.getOrCreate(SessionId.of(command.getSessionId()));
+        if (state.isLlmBootstrapped()) {
+            return;
+        }
+        FeedbackLanguage language = FeedbackLanguage.of(feedbackLanguage);
+        String systemPrompt = buildSystemPrompt(language.value(), List.of());
+        LlmClient client = Optional.ofNullable(clients.get(OPENAI_PROVIDER))
+                .orElseThrow(() -> new IllegalStateException("OpenAI client is not configured"));
+        LlmConversationState next = client.bootstrap(
+                apiKey,
+                command.getModel(),
+                systemPrompt,
+                state.conversationState()
+        );
+        state.updateConversationState(next);
+        state.markLlmBootstrapped();
     }
 
     private Feedback generateFeedbackInternal(String apiKey,
                                               FeedbackCommand command,
+                                              SessionState state,
                                               FeedbackLanguage language,
                                               PromptInput promptInput,
                                               List<RulebookContext> contexts) {
@@ -239,27 +294,51 @@ JSON 타입 계약(반드시 동일하게 준수):
         return generateFeedbackFromPrompts(
                 apiKey,
                 command,
+                state,
                 language,
                 safeInput.normalizationText(),
                 safeContexts,
                 systemPrompt,
-                userPrompt
+                userPrompt,
+                safeInput.questionText()
         );
     }
 
     private Feedback generateFeedbackFromPrompts(String apiKey,
                                                  FeedbackCommand command,
+                                                 SessionState state,
                                                  FeedbackLanguage language,
                                                  String text,
                                                  List<RulebookContext> contexts,
                                                  String systemPrompt,
-                                                 String userPrompt) {
+                                                 String userPrompt,
+                                                 String questionText) {
         String provider = normalizeProvider(command.getProvider());
         LlmClient client = Optional.ofNullable(clients.get(OPENAI_PROVIDER))
                 .orElseThrow(() -> new IllegalStateException("OpenAI client is not configured"));
+        SessionState safeState = state == null
+                ? sessionStore.getOrCreate(SessionId.of(command.getSessionId()))
+                : state;
+        if (safeState.shouldRebaseConversation(conversationRebaseTurns)) {
+            if (safeState.isLlmBootstrapped()) {
+                // Rebase starts a fresh conversation, but keeps bootstrap already applied.
+                safeState.resetConversationState(false);
+            } else {
+                safeState.resetConversationState();
+            }
+        }
         Instant start = Instant.now();
         try {
-            LlmGenerateResult generated = client.generate(apiKey, command.getModel(), systemPrompt, userPrompt);
+            LlmPromptContext promptContext = safeState.buildPromptContext();
+            LlmGenerateResult generated = generateWithConversationRecovery(
+                    client,
+                    apiKey,
+                    command,
+                    userPrompt,
+                    systemPrompt,
+                    safeState,
+                    promptContext
+            );
             logSchemaFallbackIfNeeded(command, provider, generated.schemaFallbackReasons());
             Feedback feedback = generated.feedback();
             FeedbackConstraints constraints = new FeedbackConstraints(
@@ -268,6 +347,9 @@ JSON 타입 계약(반드시 동일하게 준수):
                     feedbackPolicy.getExampleMaxRatio()
             );
             feedback = feedback.normalized(constraints, text, language, contexts);
+            safeState.updateConversationState(generated.conversationState());
+            safeState.setLlmSummary(resolveSummaryForNextTurn(generated, feedback));
+            safeState.appendLlmTurn(questionText, text, feedback.getSummary(), RECENT_TURNS_LIMIT);
             metrics.recordFeedbackLatency(Duration.between(start, Instant.now()));
             wrongNoteUseCase.addFeedback(feedback);
             return feedback;
@@ -275,6 +357,69 @@ JSON 타입 계약(반드시 동일하게 준수):
             metrics.incrementFeedbackError();
             throw new IllegalStateException("LLM feedback failed: " + failureMessage(e), e);
         }
+    }
+
+    private LlmGenerateResult generateWithConversationRecovery(LlmClient client,
+                                                               String apiKey,
+                                                               FeedbackCommand command,
+                                                               String userPrompt,
+                                                               String systemPrompt,
+                                                               SessionState state,
+                                                               LlmPromptContext promptContext) throws Exception {
+        LlmConversationState conversationState = state.conversationState();
+        boolean bootstrappedBeforeRequest = state.isLlmBootstrapped();
+        String requestSystemPrompt = bootstrappedBeforeRequest ? EMPTY_SYSTEM_PROMPT : systemPrompt;
+        try {
+            return client.generate(
+                    apiKey,
+                    command.getModel(),
+                    requestSystemPrompt,
+                    userPrompt,
+                    conversationState,
+                    promptContext
+            );
+        } catch (Exception first) {
+            if (!conversationState.hasConversationId() || !isInvalidConversationError(first)) {
+                throw first;
+            }
+            state.resetConversationState();
+            if (bootstrappedBeforeRequest) {
+                LlmConversationState next = client.bootstrap(
+                        apiKey,
+                        command.getModel(),
+                        systemPrompt,
+                        state.conversationState()
+                );
+                state.updateConversationState(next);
+                state.markLlmBootstrapped();
+            }
+            return client.generate(
+                    apiKey,
+                    command.getModel(),
+                    state.isLlmBootstrapped() ? EMPTY_SYSTEM_PROMPT : systemPrompt,
+                    userPrompt,
+                    state.conversationState(),
+                    promptContext
+            );
+        }
+    }
+
+    private String resolveSummaryForNextTurn(LlmGenerateResult generated, Feedback feedback) {
+        if (generated != null && generated.summaryForNextTurn() != null && !generated.summaryForNextTurn().isBlank()) {
+            return generated.summaryForNextTurn();
+        }
+        return feedback == null || feedback.getSummary() == null ? "" : feedback.getSummary();
+    }
+
+    private boolean isInvalidConversationError(Exception error) {
+        if (error == null) {
+            return false;
+        }
+        String message = failureMessage(error).toLowerCase(Locale.ROOT);
+        return message.contains("conversation not found")
+                || message.contains("invalid conversation")
+                || message.contains("unknown conversation")
+                || message.contains("conversation id");
     }
 
     private String resolveSystemPrompt(PrefetchedTurnPrompt prefetch,

@@ -181,8 +181,14 @@ public class VoiceSessionUseCase {
         if (context.isInactive()) {
             return;
         }
-        emitSessionReady(context);
-        initializeQuestionFlow(context);
+        try {
+            bootstrapFeedbackContext(context);
+            emitSessionReady(context);
+            sendQuestionPrompt(context);
+        } catch (Exception e) {
+            context.emit("error", errorPayload(context.sessionId, 0L, defaultMessage(e.getMessage())));
+            stopInternal(context, false, "initialization_failed");
+        }
     }
 
     private void emitSessionReady(RuntimeContext context) {
@@ -192,13 +198,13 @@ public class VoiceSessionUseCase {
         ));
     }
 
-    private void initializeQuestionFlow(RuntimeContext context) {
-        try {
-            sendQuestionPrompt(context);
-        } catch (Exception e) {
-            context.emit("error", errorPayload(context.sessionId, 0L, defaultMessage(e.getMessage())));
-            stopInternal(context, false, "initialization_failed");
-        }
+    private void bootstrapFeedbackContext(RuntimeContext context) throws Exception {
+        FeedbackCommand command = feedbackCommand(context, "");
+        feedbackUseCase.bootstrapConversation(
+                context.apiKey,
+                command,
+                context.settings.feedbackLanguage()
+        );
     }
 
     private void sendQuestionPrompt(RuntimeContext context) {
