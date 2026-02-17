@@ -12,6 +12,7 @@ import me.go_gradually.omypic.application.stt.usecase.SttUseCase;
 import me.go_gradually.omypic.application.voice.model.VoiceAudioChunkCommand;
 import me.go_gradually.omypic.application.voice.model.VoiceEventSink;
 import me.go_gradually.omypic.application.voice.model.VoiceSessionOpenCommand;
+import me.go_gradually.omypic.application.voice.model.VoiceSessionStopCommand;
 import me.go_gradually.omypic.application.voice.policy.VoicePolicy;
 import me.go_gradually.omypic.application.voice.port.TtsGateway;
 import me.go_gradually.omypic.domain.feedback.Feedback;
@@ -29,9 +30,13 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Predicate;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -85,8 +90,10 @@ class VoiceSessionUseCaseTest {
         when(voicePolicy.voiceTtsModel()).thenReturn("gpt-4o-mini-tts");
         when(voicePolicy.voiceTtsVoice()).thenReturn("alloy");
         when(voicePolicy.voiceSilenceDurationMs()).thenReturn(1200);
+        when(voicePolicy.voiceRecoveryRetentionMs()).thenReturn(600_000L);
+        when(voicePolicy.voiceStoppedContextMax()).thenReturn(1000);
 
-        doAnswer(invocation -> {
+        lenient().doAnswer(invocation -> {
             Runnable task = invocation.getArgument(0);
             task.run();
             return null;
@@ -300,6 +307,183 @@ class VoiceSessionUseCaseTest {
         assertTrue(stoppedIndex > errorIndex);
     }
 
+    @Test
+    void emittedEvents_includeMonotonicEventId() {
+        SessionState state = new SessionState(SessionId.of("s1"));
+        state.applyModeUpdate(ModeType.IMMEDIATE, null);
+        when(sessionUseCase.getOrCreate("s1")).thenReturn(state);
+        when(questionUseCase.nextQuestion("s1")).thenReturn(
+                question("q-1", "question-1", "g-1", "travel"),
+                question("q-2", "question-2", "g-2", "hobby")
+        );
+
+        String voiceSessionId = useCase.open(openCommand("s1"));
+        List<EventRecord> events = new ArrayList<>();
+        useCase.registerSink(voiceSessionId, capture(events));
+
+        events.clear();
+        useCase.appendAudio(audioChunk(voiceSessionId));
+
+        long previous = 0L;
+        for (EventRecord event : events) {
+            long eventId = eventId(event.payload());
+            assertTrue(eventId > previous);
+            previous = eventId;
+        }
+    }
+
+    @Test
+    void registerSink_replaysEventsAfterSinceEventId() {
+        SessionState state = new SessionState(SessionId.of("s1"));
+        state.applyModeUpdate(ModeType.IMMEDIATE, null);
+        when(sessionUseCase.getOrCreate("s1")).thenReturn(state);
+        when(questionUseCase.nextQuestion("s1")).thenReturn(
+                question("q-1", "question-1", "g-1", "travel"),
+                question("q-2", "question-2", "g-2", "hobby")
+        );
+
+        String voiceSessionId = useCase.open(openCommand("s1"));
+        List<EventRecord> events = new ArrayList<>();
+        useCase.registerSink(voiceSessionId, capture(events));
+        useCase.appendAudio(audioChunk(voiceSessionId));
+
+        long sinceEventId = eventId(events.get(0).payload());
+        List<Long> expectedEventIds = events.stream()
+                .map(EventRecord::payload)
+                .map(this::eventId)
+                .filter(id -> id > sinceEventId)
+                .toList();
+
+        List<EventRecord> replayed = new ArrayList<>();
+        useCase.registerSink(voiceSessionId, capture(replayed), sinceEventId);
+        List<Long> replayedEventIds = replayed.stream()
+                .map(EventRecord::payload)
+                .map(this::eventId)
+                .toList();
+
+        assertEquals(expectedEventIds, replayedEventIds);
+    }
+
+    @Test
+    void recover_marksGapDetectedWhenReplayBufferTrimmed() {
+        VoiceSessionUseCase smallReplayUseCase = new VoiceSessionUseCase(
+                sttUseCase,
+                feedbackUseCase,
+                sessionUseCase,
+                questionUseCase,
+                ttsGateway,
+                asyncExecutor,
+                voicePolicy,
+                metrics,
+                4
+        );
+
+        SessionState state = new SessionState(SessionId.of("s1"));
+        state.applyModeUpdate(ModeType.IMMEDIATE, null);
+        when(sessionUseCase.getOrCreate("s1")).thenReturn(state);
+        when(questionUseCase.nextQuestion("s1")).thenReturn(
+                question("q-1", "question-1", "g-1", "travel"),
+                question("q-2", "question-2", "g-2", "hobby"),
+                question("q-3", "question-3", "g-3", "hobby"),
+                question("q-4", "question-4", "g-4", "hobby"),
+                question("q-5", "question-5", "g-5", "hobby"),
+                question("q-6", "question-6", "g-6", "hobby"),
+                question("q-7", "question-7", "g-7", "hobby")
+        );
+
+        String voiceSessionId = smallReplayUseCase.open(openCommand("s1"));
+        smallReplayUseCase.registerSink(voiceSessionId, capture(new ArrayList<>()));
+        for (long sequence = 1L; sequence <= 6L; sequence += 1L) {
+            smallReplayUseCase.appendAudio(audioChunk(voiceSessionId, sequence));
+        }
+
+        VoiceSessionUseCase.RecoverySnapshot snapshot = smallReplayUseCase.recover(voiceSessionId, 0L);
+        assertTrue(snapshot.gapDetected());
+        assertEquals(snapshot.latestEventId() - 4L, snapshot.replayFromEventId());
+        assertNotNull(snapshot.currentQuestion());
+    }
+
+    @Test
+    void purgeStoppedContexts_removesExpiredSessionAfterTtl() {
+        AtomicLong now = new AtomicLong(1_000L);
+        VoiceSessionUseCase ttlUseCase = new VoiceSessionUseCase(
+                sttUseCase,
+                feedbackUseCase,
+                sessionUseCase,
+                questionUseCase,
+                ttsGateway,
+                asyncExecutor,
+                voicePolicy,
+                metrics,
+                256,
+                now::get
+        );
+        when(voicePolicy.voiceRecoveryRetentionMs()).thenReturn(600_000L);
+        when(voicePolicy.voiceStoppedContextMax()).thenReturn(1000);
+        when(sessionUseCase.getOrCreate("s-ttl")).thenReturn(new SessionState(SessionId.of("s-ttl")));
+        when(sessionUseCase.getOrCreate("s-trigger")).thenReturn(new SessionState(SessionId.of("s-trigger")));
+
+        String targetVoiceSessionId = ttlUseCase.open(openCommand("s-ttl"));
+        ttlUseCase.stop(stopCommand(targetVoiceSessionId));
+
+        VoiceSessionUseCase.RecoverySnapshot beforeExpiry = ttlUseCase.recover(targetVoiceSessionId, 0L);
+        assertTrue(beforeExpiry.stopped());
+
+        now.addAndGet(600_001L);
+        ttlUseCase.open(openCommand("s-trigger"));
+
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class,
+                () -> ttlUseCase.recover(targetVoiceSessionId, 0L)
+        );
+        assertEquals("Unknown voice session: " + targetVoiceSessionId, error.getMessage());
+    }
+
+    @Test
+    void purgeStoppedContexts_enforcesStoppedContextLimitWithoutRemovingActive() {
+        AtomicLong now = new AtomicLong(10_000L);
+        VoiceSessionUseCase limitedUseCase = new VoiceSessionUseCase(
+                sttUseCase,
+                feedbackUseCase,
+                sessionUseCase,
+                questionUseCase,
+                ttsGateway,
+                asyncExecutor,
+                voicePolicy,
+                metrics,
+                256,
+                now::get
+        );
+        when(voicePolicy.voiceRecoveryRetentionMs()).thenReturn(10_000_000L);
+        when(voicePolicy.voiceStoppedContextMax()).thenReturn(2);
+        when(sessionUseCase.getOrCreate(anyString()))
+                .thenAnswer(invocation -> new SessionState(SessionId.of(invocation.getArgument(0))));
+
+        String activeVoiceSessionId = limitedUseCase.open(openCommand("s-active"));
+        String stoppedA = limitedUseCase.open(openCommand("s-a"));
+        limitedUseCase.stop(stopCommand(stoppedA));
+        now.incrementAndGet();
+
+        String stoppedB = limitedUseCase.open(openCommand("s-b"));
+        limitedUseCase.stop(stopCommand(stoppedB));
+        now.incrementAndGet();
+
+        String stoppedC = limitedUseCase.open(openCommand("s-c"));
+        limitedUseCase.stop(stopCommand(stoppedC));
+
+        VoiceSessionUseCase.RecoverySnapshot activeSnapshot = limitedUseCase.recover(activeVoiceSessionId, 0L);
+        assertTrue(activeSnapshot.active());
+        assertFalse(activeSnapshot.stopped());
+
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class,
+                () -> limitedUseCase.recover(stoppedA, 0L)
+        );
+        assertEquals("Unknown voice session: " + stoppedA, error.getMessage());
+        assertTrue(limitedUseCase.recover(stoppedB, 0L).stopped());
+        assertTrue(limitedUseCase.recover(stoppedC, 0L).stopped());
+    }
+
     private VoiceSessionOpenCommand openCommand(String sessionId) {
         VoiceSessionOpenCommand command = new VoiceSessionOpenCommand();
         command.setSessionId(sessionId);
@@ -317,6 +501,12 @@ class VoiceSessionUseCaseTest {
         command.setPcm16Base64(Base64.getEncoder().encodeToString(new byte[]{0, 1, 2, 3}));
         command.setSampleRate(16000);
         command.setSequence(sequence);
+        return command;
+    }
+
+    private VoiceSessionStopCommand stopCommand(String voiceSessionId) {
+        VoiceSessionStopCommand command = new VoiceSessionStopCommand();
+        command.setVoiceSessionId(voiceSessionId);
         return command;
     }
 
@@ -380,6 +570,14 @@ class VoiceSessionUseCaseTest {
 
     private long ttsSequence(Map<String, Object> payload) {
         Object value = payload.get("sequence");
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        return Long.parseLong(String.valueOf(value));
+    }
+
+    private long eventId(Map<String, Object> payload) {
+        Object value = payload.get("eventId");
         if (value instanceof Number number) {
             return number.longValue();
         }

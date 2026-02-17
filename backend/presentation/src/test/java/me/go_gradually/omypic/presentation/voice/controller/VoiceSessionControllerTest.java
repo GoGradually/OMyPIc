@@ -17,8 +17,10 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -108,5 +110,47 @@ class VoiceSessionControllerTest {
                                 }
                                 """))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void recover_returnsSnapshot() throws Exception {
+        VoiceSessionUseCase.RecoverySnapshot snapshot = new VoiceSessionUseCase.RecoverySnapshot(
+                "s1",
+                "voice-1",
+                true,
+                false,
+                "",
+                3L,
+                new VoiceSessionUseCase.RecoveryQuestion("q-1", "question", "travel", "g-1", "OPEN"),
+                false,
+                false,
+                9L,
+                12L,
+                10L,
+                false
+        );
+        when(voiceSessionUseCase.recover("voice-1", 7L)).thenReturn(snapshot);
+
+        mockMvc.perform(get("/api/voice/sessions/voice-1/recovery")
+                        .param("lastSeenEventId", "7"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionId").value("s1"))
+                .andExpect(jsonPath("$.voiceSessionId").value("voice-1"))
+                .andExpect(jsonPath("$.active").value(true))
+                .andExpect(jsonPath("$.stopped").value(false))
+                .andExpect(jsonPath("$.currentTurnId").value(3))
+                .andExpect(jsonPath("$.currentQuestion.id").value("q-1"))
+                .andExpect(jsonPath("$.latestEventId").value(12))
+                .andExpect(jsonPath("$.replayFromEventId").value(10))
+                .andExpect(jsonPath("$.gapDetected").value(false));
+    }
+
+    @Test
+    void events_passesSinceEventIdToUseCase() throws Exception {
+        mockMvc.perform(get("/api/voice/sessions/voice-1/events")
+                        .param("sinceEventId", "11"))
+                .andExpect(status().isOk());
+
+        verify(voiceSessionUseCase).registerSink(eq("voice-1"), any(), eq(11L));
     }
 }

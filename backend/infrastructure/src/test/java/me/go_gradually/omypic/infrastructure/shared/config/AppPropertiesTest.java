@@ -48,6 +48,8 @@ class AppPropertiesTest {
         properties.getVoice().setTtsModel("gpt-4o-mini-tts");
         properties.getVoice().setTtsVoice("alloy");
         properties.getVoice().setSilenceDurationMs(1666);
+        properties.getVoice().setRecoveryRetentionMs(600000L);
+        properties.getVoice().setStoppedContextMax(1000);
 
         assertEquals("/tmp/omypic", properties.getDataDir());
         assertEquals(1234L, properties.getMaxFileBytes());
@@ -84,5 +86,7 @@ class AppPropertiesTest {
         assertEquals("gpt-4o-mini-tts", properties.voiceTtsModel());
         assertEquals("alloy", properties.voiceTtsVoice());
         assertEquals(1666, properties.voiceSilenceDurationMs());
+        assertEquals(600000L, properties.voiceRecoveryRetentionMs());
+        assertEquals(1000, properties.voiceStoppedContextMax());
     }
 }
