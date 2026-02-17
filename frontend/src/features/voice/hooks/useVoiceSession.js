@@ -1,5 +1,11 @@
 import {useCallback, useEffect, useRef, useState} from 'react'
-import {getVoiceEventsUrl, openVoiceSession, sendVoiceAudioChunk, stopVoiceSession} from '../../../shared/api/http.js'
+import {
+    getVoiceEventsUrl,
+    openVoiceSession,
+    recoverVoiceSession,
+    sendVoiceAudioChunk,
+    stopVoiceSession
+} from '../../../shared/api/http.js'
 import {float32ToInt16, toBase64} from '../../../shared/utils/audioCodec.js'
 import {useAudioDevices} from './useAudioDevices.js'
 import {useTtsPlaybackQueue} from './useTtsPlaybackQueue.js'
@@ -85,6 +91,8 @@ export function useVoiceSession({
     const reconnectAttemptsRef = useRef(0)
     const reconnectTimerRef = useRef(null)
     const reconnectingRef = useRef(false)
+    const lastSeenEventIdRef = useRef(0)
+    const replayTtsCutoffEventIdRef = useRef(0)
     const onConnectionErrorRef = useRef(() => {
     })
 
@@ -124,6 +132,51 @@ export function useVoiceSession({
         speechStateRef.current = nextState
         setSpeechState(nextState)
     }, [])
+
+    const parseEventId = useCallback((data) => {
+        const raw = data?.eventId
+        const parsed = Number(raw)
+        if (!Number.isFinite(parsed)) {
+            return null
+        }
+        return Math.max(0, Math.trunc(parsed))
+    }, [])
+
+    const shouldProcessEvent = useCallback((data) => {
+        const eventId = parseEventId(data)
+        if (eventId === null) {
+            return true
+        }
+        if (eventId <= lastSeenEventIdRef.current) {
+            return false
+        }
+        lastSeenEventIdRef.current = eventId
+        return true
+    }, [parseEventId])
+
+    const shouldSkipReplayTts = useCallback((data) => {
+        const cutoff = replayTtsCutoffEventIdRef.current
+        if (cutoff <= 0) {
+            return false
+        }
+        const eventId = parseEventId(data)
+        if (eventId === null) {
+            return false
+        }
+        return eventId <= cutoff
+    }, [parseEventId])
+
+    const shouldResumeImmediatelyOnQuestionPrompt = useCallback((data) => {
+        const cutoff = replayTtsCutoffEventIdRef.current
+        if (cutoff <= 0) {
+            return false
+        }
+        const eventId = parseEventId(data)
+        if (eventId === null) {
+            return false
+        }
+        return eventId <= cutoff
+    }, [parseEventId])
 
     const resetPendingAudio = useCallback(() => {
         pendingAudioChunksRef.current = []
@@ -239,6 +292,38 @@ export function useVoiceSession({
         reconnectAttemptsRef.current = 0
         reconnectingRef.current = false
     }, [clearReconnectTimer])
+
+    const enterRecoveringState = useCallback(() => {
+        resetPendingAudio()
+        clearInFlightTurn()
+        clearTtsPlayback()
+        updateSpeechState(SPEECH_STATE.RECOVERING)
+    }, [clearInFlightTurn, clearTtsPlayback, resetPendingAudio, updateSpeechState])
+
+    const applyRecoverySnapshot = useCallback((snapshot) => {
+        const questionNode = snapshot?.currentQuestion
+        if (questionNode) {
+            questionPromptRef.current?.({
+                questionId: questionNode.id || '',
+                text: questionNode.text || '',
+                group: questionNode.group || '',
+                exhausted: false,
+                selectionReason: ''
+            })
+            updateSpeechState(SPEECH_STATE.READY_FOR_ANSWER)
+            return
+        }
+        questionPromptRef.current?.(null)
+        updateSpeechState(SPEECH_STATE.WAITING_TTS)
+    }, [updateSpeechState])
+
+    const handleSttSkipped = useCallback(() => {
+        if (!sessionActiveRef.current || !voiceSessionIdRef.current || localStopRef.current || serverStopRef.current) {
+            return
+        }
+        resetPendingAudio()
+        updateSpeechState(SPEECH_STATE.READY_FOR_ANSWER)
+    }, [resetPendingAudio, updateSpeechState])
 
     const stopDueToChunkUploadFailure = useCallback((message = '오디오 전송 재시도에 실패해 세션을 종료했습니다.') => {
         const stop = stopSessionRef.current
@@ -450,6 +535,8 @@ export function useVoiceSession({
 
         closeEventSource()
         voiceSessionIdRef.current = ''
+        lastSeenEventIdRef.current = 0
+        replayTtsCutoffEventIdRef.current = 0
         setVoiceConnected(false)
         setSessionPhase('IDLE')
         updateSpeechState(SPEECH_STATE.IDLE)
@@ -495,13 +582,29 @@ export function useVoiceSession({
             },
             refreshWrongNotes: refreshWrongNotesAction,
             stopSession,
+            shouldResumeImmediatelyOnQuestionPrompt,
             enqueueTtsAudio,
             handleTtsFailure,
+            onSttSkipped: handleSttSkipped,
+            shouldProcessEvent,
+            shouldSkipReplayTts,
             onConnectionError: () => {
                 onConnectionErrorRef.current?.()
             }
         })
-    }, [enqueueTtsAudio, handleTtsFailure, resetPendingAudio, resetReconnectState, setStatus, stopSession, updateSpeechState])
+    }, [
+        enqueueTtsAudio,
+        handleSttSkipped,
+        handleTtsFailure,
+        resetPendingAudio,
+        resetReconnectState,
+        setStatus,
+        shouldProcessEvent,
+        shouldResumeImmediatelyOnQuestionPrompt,
+        shouldSkipReplayTts,
+        stopSession,
+        updateSpeechState
+    ])
 
     const scheduleReconnect = useCallback(() => {
         if (!sessionActiveRef.current || !voiceSessionIdRef.current) {
@@ -547,7 +650,29 @@ export function useVoiceSession({
                     return
                 }
                 try {
-                    const eventsUrl = await getVoiceEventsUrl(voiceSessionId)
+                    enterRecoveringState()
+                    const snapshot = await recoverVoiceSession(voiceSessionId, lastSeenEventIdRef.current)
+                    replayTtsCutoffEventIdRef.current = Number.isFinite(snapshot?.latestEventId)
+                        ? Math.max(0, Number(snapshot.latestEventId))
+                        : 0
+                    if (snapshot?.stopped) {
+                        reconnectingRef.current = false
+                        stopSession({
+                            forced: false,
+                            notifyServer: false,
+                            statusMessage: snapshot?.stopReason
+                                ? `세션이 종료되었습니다. (${snapshot.stopReason})`
+                                : '세션이 서버에서 종료되었습니다.'
+                        }).catch(() => {
+                        })
+                        return
+                    }
+
+                    applyRecoverySnapshot(snapshot)
+                    const replayFromEventId = Number.isFinite(snapshot?.replayFromEventId)
+                        ? Math.max(0, Number(snapshot.replayFromEventId))
+                        : lastSeenEventIdRef.current
+                    const eventsUrl = await getVoiceEventsUrl(voiceSessionId, replayFromEventId)
                     closeEventSource()
                     const eventSource = new EventSource(eventsUrl)
                     eventSourceRef.current = eventSource
@@ -555,7 +680,11 @@ export function useVoiceSession({
                     reconnectingRef.current = false
                     reconnectAttemptsRef.current = 0
                     setVoiceConnected(true)
-                    setStatus('음성 이벤트 연결이 복구되었습니다.')
+                    if (snapshot?.gapDetected) {
+                        setStatus('이벤트 일부가 누락되어 서버 상태 기준으로 동기화한 뒤 연결을 복구했습니다.')
+                    } else {
+                        setStatus('음성 이벤트 연결이 복구되었습니다.')
+                    }
                 } catch (_error) {
                     reconnectingRef.current = false
                     scheduleReconnect()
@@ -566,7 +695,14 @@ export function useVoiceSession({
                 scheduleReconnect()
             })
         }, delayMs)
-    }, [bindSessionEvents, closeEventSource, setStatus, stopSession])
+    }, [
+        applyRecoverySnapshot,
+        bindSessionEvents,
+        closeEventSource,
+        enterRecoveringState,
+        setStatus,
+        stopSession
+    ])
 
     const handleConnectionError = useCallback(() => {
         if (localStopRef.current || serverStopRef.current) {
@@ -603,6 +739,8 @@ export function useVoiceSession({
             resetReconnectState()
             clearInFlightTurn()
             chunkSequenceRef.current = 0
+            lastSeenEventIdRef.current = 0
+            replayTtsCutoffEventIdRef.current = 0
             answerWindowIdRef.current = 0
             captureWindowIdRef.current = NO_WINDOW_ID
             updateSpeechState(SPEECH_STATE.WAITING_TTS)
@@ -742,6 +880,8 @@ export function useVoiceSession({
             }
             closeEventSource()
             voiceSessionIdRef.current = ''
+            lastSeenEventIdRef.current = 0
+            replayTtsCutoffEventIdRef.current = 0
             sessionActiveRef.current = false
             setSessionActive(false)
             setVoiceConnected(false)

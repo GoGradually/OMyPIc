@@ -78,7 +78,18 @@ export async function stopVoiceSession(voiceSessionId, payload = {forced: true, 
     })
 }
 
-export async function getVoiceEventsUrl(voiceSessionId) {
+export async function recoverVoiceSession(voiceSessionId, lastSeenEventId = 0) {
+    const query = Number.isFinite(lastSeenEventId)
+        ? `?lastSeenEventId=${encodeURIComponent(Math.max(0, Number(lastSeenEventId)))}`
+        : ''
+    const response = await callApi(`/api/voice/sessions/${encodeURIComponent(voiceSessionId)}/recovery${query}`)
+    return response.json()
+}
+
+export async function getVoiceEventsUrl(voiceSessionId, sinceEventId = null) {
     const baseUrl = await getBackendUrl()
-    return `${baseUrl}/api/voice/sessions/${encodeURIComponent(voiceSessionId)}/events`
+    const query = Number.isFinite(sinceEventId)
+        ? `?sinceEventId=${encodeURIComponent(Math.max(0, Number(sinceEventId)))}`
+        : ''
+    return `${baseUrl}/api/voice/sessions/${encodeURIComponent(voiceSessionId)}/events${query}`
 }

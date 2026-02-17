@@ -29,28 +29,63 @@ export function bindVoiceEvents({
                                     onFeedback,
                                     refreshWrongNotes,
                                     stopSession,
+                                    shouldResumeImmediatelyOnQuestionPrompt,
                                     enqueueTtsAudio,
                                     handleTtsFailure,
+                                    onSttSkipped,
+                                    shouldProcessEvent,
+                                    shouldSkipReplayTts,
                                     onConnectionError
                                 }) {
-    eventSource.addEventListener('session.ready', () => {
+    const processData = (event) => {
+        const data = parseSseData(event?.data)
+        if (shouldProcessEvent && !shouldProcessEvent(data)) {
+            return null
+        }
+        return data
+    }
+
+    eventSource.addEventListener('session.ready', (event) => {
+        const data = processData(event)
+        if (!data) {
+            return
+        }
         setVoiceConnected(true)
         setStatus('음성 세션에 연결되었습니다.')
     })
 
     eventSource.addEventListener('stt.final', (event) => {
-        const data = parseSseData(event?.data)
+        const data = processData(event)
+        if (!data) {
+            return
+        }
         const text = data?.text || ''
         setPartialTranscript('')
         setTranscript(text)
         setUserText(text)
     })
 
+    eventSource.addEventListener('stt.skipped', (event) => {
+        const data = processData(event)
+        if (!data) {
+            return
+        }
+        onSttSkipped?.(data)
+        setStatus('음성이 인식되지 않아 다시 답변해 주세요.')
+    })
+
     eventSource.addEventListener('question.prompt', (event) => {
-        const data = parseSseData(event?.data)
+        const data = processData(event)
+        if (!data) {
+            return
+        }
         const normalizedQuestion = parseQuestionPayload(data)
         resetPendingAudio()
-        updateSpeechState(speechState.WAITING_TTS)
+        if (shouldResumeImmediatelyOnQuestionPrompt?.(data)) {
+            updateSpeechState(speechState.READY_FOR_ANSWER)
+        } else {
+            updateSpeechState(speechState.WAITING_TTS)
+        }
         onQuestionPrompt?.(normalizedQuestion)
         if (normalizedQuestion.exhausted) {
             setStatus('모든 질문을 완료했습니다.')
@@ -62,15 +97,21 @@ export function bindVoiceEvents({
     })
 
     eventSource.addEventListener('feedback.final', (event) => {
-        const data = parseSseData(event?.data)
+        const data = processData(event)
+        if (!data) {
+            return
+        }
         onFeedback?.(buildFeedbackFromVoice(data))
         refreshWrongNotes?.().catch(() => {
         })
     })
 
     eventSource.addEventListener('session.stopped', (event) => {
+        const data = processData(event)
+        if (!data) {
+            return
+        }
         serverStopRef.current = true
-        const data = parseSseData(event?.data)
         const reason = data?.reason || ''
         const endedByExhausted = reason === 'QUESTION_EXHAUSTED' || reason === 'question_exhausted'
         stopSession({
@@ -84,12 +125,21 @@ export function bindVoiceEvents({
     })
 
     eventSource.addEventListener('tts.audio', (event) => {
-        const data = parseSseData(event?.data)
+        const data = processData(event)
+        if (!data) {
+            return
+        }
+        if (shouldSkipReplayTts?.(data)) {
+            return
+        }
         enqueueTtsAudio(data)
     })
 
     eventSource.addEventListener('tts.error', (event) => {
-        const data = parseSseData(event?.data)
+        const data = processData(event)
+        if (!data) {
+            return
+        }
         const message = data?.message
             ? `TTS 출력 실패로 세션을 종료했습니다. (${data.message})`
             : 'TTS 출력 실패로 세션을 종료했습니다.'
@@ -97,7 +147,10 @@ export function bindVoiceEvents({
     })
 
     eventSource.addEventListener('error', (event) => {
-        const data = parseSseData(event?.data)
+        const data = processData(event)
+        if (!data) {
+            return
+        }
         if (data?.message) {
             setStatus(`오류: ${data.message}`)
         }

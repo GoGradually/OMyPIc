@@ -23,6 +23,8 @@ export function VoicePanel({
             stageCaption = '답변을 듣고 있습니다.'
         } else if (speechState === 'PLAYING_FEEDBACK_TTS' || speechState === 'PLAYING_QUESTION_TTS') {
             stageCaption = '음성 출력 중입니다. 잠시만 기다려 주세요.'
+        } else if (speechState === 'RECOVERING') {
+            stageCaption = '연결을 복구하고 있습니다. 잠시만 기다려 주세요.'
         } else if (speechState === 'WAITING_TTS') {
             stageCaption = '다음 음성을 준비 중입니다.'
         } else if (speechState === 'STOPPING') {
