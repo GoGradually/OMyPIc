@@ -1,10 +1,5 @@
 import React from 'react'
-import {
-    FEEDBACK_MODEL_OPTIONS,
-    TTS_MODEL_OPTIONS,
-    VOICE_STT_MODEL_OPTIONS,
-    VOICES
-} from '../../../shared/constants/models.js'
+import {FEEDBACK_LANGUAGE_LABELS, getModelLabel} from '../../../shared/constants/models.js'
 
 export function ModelSettingsOverlay({
                                          voiceSttModel,
@@ -13,38 +8,47 @@ export function ModelSettingsOverlay({
                                          setFeedbackModel,
                                          ttsModel,
                                          setTtsModel,
+                                         feedbackModelOptions = [],
+                                         voiceSttModelOptions = [],
+                                         ttsModelOptions = [],
                                          apiKeyInput,
                                          setApiKeyInput,
                                          voice,
                                          setVoice,
+                                         voiceOptions = [],
                                          feedbackLang,
                                          setFeedbackLang,
+                                         feedbackLanguageOptions = [],
                                          onSaveApiKey
                                      }) {
+    const feedbackLanguageList = Array.isArray(feedbackLanguageOptions) && feedbackLanguageOptions.length > 0
+        ? feedbackLanguageOptions
+        : ['ko', 'en']
+
     return (
         <div className="overlay-content">
             <div className="field-grid two-col">
                 <div className="field-block">
                     <label>STT 모델</label>
                     <select value={voiceSttModel} onChange={(event) => setVoiceSttModel(event.target.value)}>
-                        {VOICE_STT_MODEL_OPTIONS.map((item) => (
-                            <option key={item.value} value={item.value}>{item.label}</option>
+                        {voiceSttModelOptions.map((modelId) => (
+                            <option key={modelId} value={modelId}>{getModelLabel(modelId)}</option>
                         ))}
                     </select>
                 </div>
                 <div className="field-block">
                     <label>피드백 모델</label>
                     <select value={feedbackModel} onChange={(event) => setFeedbackModel(event.target.value)}>
-                        {FEEDBACK_MODEL_OPTIONS.map((item) => (
-                            <option key={item.value} value={item.value}>{item.label}</option>
+                        {feedbackModelOptions.map((modelId) => (
+                            <option key={modelId} value={modelId}>{getModelLabel(modelId)}</option>
                         ))}
                     </select>
                 </div>
                 <div className="field-block">
                     <label>TTS 모델</label>
                     <select value={ttsModel} onChange={(event) => setTtsModel(event.target.value)}>
-                        {TTS_MODEL_OPTIONS.map((item) => (
-                            <option key={item.value} value={item.value}>{item.label}</option>
+                        {ttsModelOptions.map((modelId) => (
+                            <option key={modelId} value={modelId}>{getModelLabel(modelId)}</option>
                         ))}
                     </select>
                 </div>
@@ -63,7 +67,7 @@ export function ModelSettingsOverlay({
                 <div className="field-block">
                     <label>음성 스타일</label>
                     <select value={voice} onChange={(event) => setVoice(event.target.value)}>
-                        {VOICES.map((item) => (
+                        {voiceOptions.map((item) => (
                             <option key={item} value={item}>{item}</option>
                         ))}
                     </select>
@@ -71,8 +75,9 @@ export function ModelSettingsOverlay({
                 <div className="field-block">
                     <label>피드백 언어</label>
                     <select value={feedbackLang} onChange={(event) => setFeedbackLang(event.target.value)}>
-                        <option value="ko">한국어</option>
-                        <option value="en">English</option>
+                        {feedbackLanguageList.map((item) => (
+                            <option key={item} value={item}>{FEEDBACK_LANGUAGE_LABELS[item] || item}</option>
+                        ))}
                     </select>
                 </div>
             </div>

@@ -1,12 +1,9 @@
 import {describe, expect, it} from 'vitest'
 import {
-    DEFAULT_FEEDBACK_MODEL,
-    DEFAULT_TTS_MODEL,
-    DEFAULT_VOICE_STT_MODEL,
-    FEEDBACK_MODELS,
+    FEEDBACK_LANGUAGE_LABELS,
     getModeSummary,
-    TTS_MODELS,
-    VOICE_STT_MODELS
+    getModelLabel,
+    MODEL_LABELS
 } from './models.js'
 
 describe('models constants', () => {
@@ -14,23 +11,19 @@ describe('models constants', () => {
         expect(getModeSummary('CONTINUOUS', 3)).toContain('질문 그룹 단위')
     })
 
-    it('keeps only cost-acceptable feedback model options', () => {
-        expect(FEEDBACK_MODELS).not.toContain('gpt-5-pro')
-        expect(FEEDBACK_MODELS).not.toContain('gpt-5.2')
-        expect(FEEDBACK_MODELS).not.toContain('gpt-5.1')
-        expect(FEEDBACK_MODELS).not.toContain('gpt-5')
-        expect(FEEDBACK_MODELS).toContain('gpt-5-mini')
-        expect(FEEDBACK_MODELS).toContain('gpt-5-nano')
-        expect(FEEDBACK_MODELS).toContain('gpt-4.1')
-        expect(FEEDBACK_MODELS).toContain(DEFAULT_FEEDBACK_MODEL)
+    it('exposes display labels for known model IDs', () => {
+        expect(MODEL_LABELS['gpt-5-mini']).toContain('균형형')
+        expect(MODEL_LABELS['gpt-4o-mini-transcribe']).toContain('기본')
+        expect(MODEL_LABELS['gpt-4o-mini-tts']).toContain('기본')
     })
 
-    it('uses gpt-5-nano as default feedback model', () => {
-        expect(DEFAULT_FEEDBACK_MODEL).toBe('gpt-5-nano')
+    it('returns model ID when label is unknown', () => {
+        expect(getModelLabel('custom-model')).toBe('custom-model')
+        expect(getModelLabel('')).toBe('')
     })
 
-    it('keeps default model values present in selectable lists', () => {
-        expect(VOICE_STT_MODELS).toContain(DEFAULT_VOICE_STT_MODEL)
-        expect(TTS_MODELS).toContain(DEFAULT_TTS_MODEL)
+    it('keeps language labels for UI rendering', () => {
+        expect(FEEDBACK_LANGUAGE_LABELS.ko).toBe('한국어')
+        expect(FEEDBACK_LANGUAGE_LABELS.en).toBe('English')
     })
 })

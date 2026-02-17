@@ -1,10 +1,11 @@
 package me.go_gradually.omypic.application.feedback.policy;
 
 import java.util.Locale;
+import java.util.List;
 import java.util.Set;
 
 public final class FeedbackModelPolicy {
-    private static final Set<String> SUPPORTED_MODELS = Set.of(
+    private static final List<String> SUPPORTED_MODELS = List.of(
             "gpt-5-mini",
             "gpt-5-nano",
             "gpt-4.1",
@@ -13,6 +14,7 @@ public final class FeedbackModelPolicy {
             "gpt-4o",
             "gpt-4o-mini"
     );
+    private static final Set<String> SUPPORTED_MODEL_SET = Set.copyOf(SUPPORTED_MODELS);
 
     private FeedbackModelPolicy() {
     }
@@ -22,9 +24,13 @@ public final class FeedbackModelPolicy {
             return;
         }
         String normalized = normalize(model);
-        if (!SUPPORTED_MODELS.contains(normalized)) {
+        if (!SUPPORTED_MODEL_SET.contains(normalized)) {
             throw new IllegalArgumentException("Unsupported feedback model: " + model.trim());
         }
+    }
+
+    public static List<String> supportedModels() {
+        return SUPPORTED_MODELS;
     }
 
     private static String normalize(String model) {

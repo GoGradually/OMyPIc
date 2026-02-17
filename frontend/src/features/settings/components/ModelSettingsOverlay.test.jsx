@@ -14,12 +14,17 @@ describe('ModelSettingsOverlay', () => {
                 setFeedbackModel={vi.fn()}
                 ttsModel="gpt-4o-mini-tts"
                 setTtsModel={vi.fn()}
+                feedbackModelOptions={['gpt-5-nano']}
+                voiceSttModelOptions={['gpt-4o-mini-transcribe']}
+                ttsModelOptions={['gpt-4o-mini-tts']}
                 apiKeyInput=""
                 setApiKeyInput={vi.fn()}
                 voice="alloy"
                 setVoice={vi.fn()}
+                voiceOptions={['alloy']}
                 feedbackLang="ko"
                 setFeedbackLang={vi.fn()}
+                feedbackLanguageOptions={['ko', 'en']}
                 onSaveApiKey={vi.fn()}
             />
         )

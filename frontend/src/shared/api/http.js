@@ -53,6 +53,11 @@ export async function callApi(path, options = {}) {
     return response
 }
 
+export async function getModelMeta() {
+    const response = await callApi('/api/meta/models')
+    return response.json()
+}
+
 export async function openVoiceSession(payload) {
     const response = await callApi('/api/voice/sessions', {
         method: 'POST',
@@ -62,11 +67,12 @@ export async function openVoiceSession(payload) {
     return response.json()
 }
 
-export async function sendVoiceAudioChunk(voiceSessionId, payload) {
+export async function sendVoiceAudioChunk(voiceSessionId, payload, requestOptions = {}) {
     await callApi(`/api/voice/sessions/${encodeURIComponent(voiceSessionId)}/audio-chunks`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        ...requestOptions
     })
 }
 

@@ -1,13 +1,6 @@
 import {useCallback, useEffect, useState} from 'react'
-import {getApiKey, setApiKey, verifyApiKey} from '../../shared/api/http.js'
-import {
-    DEFAULT_FEEDBACK_MODEL,
-    DEFAULT_TTS_MODEL,
-    DEFAULT_VOICE_STT_MODEL,
-    getModeSummary,
-    PANEL_TITLES,
-    VOICES
-} from '../../shared/constants/models.js'
+import {getApiKey, getModelMeta, setApiKey, verifyApiKey} from '../../shared/api/http.js'
+import {getModeSummary, PANEL_TITLES} from '../../shared/constants/models.js'
 import {copyText} from '../../shared/utils/clipboard.js'
 import {getCurrentQuestionLabel} from '../../shared/utils/mode.js'
 import {useSessionId} from '../providers/session.js'
@@ -17,17 +10,66 @@ import {useWrongNotes} from '../../features/wrongnotes/hooks/useWrongNotes.js'
 import {useQuestionGroups} from '../../features/questions/hooks/useQuestionGroups.js'
 import {getAudioUiState} from '../../features/voice/utils/audioStatus.js'
 
+const EMPTY_MODEL_META = {
+    feedbackModels: [],
+    defaultFeedbackModel: '',
+    voiceSttModels: [],
+    defaultVoiceSttModel: '',
+    ttsModels: [],
+    defaultTtsModel: '',
+    voices: [],
+    defaultVoice: '',
+    feedbackLanguages: ['ko', 'en'],
+    defaultFeedbackLanguage: 'ko'
+}
+
+function normalizeModelMeta(meta = {}) {
+    const feedbackModels = Array.isArray(meta.feedbackModels) ? meta.feedbackModels.filter(Boolean) : []
+    const voiceSttModels = Array.isArray(meta.voiceSttModels) ? meta.voiceSttModels.filter(Boolean) : []
+    const ttsModels = Array.isArray(meta.ttsModels) ? meta.ttsModels.filter(Boolean) : []
+    const voices = Array.isArray(meta.voices) ? meta.voices.filter(Boolean) : []
+    const feedbackLanguages = Array.isArray(meta.feedbackLanguages) && meta.feedbackLanguages.length > 0
+        ? meta.feedbackLanguages.filter(Boolean)
+        : ['ko', 'en']
+
+    return {
+        feedbackModels,
+        defaultFeedbackModel: typeof meta.defaultFeedbackModel === 'string' ? meta.defaultFeedbackModel : '',
+        voiceSttModels,
+        defaultVoiceSttModel: typeof meta.defaultVoiceSttModel === 'string' ? meta.defaultVoiceSttModel : '',
+        ttsModels,
+        defaultTtsModel: typeof meta.defaultTtsModel === 'string' ? meta.defaultTtsModel : '',
+        voices,
+        defaultVoice: typeof meta.defaultVoice === 'string' ? meta.defaultVoice : '',
+        feedbackLanguages,
+        defaultFeedbackLanguage: typeof meta.defaultFeedbackLanguage === 'string'
+            ? meta.defaultFeedbackLanguage
+            : 'ko'
+    }
+}
+
+function resolveSelectedValue(currentValue, options, preferredDefault) {
+    if (currentValue && options.includes(currentValue)) {
+        return currentValue
+    }
+    if (preferredDefault && options.includes(preferredDefault)) {
+        return preferredDefault
+    }
+    return options[0] || currentValue || ''
+}
+
 export function useAppViewModel() {
     const sessionId = useSessionId()
 
-    const [feedbackModel, setFeedbackModel] = useState(DEFAULT_FEEDBACK_MODEL)
-    const [voiceSttModel, setVoiceSttModel] = useState(DEFAULT_VOICE_STT_MODEL)
-    const [ttsModel, setTtsModel] = useState(DEFAULT_TTS_MODEL)
+    const [feedbackModel, setFeedbackModel] = useState('')
+    const [voiceSttModel, setVoiceSttModel] = useState('')
+    const [ttsModel, setTtsModel] = useState('')
+    const [modelMeta, setModelMeta] = useState(EMPTY_MODEL_META)
 
     const [apiKeyInput, setApiKeyInput] = useState('')
     const [statusMessage, setStatusMessage] = useState('')
     const [feedbackLang, setFeedbackLang] = useState('ko')
-    const [voice, setVoice] = useState(VOICES[0])
+    const [voice, setVoice] = useState('')
 
     const [feedback, setFeedback] = useState(null)
     const [activePanel, setActivePanel] = useState('')
@@ -135,13 +177,46 @@ export function useAppViewModel() {
 
     useEffect(() => {
         getApiKey().then((key) => setApiKeyInput(key || ''))
+        getModelMeta()
+            .then((meta) => {
+                const normalized = normalizeModelMeta(meta)
+                setModelMeta(normalized)
+                setFeedbackModel((prev) => resolveSelectedValue(
+                    prev,
+                    normalized.feedbackModels,
+                    normalized.defaultFeedbackModel
+                ))
+                setVoiceSttModel((prev) => resolveSelectedValue(
+                    prev,
+                    normalized.voiceSttModels,
+                    normalized.defaultVoiceSttModel
+                ))
+                setTtsModel((prev) => resolveSelectedValue(
+                    prev,
+                    normalized.ttsModels,
+                    normalized.defaultTtsModel
+                ))
+                setVoice((prev) => resolveSelectedValue(
+                    prev,
+                    normalized.voices,
+                    normalized.defaultVoice
+                ))
+                setFeedbackLang((prev) => resolveSelectedValue(
+                    prev,
+                    normalized.feedbackLanguages,
+                    normalized.defaultFeedbackLanguage
+                ))
+            })
+            .catch(() => {
+                setStatusMessage('모델 메타를 불러오지 못했습니다. 서버 기본 설정으로 진행합니다.')
+            })
         setStatusMessage('')
     }, [])
 
     const handleSaveApiKey = useCallback(async () => {
         await setApiKey(apiKeyInput)
         try {
-            const result = await verifyApiKey(apiKeyInput, feedbackModel)
+            const result = await verifyApiKey(apiKeyInput, feedbackModel || modelMeta.defaultFeedbackModel)
             if (result.valid) {
                 setStatusMessage('API Key 검증이 완료되었습니다.')
             } else {
@@ -150,7 +225,7 @@ export function useAppViewModel() {
         } catch (error) {
             setStatusMessage(`API Key 검증 실패: ${error.message}`)
         }
-    }, [apiKeyInput, feedbackModel])
+    }, [apiKeyInput, feedbackModel, modelMeta.defaultFeedbackModel])
 
     const copyUserText = useCallback(async () => {
         if (!userText.trim()) {
@@ -277,12 +352,25 @@ export function useAppViewModel() {
         setFeedbackModel,
         ttsModel,
         setTtsModel,
+        feedbackModelOptions: modelMeta.feedbackModels.length > 0
+            ? modelMeta.feedbackModels
+            : (feedbackModel ? [feedbackModel] : []),
+        voiceSttModelOptions: modelMeta.voiceSttModels.length > 0
+            ? modelMeta.voiceSttModels
+            : (voiceSttModel ? [voiceSttModel] : []),
+        ttsModelOptions: modelMeta.ttsModels.length > 0
+            ? modelMeta.ttsModels
+            : (ttsModel ? [ttsModel] : []),
         apiKeyInput,
         setApiKeyInput,
         voice,
         setVoice,
+        voiceOptions: modelMeta.voices.length > 0
+            ? modelMeta.voices
+            : (voice ? [voice] : []),
         feedbackLang,
         setFeedbackLang,
+        feedbackLanguageOptions: modelMeta.feedbackLanguages,
         onSaveApiKey: handleSaveApiKey
     }
 
