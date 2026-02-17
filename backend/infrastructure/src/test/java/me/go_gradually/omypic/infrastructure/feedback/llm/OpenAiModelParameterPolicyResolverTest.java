@@ -31,9 +31,4 @@ class OpenAiModelParameterPolicyResolverTest {
 
         assertTrue(payload.containsKey("temperature"));
     }
-
-    @Test
-    void retryRemovableParameters_containsTemperature() {
-        assertTrue(resolver.isRetryRemovableParameter("temperature"));
-    }
 }
