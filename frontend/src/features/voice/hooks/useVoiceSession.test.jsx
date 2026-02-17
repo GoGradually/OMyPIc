@@ -2,11 +2,18 @@
 import {act, renderHook, waitFor} from '@testing-library/react'
 import {beforeEach, describe, expect, it, vi} from 'vitest'
 import {useVoiceSession} from './useVoiceSession.js'
-import {getVoiceEventsUrl, openVoiceSession, sendVoiceAudioChunk, stopVoiceSession} from '../../../shared/api/http.js'
+import {
+    getVoiceEventsUrl,
+    openVoiceSession,
+    recoverVoiceSession,
+    sendVoiceAudioChunk,
+    stopVoiceSession
+} from '../../../shared/api/http.js'
 
 vi.mock('../../../shared/api/http.js', () => ({
     openVoiceSession: vi.fn(),
     getVoiceEventsUrl: vi.fn(),
+    recoverVoiceSession: vi.fn(),
     sendVoiceAudioChunk: vi.fn(),
     stopVoiceSession: vi.fn()
 }))
@@ -166,6 +173,21 @@ describe('useVoiceSession', () => {
 
         openVoiceSession.mockResolvedValue({voiceSessionId: 'voice-1'})
         getVoiceEventsUrl.mockResolvedValue('http://localhost/events')
+        recoverVoiceSession.mockResolvedValue({
+            sessionId: 's1',
+            voiceSessionId: 'voice-1',
+            active: true,
+            stopped: false,
+            stopReason: '',
+            currentTurnId: 1,
+            currentQuestion: null,
+            turnProcessing: false,
+            hasBufferedAudio: false,
+            lastAcceptedChunkSequence: null,
+            latestEventId: 0,
+            replayFromEventId: 0,
+            gapDetected: false
+        })
         sendVoiceAudioChunk.mockResolvedValue(undefined)
         stopVoiceSession.mockResolvedValue(undefined)
     })
@@ -361,6 +383,7 @@ describe('useVoiceSession', () => {
         })
 
         expect(eventSourceInstances).toHaveLength(2)
+        expect(recoverVoiceSession).toHaveBeenCalledWith('voice-1', 0)
         expect(stopVoiceSession).not.toHaveBeenCalled()
 
         await act(async () => {
@@ -450,6 +473,149 @@ describe('useVoiceSession', () => {
         expect(eventSourceInstances).toHaveLength(sourceCountBeforeStop)
         unmount()
         vi.useRealTimers()
+    })
+
+    it('syncs from recovery snapshot before reconnecting event stream', async () => {
+        vi.useFakeTimers()
+        const onStatus = vi.fn()
+        const onQuestionPrompt = vi.fn()
+        recoverVoiceSession.mockResolvedValueOnce({
+            sessionId: 's1',
+            voiceSessionId: 'voice-1',
+            active: true,
+            stopped: false,
+            stopReason: '',
+            currentTurnId: 5,
+            currentQuestion: {
+                id: 'q-2',
+                text: 'recovered question',
+                group: 'travel',
+                groupId: 'g-2',
+                questionType: 'OPEN'
+            },
+            turnProcessing: false,
+            hasBufferedAudio: false,
+            lastAcceptedChunkSequence: 3,
+            latestEventId: 8,
+            replayFromEventId: 4,
+            gapDetected: true
+        })
+
+        const {result, unmount} = renderHook(() => useVoiceSession({
+            sessionId: 's1',
+            feedbackModel: 'gpt-4o-mini',
+            voiceSttModel: 'gpt-4o-mini-transcribe',
+            feedbackLang: 'ko',
+            voice: 'alloy',
+            onStatus,
+            onFeedback: vi.fn(),
+            refreshWrongNotes: vi.fn(async () => {
+            }),
+            onQuestionPrompt
+        }))
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+
+        act(() => {
+            activeEventSource.emitError()
+        })
+
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(500)
+        })
+
+        expect(recoverVoiceSession).toHaveBeenCalledWith('voice-1', 0)
+        expect(getVoiceEventsUrl).toHaveBeenLastCalledWith('voice-1', 4)
+        expect(onQuestionPrompt).toHaveBeenCalledWith({
+            questionId: 'q-2',
+            text: 'recovered question',
+            group: 'travel',
+            exhausted: false,
+            selectionReason: ''
+        })
+        expect(onStatus).toHaveBeenCalledWith('이벤트 일부가 누락되어 서버 상태 기준으로 동기화한 뒤 연결을 복구했습니다.')
+        expect(result.current.speechState).toBe('READY_FOR_ANSWER')
+        unmount()
+        vi.useRealTimers()
+    })
+
+    it('ignores duplicate events by eventId', async () => {
+        const onFeedback = vi.fn()
+        const {result, unmount} = renderHook(() => useVoiceSession({
+            sessionId: 's1',
+            feedbackModel: 'gpt-4o-mini',
+            voiceSttModel: 'gpt-4o-mini-transcribe',
+            feedbackLang: 'ko',
+            voice: 'alloy',
+            onStatus: vi.fn(),
+            onFeedback,
+            refreshWrongNotes: vi.fn(async () => {
+            }),
+            onQuestionPrompt: vi.fn()
+        }))
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+
+        await act(async () => {
+            activeEventSource.emit('feedback.final', {eventId: 11, summary: 'first'})
+            activeEventSource.emit('feedback.final', {eventId: 11, summary: 'second'})
+            activeEventSource.emit('feedback.final', {eventId: 12, summary: 'third'})
+        })
+
+        expect(onFeedback).toHaveBeenCalledTimes(2)
+        expect(onFeedback.mock.calls[0][0].summary).toBe('first')
+        expect(onFeedback.mock.calls[1][0].summary).toBe('third')
+        unmount()
+    })
+
+    it('returns to READY_FOR_ANSWER when stt.skipped is received', async () => {
+        const onStatus = vi.fn()
+        const {result, unmount} = renderHook(() => useVoiceSession({
+            sessionId: 's1',
+            feedbackModel: 'gpt-4o-mini',
+            voiceSttModel: 'gpt-4o-mini-transcribe',
+            feedbackLang: 'ko',
+            voice: 'alloy',
+            onStatus,
+            onFeedback: vi.fn(),
+            refreshWrongNotes: vi.fn(async () => {
+            }),
+            onQuestionPrompt: vi.fn()
+        }))
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+        await act(async () => {
+            activeEventSource.emit('tts.audio', {
+                eventId: 1,
+                role: 'question',
+                audio: 'AQID',
+                mimeType: 'audio/wav',
+                sequence: 1
+            })
+        })
+        await act(async () => {
+            audioInstances[audioInstances.length - 1].onended()
+        })
+        expect(result.current.speechState).toBe('READY_FOR_ANSWER')
+
+        act(() => {
+            emitAudioFrame(0.1)
+        })
+        expect(result.current.speechState).toBe('CAPTURING_ANSWER')
+
+        await act(async () => {
+            activeEventSource.emit('stt.skipped', {eventId: 2, reason: 'empty_transcript'})
+        })
+
+        expect(result.current.speechState).toBe('READY_FOR_ANSWER')
+        expect(onStatus).toHaveBeenCalledWith('음성이 인식되지 않아 다시 답변해 주세요.')
+        unmount()
     })
 
     it('drops buffered audio immediately when question prompt arrives', async () => {
