@@ -59,6 +59,8 @@ omypic:
     tts-model: gpt-4o-mini-tts
     tts-voice: alloy
     silence-duration-ms: 1500
+    recovery-retention-ms: 600000
+    stopped-context-max: 1000
   integrations:
     openai:
       base-url: ${OMYPIC_OPENAI_BASE_URL:https://api.openai.com}

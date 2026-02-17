@@ -36,6 +36,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Comparator;
 import java.util.Deque;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -47,6 +48,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 import java.util.logging.Logger;
 
 public class VoiceSessionUseCase {
@@ -54,6 +56,9 @@ public class VoiceSessionUseCase {
     private static final String FEEDBACK_PROVIDER = "openai";
     private static final int DEFAULT_SAMPLE_RATE = 16000;
     private static final int MAX_RULEBOOK_DOCUMENTS_PER_TURN = 2;
+    private static final int DEFAULT_EVENT_REPLAY_BUFFER_LIMIT = 256;
+    private static final long DEFAULT_RECOVERY_RETENTION_MS = 600000L;
+    private static final int DEFAULT_STOPPED_CONTEXT_MAX = 1000;
     private final SttUseCase sttUseCase;
     private final FeedbackUseCase feedbackUseCase;
     private final SessionUseCase sessionUseCase;
@@ -62,6 +67,8 @@ public class VoiceSessionUseCase {
     private final AsyncExecutor asyncExecutor;
     private final VoicePolicy voicePolicy;
     private final MetricsPort metrics;
+    private final int eventReplayBufferLimit;
+    private final LongSupplier nowMillisSupplier;
     private final Map<String, RuntimeContext> contextByVoiceSessionId = new ConcurrentHashMap<>();
 
     public VoiceSessionUseCase(SttUseCase sttUseCase,
@@ -72,6 +79,53 @@ public class VoiceSessionUseCase {
                                AsyncExecutor asyncExecutor,
                                VoicePolicy voicePolicy,
                                MetricsPort metrics) {
+        this(
+                sttUseCase,
+                feedbackUseCase,
+                sessionUseCase,
+                questionUseCase,
+                ttsGateway,
+                asyncExecutor,
+                voicePolicy,
+                metrics,
+                DEFAULT_EVENT_REPLAY_BUFFER_LIMIT,
+                System::currentTimeMillis
+        );
+    }
+
+    VoiceSessionUseCase(SttUseCase sttUseCase,
+                        FeedbackUseCase feedbackUseCase,
+                        SessionUseCase sessionUseCase,
+                        QuestionUseCase questionUseCase,
+                        TtsGateway ttsGateway,
+                        AsyncExecutor asyncExecutor,
+                        VoicePolicy voicePolicy,
+                        MetricsPort metrics,
+                        int eventReplayBufferLimit) {
+        this(
+                sttUseCase,
+                feedbackUseCase,
+                sessionUseCase,
+                questionUseCase,
+                ttsGateway,
+                asyncExecutor,
+                voicePolicy,
+                metrics,
+                eventReplayBufferLimit,
+                System::currentTimeMillis
+        );
+    }
+
+    VoiceSessionUseCase(SttUseCase sttUseCase,
+                        FeedbackUseCase feedbackUseCase,
+                        SessionUseCase sessionUseCase,
+                        QuestionUseCase questionUseCase,
+                        TtsGateway ttsGateway,
+                        AsyncExecutor asyncExecutor,
+                        VoicePolicy voicePolicy,
+                        MetricsPort metrics,
+                        int eventReplayBufferLimit,
+                        LongSupplier nowMillisSupplier) {
         this.sttUseCase = sttUseCase;
         this.feedbackUseCase = feedbackUseCase;
         this.sessionUseCase = sessionUseCase;
@@ -80,9 +134,12 @@ public class VoiceSessionUseCase {
         this.asyncExecutor = asyncExecutor;
         this.voicePolicy = voicePolicy;
         this.metrics = metrics;
+        this.eventReplayBufferLimit = Math.max(1, eventReplayBufferLimit);
+        this.nowMillisSupplier = nowMillisSupplier == null ? System::currentTimeMillis : nowMillisSupplier;
     }
 
     public String open(VoiceSessionOpenCommand command) {
+        purgeStoppedContexts();
         validateOpenCommand(command);
         sessionUseCase.getOrCreate(command.getSessionId());
         RuntimeContext context = createRuntimeContext(command);
@@ -102,13 +159,19 @@ public class VoiceSessionUseCase {
                 UUID.randomUUID().toString(),
                 command.getSessionId(),
                 command.getApiKey(),
-                RuntimeSettings.resolve(command, voicePolicy)
+                RuntimeSettings.resolve(command, voicePolicy),
+                eventReplayBufferLimit
         );
     }
 
     public void registerSink(String voiceSessionId, VoiceEventSink sink) {
+        registerSink(voiceSessionId, sink, null);
+    }
+
+    public void registerSink(String voiceSessionId, VoiceEventSink sink, Long sinceEventId) {
+        purgeStoppedContexts();
         RuntimeContext context = requireContext(voiceSessionId);
-        context.addSink(sink);
+        context.addSink(sink, sinceEventId);
         if (!context.markInitialized()) {
             return;
         }
@@ -116,6 +179,7 @@ public class VoiceSessionUseCase {
     }
 
     public void unregisterSink(String voiceSessionId, VoiceEventSink sink) {
+        purgeStoppedContexts();
         RuntimeContext context = contextByVoiceSessionId.get(voiceSessionId);
         if (context == null) {
             return;
@@ -123,7 +187,15 @@ public class VoiceSessionUseCase {
         context.removeSink(sink);
     }
 
+    public RecoverySnapshot recover(String voiceSessionId, Long lastSeenEventId) {
+        purgeStoppedContexts();
+        RuntimeContext context = requireContext(voiceSessionId);
+        long safeLastSeen = lastSeenEventId == null ? 0L : Math.max(0L, lastSeenEventId);
+        return context.snapshotForRecovery(safeLastSeen);
+    }
+
     public void appendAudio(VoiceAudioChunkCommand command) {
+        purgeStoppedContexts();
         validateAudioCommand(command);
         RuntimeContext context = requireContext(command.getVoiceSessionId());
         if (context.isInactive()) {
@@ -142,6 +214,7 @@ public class VoiceSessionUseCase {
     }
 
     public void stop(VoiceSessionStopCommand command) {
+        purgeStoppedContexts();
         if (command == null || isBlank(command.getVoiceSessionId())) {
             throw new IllegalArgumentException("voiceSessionId is required");
         }
@@ -877,13 +950,58 @@ public class VoiceSessionUseCase {
         if (!context.close()) {
             return;
         }
+        String stopReason = normalizeStopReason(reason, forced ? "user_stop" : SessionStopReason.QUESTION_EXHAUSTED.code());
+        context.markStopped(stopReason, nowMillisSupplier.getAsLong());
         context.emit("session.stopped", Map.of(
                 "sessionId", context.sessionId,
                 "voiceSessionId", context.voiceSessionId,
                 "forced", forced,
-                "reason", normalizeStopReason(reason, forced ? "user_stop" : SessionStopReason.QUESTION_EXHAUSTED.code())
+                "reason", stopReason
         ));
-        contextByVoiceSessionId.remove(context.voiceSessionId, context);
+    }
+
+    private void purgeStoppedContexts() {
+        long now = nowMillisSupplier.getAsLong();
+        long retentionMs = voicePolicy.voiceRecoveryRetentionMs();
+        if (retentionMs <= 0L) {
+            retentionMs = DEFAULT_RECOVERY_RETENTION_MS;
+        }
+        int stoppedContextMax = voicePolicy.voiceStoppedContextMax();
+        if (stoppedContextMax <= 0) {
+            stoppedContextMax = DEFAULT_STOPPED_CONTEXT_MAX;
+        }
+
+        List<Map.Entry<String, RuntimeContext>> retainedStoppedEntries = new ArrayList<>();
+        for (Map.Entry<String, RuntimeContext> entry : contextByVoiceSessionId.entrySet()) {
+            RuntimeContext context = entry.getValue();
+            if (context == null || !context.isInactive()) {
+                continue;
+            }
+            if (context.isStoppedExpired(now, retentionMs)) {
+                contextByVoiceSessionId.remove(entry.getKey(), context);
+                continue;
+            }
+            retainedStoppedEntries.add(entry);
+        }
+
+        if (retainedStoppedEntries.isEmpty()) {
+            return;
+        }
+        if (stoppedContextMax <= 0) {
+            for (Map.Entry<String, RuntimeContext> entry : retainedStoppedEntries) {
+                contextByVoiceSessionId.remove(entry.getKey(), entry.getValue());
+            }
+            return;
+        }
+        if (retainedStoppedEntries.size() <= stoppedContextMax) {
+            return;
+        }
+        retainedStoppedEntries.sort(Comparator.comparingLong(entry -> entry.getValue().stoppedAtEpochMs()));
+        int removeCount = retainedStoppedEntries.size() - stoppedContextMax;
+        for (int i = 0; i < removeCount; i += 1) {
+            Map.Entry<String, RuntimeContext> entry = retainedStoppedEntries.get(i);
+            contextByVoiceSessionId.remove(entry.getKey(), entry.getValue());
+        }
     }
 
     private String normalizeStopReason(String reason, String fallback) {
@@ -967,23 +1085,54 @@ public class VoiceSessionUseCase {
                                   String feedbackLanguage) {
     }
 
+    private record VoiceEventRecord(long eventId, String event, Object payload) {
+    }
+
+    public record RecoveryQuestion(String id,
+                                   String text,
+                                   String group,
+                                   String groupId,
+                                   String questionType) {
+    }
+
+    public record RecoverySnapshot(String sessionId,
+                                   String voiceSessionId,
+                                   boolean active,
+                                   boolean stopped,
+                                   String stopReason,
+                                   long currentTurnId,
+                                   RecoveryQuestion currentQuestion,
+                                   boolean turnProcessing,
+                                   boolean hasBufferedAudio,
+                                   Long lastAcceptedChunkSequence,
+                                   long latestEventId,
+                                   long replayFromEventId,
+                                   boolean gapDetected) {
+    }
+
     private static final class RuntimeContext {
         private static final int PREFETCH_CACHE_LIMIT = 2;
         private final String voiceSessionId;
         private final String sessionId;
         private final String apiKey;
         private final RuntimeSettings settings;
+        private final int eventReplayBufferLimit;
         private final Set<VoiceEventSink> sinks = ConcurrentHashMap.newKeySet();
         private final Deque<TurnInput> continuousTurns = new ConcurrentLinkedDeque<>();
+        private final Deque<VoiceEventRecord> replayEvents = new ConcurrentLinkedDeque<>();
         private final LinkedHashMap<String, FeedbackUseCase.PrefetchedTurnPrompt> prefetchByQuestionId = new LinkedHashMap<>();
+        private final Object eventLock = new Object();
         private final AtomicBoolean initialized = new AtomicBoolean(false);
         private final AtomicBoolean closed = new AtomicBoolean(false);
         private final AtomicBoolean turnProcessing = new AtomicBoolean(false);
         private final AtomicLong turnIdSequence = new AtomicLong(0L);
         private final AtomicLong ttsSequence = new AtomicLong(0L);
+        private final AtomicLong eventIdSequence = new AtomicLong(0L);
         private final Object audioLock = new Object();
         private final ByteArrayOutputStream pcmBuffer = new ByteArrayOutputStream();
         private int sampleRate = DEFAULT_SAMPLE_RATE;
+        private volatile String stopReason = "";
+        private volatile long stoppedAtEpochMs;
         private Long lastAcceptedChunkSequence;
         private NextQuestion currentQuestion;
         private long currentTurnId;
@@ -991,16 +1140,23 @@ public class VoiceSessionUseCase {
         private RuntimeContext(String voiceSessionId,
                                String sessionId,
                                String apiKey,
-                               RuntimeSettings settings) {
+                               RuntimeSettings settings,
+                               int eventReplayBufferLimit) {
             this.voiceSessionId = voiceSessionId;
             this.sessionId = sessionId;
             this.apiKey = apiKey;
             this.settings = settings;
+            this.eventReplayBufferLimit = Math.max(1, eventReplayBufferLimit);
         }
 
-        private void addSink(VoiceEventSink sink) {
+        private void addSink(VoiceEventSink sink, Long sinceEventId) {
             if (sink != null) {
-                sinks.add(sink);
+                synchronized (eventLock) {
+                    if (sinceEventId != null && !replayEvents(sink, sinceEventId)) {
+                        return;
+                    }
+                    sinks.add(sink);
+                }
             }
         }
 
@@ -1011,11 +1167,55 @@ public class VoiceSessionUseCase {
         }
 
         private void emit(String event, Object payload) {
-            for (VoiceEventSink sink : sinks) {
-                if (!sink.send(event, payload)) {
-                    sinks.remove(sink);
+            synchronized (eventLock) {
+                VoiceEventRecord record = createEventRecord(event, payload);
+                replayEvents.addLast(record);
+                trimReplayEvents();
+                for (VoiceEventSink sink : sinks) {
+                    if (!sink.send(record.event(), record.payload())) {
+                        sinks.remove(sink);
+                    }
                 }
             }
+        }
+
+        private VoiceEventRecord createEventRecord(String event, Object payload) {
+            long eventId = eventIdSequence.incrementAndGet();
+            return new VoiceEventRecord(eventId, event, appendEventId(payload, eventId));
+        }
+
+        private Object appendEventId(Object payload, long eventId) {
+            if (payload instanceof Map<?, ?> raw) {
+                Map<String, Object> enriched = new LinkedHashMap<>();
+                for (Map.Entry<?, ?> entry : raw.entrySet()) {
+                    enriched.put(String.valueOf(entry.getKey()), entry.getValue());
+                }
+                enriched.put("eventId", eventId);
+                return enriched;
+            }
+            Map<String, Object> wrapped = new LinkedHashMap<>();
+            wrapped.put("eventId", eventId);
+            wrapped.put("data", payload);
+            return wrapped;
+        }
+
+        private void trimReplayEvents() {
+            while (replayEvents.size() > eventReplayBufferLimit) {
+                replayEvents.pollFirst();
+            }
+        }
+
+        private boolean replayEvents(VoiceEventSink sink, Long sinceEventId) {
+            long since = sinceEventId == null ? 0L : Math.max(0L, sinceEventId);
+            for (VoiceEventRecord record : replayEvents) {
+                if (record.eventId() <= since) {
+                    continue;
+                }
+                if (!sink.send(record.event(), record.payload())) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         private boolean markInitialized() {
@@ -1028,6 +1228,29 @@ public class VoiceSessionUseCase {
 
         private boolean isInactive() {
             return closed.get();
+        }
+
+        private void markStopped(String stopReason, long stoppedAtEpochMs) {
+            this.stopReason = stopReason == null ? "" : stopReason;
+            this.stoppedAtEpochMs = stoppedAtEpochMs;
+        }
+
+        private boolean isStoppedExpired(long nowEpochMs, long retentionMs) {
+            if (!isInactive()) {
+                return false;
+            }
+            if (retentionMs < 0L) {
+                return false;
+            }
+            long stoppedAt = stoppedAtEpochMs;
+            if (stoppedAt <= 0L) {
+                return false;
+            }
+            return nowEpochMs - stoppedAt >= retentionMs;
+        }
+
+        private long stoppedAtEpochMs() {
+            return stoppedAtEpochMs <= 0L ? Long.MAX_VALUE : stoppedAtEpochMs;
         }
 
         private boolean startTurnProcessing() {
@@ -1166,6 +1389,63 @@ public class VoiceSessionUseCase {
                 }
                 turns.add(item);
             }
+        }
+
+        private RecoverySnapshot snapshotForRecovery(long lastSeenEventId) {
+            long safeLastSeenEventId = Math.max(0L, lastSeenEventId);
+            QuestionSnapshot question;
+            long turnId;
+            boolean bufferedAudio;
+            Long acceptedChunkSequence;
+            synchronized (audioLock) {
+                question = snapshotQuestion();
+                turnId = currentTurnId;
+                bufferedAudio = pcmBuffer.size() > 0;
+                acceptedChunkSequence = lastAcceptedChunkSequence;
+            }
+
+            long oldestEventId;
+            long latestEventId;
+            synchronized (eventLock) {
+                oldestEventId = replayEvents.isEmpty() ? 0L : replayEvents.peekFirst().eventId();
+                latestEventId = eventIdSequence.get();
+            }
+            long replayFromEventId = safeLastSeenEventId;
+            boolean gapDetected = false;
+            if (oldestEventId > 0L) {
+                long minimumRewindPoint = oldestEventId - 1L;
+                replayFromEventId = Math.max(safeLastSeenEventId, minimumRewindPoint);
+                gapDetected = safeLastSeenEventId < minimumRewindPoint;
+            }
+
+            return new RecoverySnapshot(
+                    sessionId,
+                    voiceSessionId,
+                    !isInactive(),
+                    isInactive(),
+                    stopReason,
+                    turnId,
+                    toRecoveryQuestion(question),
+                    turnProcessing.get(),
+                    bufferedAudio,
+                    acceptedChunkSequence,
+                    latestEventId,
+                    replayFromEventId,
+                    gapDetected
+            );
+        }
+
+        private RecoveryQuestion toRecoveryQuestion(QuestionSnapshot question) {
+            if (question == null) {
+                return null;
+            }
+            return new RecoveryQuestion(
+                    question.questionId(),
+                    question.text(),
+                    question.group(),
+                    question.groupId(),
+                    question.questionType()
+            );
         }
     }
 

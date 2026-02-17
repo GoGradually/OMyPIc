@@ -142,6 +142,16 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
         return voice.getSilenceDurationMs();
     }
 
+    @Override
+    public long voiceRecoveryRetentionMs() {
+        return voice.getRecoveryRetentionMs();
+    }
+
+    @Override
+    public int voiceStoppedContextMax() {
+        return voice.getStoppedContextMax();
+    }
+
     public static class Stt {
         private long maxFileBytes = 26214400L;
         private int maxDurationSeconds = 180;
@@ -368,6 +378,8 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
         private String ttsModel = "gpt-4o-mini-tts";
         private String ttsVoice = "alloy";
         private int silenceDurationMs = 1500;
+        private long recoveryRetentionMs = 600000L;
+        private int stoppedContextMax = 1000;
 
         public String getSttModel() {
             return sttModel;
@@ -415,6 +427,22 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
 
         public void setSilenceDurationMs(int silenceDurationMs) {
             this.silenceDurationMs = silenceDurationMs;
+        }
+
+        public long getRecoveryRetentionMs() {
+            return recoveryRetentionMs;
+        }
+
+        public void setRecoveryRetentionMs(long recoveryRetentionMs) {
+            this.recoveryRetentionMs = recoveryRetentionMs;
+        }
+
+        public int getStoppedContextMax() {
+            return stoppedContextMax;
+        }
+
+        public void setStoppedContextMax(int stoppedContextMax) {
+            this.stoppedContextMax = stoppedContextMax;
         }
     }
 
