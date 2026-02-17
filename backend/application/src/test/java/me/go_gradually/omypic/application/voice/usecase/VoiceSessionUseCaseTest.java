@@ -89,7 +89,6 @@ class VoiceSessionUseCaseTest {
         when(voicePolicy.voiceFeedbackLanguage()).thenReturn("ko");
         when(voicePolicy.voiceTtsModel()).thenReturn("gpt-4o-mini-tts");
         when(voicePolicy.voiceTtsVoice()).thenReturn("alloy");
-        when(voicePolicy.voiceSilenceDurationMs()).thenReturn(1200);
         when(voicePolicy.voiceRecoveryRetentionMs()).thenReturn(600_000L);
         when(voicePolicy.voiceStoppedContextMax()).thenReturn(1000);
 
@@ -253,7 +252,7 @@ class VoiceSessionUseCaseTest {
         events.clear();
         useCase.appendAudio(audioChunk(voiceSessionId));
 
-        int errorIndex = firstIndex(events, event -> "error".equals(event.type()));
+        int errorIndex = firstIndex(events, event -> "session.error".equals(event.type()));
         int feedbackFinalIndex = firstIndex(events, event -> "feedback.final".equals(event.type()));
         int questionPromptIndex = firstIndex(events, event -> "question.prompt".equals(event.type()));
         int questionSpeechIndex = firstIndex(events, event -> isTtsRole(event, "question"));
@@ -299,7 +298,7 @@ class VoiceSessionUseCaseTest {
         useCase.registerSink(voiceSessionId, capture(events));
 
         int readyIndex = firstIndex(events, event -> "session.ready".equals(event.type()));
-        int errorIndex = firstIndex(events, event -> "error".equals(event.type()));
+        int errorIndex = firstIndex(events, event -> "session.error".equals(event.type()));
         int stoppedIndex = firstIndex(events, event -> "session.stopped".equals(event.type()));
 
         assertEquals(-1, readyIndex);

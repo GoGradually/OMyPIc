@@ -11,8 +11,6 @@ public interface VoicePolicy {
 
     String voiceTtsVoice();
 
-    int voiceSilenceDurationMs();
-
     long voiceRecoveryRetentionMs();
 
     int voiceStoppedContextMax();

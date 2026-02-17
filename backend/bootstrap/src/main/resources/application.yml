@@ -58,7 +58,6 @@ omypic:
     feedback-language: ko
     tts-model: gpt-4o-mini-tts
     tts-voice: alloy
-    silence-duration-ms: 1500
     recovery-retention-ms: 600000
     stopped-context-max: 1000
   integrations:

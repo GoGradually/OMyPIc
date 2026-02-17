@@ -153,6 +153,12 @@ function createRecoverySnapshot(overrides = {}) {
     }
 }
 
+function createAbortError() {
+    const error = new Error('The operation was aborted.')
+    error.name = 'AbortError'
+    return error
+}
+
 describe('useVoiceSession', () => {
     beforeEach(() => {
         vi.clearAllMocks()
@@ -318,6 +324,9 @@ describe('useVoiceSession', () => {
             expect.objectContaining({
                 sampleRate: 16000,
                 sequence: 1
+            }),
+            expect.objectContaining({
+                signal: expect.any(Object)
             })
         )
         unmount()
@@ -611,10 +620,136 @@ describe('useVoiceSession', () => {
             await act(async () => {
                 await vi.advanceTimersByTimeAsync(500)
             })
-            await waitFor(() => {
-                expect(sendVoiceAudioChunk).toHaveBeenCalledTimes(2)
+            await act(async () => {
+                await Promise.resolve()
+            })
+            if (sendVoiceAudioChunk.mock.calls.length < 2) {
+                await act(async () => {
+                    await vi.advanceTimersByTimeAsync(500)
+                })
+                await act(async () => {
+                    await Promise.resolve()
+                })
+            }
+            expect(sendVoiceAudioChunk).toHaveBeenCalledTimes(2)
+
+            const secondSequence = sendVoiceAudioChunk.mock.calls[1][1].sequence
+            expect(secondSequence).toBe(firstSequence)
+            expect(onStatus).toHaveBeenCalledWith('음성 이벤트 연결이 복구되었습니다.')
+            unmount()
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('aborts stalled in-flight upload on disconnect and re-uploads after recovery', async () => {
+        vi.useFakeTimers()
+        try {
+            const onStatus = vi.fn()
+            recoverVoiceSession.mockResolvedValueOnce(createRecoverySnapshot({
+                currentTurnId: 5,
+                currentQuestion: {
+                    id: 'q-1',
+                    text: 'recovered question',
+                    group: 'travel',
+                    groupId: 'g-1',
+                    questionType: 'OPEN'
+                }
+            }))
+
+            let uploadCallCount = 0
+            sendVoiceAudioChunk.mockImplementation((_voiceSessionId, _payload, requestOptions = {}) => {
+                uploadCallCount += 1
+                if (uploadCallCount > 1) {
+                    return Promise.resolve(undefined)
+                }
+                return new Promise((_resolve, reject) => {
+                    const signal = requestOptions?.signal
+                    if (!signal) {
+                        return
+                    }
+                    if (signal.aborted) {
+                        reject(createAbortError())
+                        return
+                    }
+                    signal.addEventListener('abort', () => {
+                        reject(createAbortError())
+                    }, {once: true})
+                })
             })
 
+            const {result, unmount} = renderHook(() => useVoiceSession({
+                sessionId: 's1',
+                feedbackModel: 'gpt-4o-mini',
+                voiceSttModel: 'gpt-4o-mini-transcribe',
+                feedbackLang: 'ko',
+                voice: 'alloy',
+                onStatus,
+                onFeedback: vi.fn(),
+                refreshWrongNotes: vi.fn(async () => {
+                }),
+                onQuestionPrompt: vi.fn()
+            }))
+
+            await act(async () => {
+                await result.current.startSession()
+            })
+            await act(async () => {
+                activeEventSource.emit('question.prompt', {
+                    question: {id: 'q-1', text: 'question-1', group: 'travel'},
+                    selection: {exhausted: false}
+                })
+                activeEventSource.emit('tts.audio', {
+                    role: 'question',
+                    audio: 'AQID',
+                    mimeType: 'audio/wav',
+                    sequence: 1
+                })
+            })
+            await act(async () => {
+                audioInstances[audioInstances.length - 1].onended()
+            })
+
+            act(() => {
+                emitAudioFrame(0.1)
+                emitAudioFrame(0)
+                emitAudioFrame(0)
+            })
+            await act(async () => {
+                await Promise.resolve()
+            })
+            expect(sendVoiceAudioChunk).toHaveBeenCalledTimes(1)
+
+            const firstSequence = sendVoiceAudioChunk.mock.calls[0][1].sequence
+            const firstSignal = sendVoiceAudioChunk.mock.calls[0][2]?.signal
+            expect(firstSignal?.aborted).toBe(false)
+
+            act(() => {
+                activeEventSource.emitError()
+            })
+            await act(async () => {
+                await Promise.resolve()
+            })
+
+            expect(firstSignal?.aborted).toBe(true)
+            expect(onStatus).toHaveBeenCalledWith('오디오 전송이 지연되어 재시도합니다.')
+
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(500)
+            })
+            await act(async () => {
+                await Promise.resolve()
+            })
+            if (sendVoiceAudioChunk.mock.calls.length < 2) {
+                await act(async () => {
+                    await vi.advanceTimersByTimeAsync(500)
+                })
+                await act(async () => {
+                    await Promise.resolve()
+                })
+            }
+
+            expect(sendVoiceAudioChunk).toHaveBeenCalledTimes(2)
             const secondSequence = sendVoiceAudioChunk.mock.calls[1][1].sequence
             expect(secondSequence).toBe(firstSequence)
             expect(onStatus).toHaveBeenCalledWith('음성 이벤트 연결이 복구되었습니다.')
@@ -1099,6 +1234,98 @@ describe('useVoiceSession', () => {
 
             expect(sendVoiceAudioChunk).toHaveBeenCalledTimes(2)
 
+            const secondSequence = sendVoiceAudioChunk.mock.calls[1][1].sequence
+            expect(secondSequence).toBe(firstSequence)
+            expect(result.current.sessionActive).toBe(true)
+            unmount()
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('aborts stalled chunk upload after 3 seconds and retries', async () => {
+        vi.useFakeTimers()
+        try {
+            const onStatus = vi.fn()
+            let uploadCallCount = 0
+            sendVoiceAudioChunk.mockImplementation((_voiceSessionId, _payload, requestOptions = {}) => {
+                uploadCallCount += 1
+                if (uploadCallCount > 1) {
+                    return Promise.resolve(undefined)
+                }
+                return new Promise((_resolve, reject) => {
+                    const signal = requestOptions?.signal
+                    if (!signal) {
+                        return
+                    }
+                    if (signal.aborted) {
+                        reject(createAbortError())
+                        return
+                    }
+                    signal.addEventListener('abort', () => {
+                        reject(createAbortError())
+                    }, {once: true})
+                })
+            })
+
+            const {result, unmount} = renderHook(() => useVoiceSession({
+                sessionId: 's1',
+                feedbackModel: 'gpt-4o-mini',
+                voiceSttModel: 'gpt-4o-mini-transcribe',
+                feedbackLang: 'ko',
+                voice: 'alloy',
+                onStatus,
+                onFeedback: vi.fn(),
+                refreshWrongNotes: vi.fn(async () => {
+                }),
+                onQuestionPrompt: vi.fn()
+            }))
+
+            await act(async () => {
+                await result.current.startSession()
+            })
+            await act(async () => {
+                activeEventSource.emit('tts.audio', {
+                    role: 'question',
+                    audio: 'AQID',
+                    mimeType: 'audio/wav',
+                    sequence: 1
+                })
+            })
+            await act(async () => {
+                audioInstances[audioInstances.length - 1].onended()
+            })
+
+            act(() => {
+                emitAudioFrame(0.1)
+                emitAudioFrame(0)
+                emitAudioFrame(0)
+            })
+            await act(async () => {
+                await Promise.resolve()
+            })
+            expect(sendVoiceAudioChunk).toHaveBeenCalledTimes(1)
+            const firstSequence = sendVoiceAudioChunk.mock.calls[0][1].sequence
+            const firstSignal = sendVoiceAudioChunk.mock.calls[0][2]?.signal
+            expect(firstSignal?.aborted).toBe(false)
+
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(3000)
+            })
+            await act(async () => {
+                await Promise.resolve()
+            })
+            expect(firstSignal?.aborted).toBe(true)
+            expect(onStatus).toHaveBeenCalledWith('오디오 전송이 지연되어 재시도합니다.')
+
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(500)
+            })
+            await act(async () => {
+                await Promise.resolve()
+            })
+
+            expect(sendVoiceAudioChunk).toHaveBeenCalledTimes(2)
             const secondSequence = sendVoiceAudioChunk.mock.calls[1][1].sequence
             expect(secondSequence).toBe(firstSequence)
             expect(result.current.sessionActive).toBe(true)

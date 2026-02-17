@@ -47,7 +47,6 @@ class AppPropertiesTest {
         properties.getVoice().setFeedbackLanguage("ko");
         properties.getVoice().setTtsModel("gpt-4o-mini-tts");
         properties.getVoice().setTtsVoice("alloy");
-        properties.getVoice().setSilenceDurationMs(1666);
         properties.getVoice().setRecoveryRetentionMs(600000L);
         properties.getVoice().setStoppedContextMax(1000);
 
@@ -85,7 +84,6 @@ class AppPropertiesTest {
         assertEquals("ko", properties.voiceFeedbackLanguage());
         assertEquals("gpt-4o-mini-tts", properties.voiceTtsModel());
         assertEquals("alloy", properties.voiceTtsVoice());
-        assertEquals(1666, properties.voiceSilenceDurationMs());
         assertEquals(600000L, properties.voiceRecoveryRetentionMs());
         assertEquals(1000, properties.voiceStoppedContextMax());
     }

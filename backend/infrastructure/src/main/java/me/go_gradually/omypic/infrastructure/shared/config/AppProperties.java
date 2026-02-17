@@ -138,11 +138,6 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
     }
 
     @Override
-    public int voiceSilenceDurationMs() {
-        return voice.getSilenceDurationMs();
-    }
-
-    @Override
     public long voiceRecoveryRetentionMs() {
         return voice.getRecoveryRetentionMs();
     }
@@ -377,7 +372,6 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
         private String feedbackLanguage = "ko";
         private String ttsModel = "gpt-4o-mini-tts";
         private String ttsVoice = "alloy";
-        private int silenceDurationMs = 1500;
         private long recoveryRetentionMs = 600000L;
         private int stoppedContextMax = 1000;
 
@@ -419,14 +413,6 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
 
         public void setTtsVoice(String ttsVoice) {
             this.ttsVoice = ttsVoice;
-        }
-
-        public int getSilenceDurationMs() {
-            return silenceDurationMs;
-        }
-
-        public void setSilenceDurationMs(int silenceDurationMs) {
-            this.silenceDurationMs = silenceDurationMs;
         }
 
         public long getRecoveryRetentionMs() {

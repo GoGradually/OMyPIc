@@ -146,7 +146,7 @@ export function bindVoiceEvents({
         handleTtsFailure(message)
     })
 
-    eventSource.addEventListener('error', (event) => {
+    eventSource.addEventListener('session.error', (event) => {
         const data = processData(event)
         if (!data) {
             return
