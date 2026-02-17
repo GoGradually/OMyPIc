@@ -13,6 +13,8 @@
 
 개발 모드에서는 Electron이 Vite dev 서버를 띄우며, Backend/MongoDB는 외부 실행을 기본으로 가정합니다.
 
+- Node.js 버전: `>= 20.19.0` (프로젝트 루트 `.nvmrc` 참고)
+
 ```bash
 # terminal 1
 cd backend
