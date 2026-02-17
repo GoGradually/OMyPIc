@@ -134,6 +134,25 @@ function emitAudioFrame(amplitude = 0) {
     })
 }
 
+function createRecoverySnapshot(overrides = {}) {
+    return {
+        sessionId: 's1',
+        voiceSessionId: 'voice-1',
+        active: true,
+        stopped: false,
+        stopReason: '',
+        currentTurnId: 1,
+        currentQuestion: null,
+        turnProcessing: false,
+        hasBufferedAudio: false,
+        lastAcceptedChunkSequence: null,
+        latestEventId: 0,
+        replayFromEventId: 0,
+        gapDetected: false,
+        ...overrides
+    }
+}
+
 describe('useVoiceSession', () => {
     beforeEach(() => {
         vi.clearAllMocks()
@@ -173,21 +192,7 @@ describe('useVoiceSession', () => {
 
         openVoiceSession.mockResolvedValue({voiceSessionId: 'voice-1'})
         getVoiceEventsUrl.mockResolvedValue('http://localhost/events')
-        recoverVoiceSession.mockResolvedValue({
-            sessionId: 's1',
-            voiceSessionId: 'voice-1',
-            active: true,
-            stopped: false,
-            stopReason: '',
-            currentTurnId: 1,
-            currentQuestion: null,
-            turnProcessing: false,
-            hasBufferedAudio: false,
-            lastAcceptedChunkSequence: null,
-            latestEventId: 0,
-            replayFromEventId: 0,
-            gapDetected: false
-        })
+        recoverVoiceSession.mockResolvedValue(createRecoverySnapshot())
         sendVoiceAudioChunk.mockResolvedValue(undefined)
         stopVoiceSession.mockResolvedValue(undefined)
     })
@@ -539,6 +544,241 @@ describe('useVoiceSession', () => {
         expect(result.current.speechState).toBe('READY_FOR_ANSWER')
         unmount()
         vi.useRealTimers()
+    })
+
+    it('re-uploads in-flight turn after reconnect when question context matches', async () => {
+        vi.useFakeTimers()
+        try {
+            const onStatus = vi.fn()
+            recoverVoiceSession.mockResolvedValueOnce(createRecoverySnapshot({
+                currentTurnId: 5,
+                currentQuestion: {
+                    id: 'q-1',
+                    text: 'recovered question',
+                    group: 'travel',
+                    groupId: 'g-1',
+                    questionType: 'OPEN'
+                }
+            }))
+
+            const {result, unmount} = renderHook(() => useVoiceSession({
+                sessionId: 's1',
+                feedbackModel: 'gpt-4o-mini',
+                voiceSttModel: 'gpt-4o-mini-transcribe',
+                feedbackLang: 'ko',
+                voice: 'alloy',
+                onStatus,
+                onFeedback: vi.fn(),
+                refreshWrongNotes: vi.fn(async () => {
+                }),
+                onQuestionPrompt: vi.fn()
+            }))
+
+            await act(async () => {
+                await result.current.startSession()
+            })
+            await act(async () => {
+                activeEventSource.emit('question.prompt', {
+                    question: {id: 'q-1', text: 'question-1', group: 'travel'},
+                    selection: {exhausted: false}
+                })
+                activeEventSource.emit('tts.audio', {
+                    role: 'question',
+                    audio: 'AQID',
+                    mimeType: 'audio/wav',
+                    sequence: 1
+                })
+            })
+            await act(async () => {
+                audioInstances[audioInstances.length - 1].onended()
+            })
+
+            sendVoiceAudioChunk.mockRejectedValueOnce(new Error('temporary network'))
+            act(() => {
+                emitAudioFrame(0.1)
+                emitAudioFrame(0)
+                emitAudioFrame(0)
+            })
+            await act(async () => {
+                await Promise.resolve()
+            })
+            expect(sendVoiceAudioChunk).toHaveBeenCalledTimes(1)
+            const firstSequence = sendVoiceAudioChunk.mock.calls[0][1].sequence
+
+            act(() => {
+                activeEventSource.emitError()
+            })
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(500)
+            })
+            await waitFor(() => {
+                expect(sendVoiceAudioChunk).toHaveBeenCalledTimes(2)
+            })
+
+            const secondSequence = sendVoiceAudioChunk.mock.calls[1][1].sequence
+            expect(secondSequence).toBe(firstSequence)
+            expect(onStatus).toHaveBeenCalledWith('음성 이벤트 연결이 복구되었습니다.')
+            unmount()
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('discards buffered audio after reconnect when question context mismatches', async () => {
+        vi.useFakeTimers()
+        try {
+            const onStatus = vi.fn()
+            recoverVoiceSession.mockResolvedValueOnce(createRecoverySnapshot({
+                currentTurnId: 5,
+                currentQuestion: {
+                    id: 'q-2',
+                    text: 'different question',
+                    group: 'travel',
+                    groupId: 'g-2',
+                    questionType: 'OPEN'
+                }
+            }))
+
+            const {result, unmount} = renderHook(() => useVoiceSession({
+                sessionId: 's1',
+                feedbackModel: 'gpt-4o-mini',
+                voiceSttModel: 'gpt-4o-mini-transcribe',
+                feedbackLang: 'ko',
+                voice: 'alloy',
+                onStatus,
+                onFeedback: vi.fn(),
+                refreshWrongNotes: vi.fn(async () => {
+                }),
+                onQuestionPrompt: vi.fn()
+            }))
+
+            await act(async () => {
+                await result.current.startSession()
+            })
+            await act(async () => {
+                activeEventSource.emit('question.prompt', {
+                    question: {id: 'q-1', text: 'question-1', group: 'travel'},
+                    selection: {exhausted: false}
+                })
+                activeEventSource.emit('tts.audio', {
+                    role: 'question',
+                    audio: 'AQID',
+                    mimeType: 'audio/wav',
+                    sequence: 1
+                })
+            })
+            await act(async () => {
+                audioInstances[audioInstances.length - 1].onended()
+            })
+
+            sendVoiceAudioChunk.mockRejectedValueOnce(new Error('temporary network'))
+            act(() => {
+                emitAudioFrame(0.1)
+                emitAudioFrame(0)
+                emitAudioFrame(0)
+            })
+            await act(async () => {
+                await Promise.resolve()
+            })
+            expect(sendVoiceAudioChunk).toHaveBeenCalledTimes(1)
+
+            act(() => {
+                activeEventSource.emitError()
+            })
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(500)
+            })
+            await act(async () => {
+                await Promise.resolve()
+            })
+
+            expect(sendVoiceAudioChunk).toHaveBeenCalledTimes(1)
+            expect(onStatus).toHaveBeenCalledWith(
+                '음성 이벤트 연결은 복구되었지만 질문 컨텍스트가 달라 미전송 음성을 폐기했습니다. 현재 질문에 다시 답변해 주세요.'
+            )
+            unmount()
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('skips re-upload when server already accepted in-flight sequence', async () => {
+        vi.useFakeTimers()
+        try {
+            const onStatus = vi.fn()
+
+            const {result, unmount} = renderHook(() => useVoiceSession({
+                sessionId: 's1',
+                feedbackModel: 'gpt-4o-mini',
+                voiceSttModel: 'gpt-4o-mini-transcribe',
+                feedbackLang: 'ko',
+                voice: 'alloy',
+                onStatus,
+                onFeedback: vi.fn(),
+                refreshWrongNotes: vi.fn(async () => {
+                }),
+                onQuestionPrompt: vi.fn()
+            }))
+
+            await act(async () => {
+                await result.current.startSession()
+            })
+            await act(async () => {
+                activeEventSource.emit('question.prompt', {
+                    question: {id: 'q-1', text: 'question-1', group: 'travel'},
+                    selection: {exhausted: false}
+                })
+                activeEventSource.emit('tts.audio', {
+                    role: 'question',
+                    audio: 'AQID',
+                    mimeType: 'audio/wav',
+                    sequence: 1
+                })
+            })
+            await act(async () => {
+                audioInstances[audioInstances.length - 1].onended()
+            })
+
+            sendVoiceAudioChunk.mockRejectedValueOnce(new Error('temporary network'))
+            act(() => {
+                emitAudioFrame(0.1)
+                emitAudioFrame(0)
+                emitAudioFrame(0)
+            })
+            await act(async () => {
+                await Promise.resolve()
+            })
+            expect(sendVoiceAudioChunk).toHaveBeenCalledTimes(1)
+            const firstSequence = sendVoiceAudioChunk.mock.calls[0][1].sequence
+
+            recoverVoiceSession.mockResolvedValueOnce(createRecoverySnapshot({
+                currentTurnId: 5,
+                currentQuestion: {
+                    id: 'q-1',
+                    text: 'same question',
+                    group: 'travel',
+                    groupId: 'g-1',
+                    questionType: 'OPEN'
+                },
+                lastAcceptedChunkSequence: firstSequence
+            }))
+
+            act(() => {
+                activeEventSource.emitError()
+            })
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(500)
+            })
+            await act(async () => {
+                await Promise.resolve()
+            })
+
+            expect(sendVoiceAudioChunk).toHaveBeenCalledTimes(1)
+            expect(onStatus).toHaveBeenCalledWith('음성 이벤트 연결이 복구되었습니다.')
+            unmount()
+        } finally {
+            vi.useRealTimers()
+        }
     })
 
     it('ignores duplicate events by eventId', async () => {

@@ -87,6 +87,8 @@ export function useVoiceSession({
     const turnDurationMsRef = useRef(0)
     const answerWindowIdRef = useRef(0)
     const captureWindowIdRef = useRef(NO_WINDOW_ID)
+    const currentQuestionIdRef = useRef('')
+    const captureQuestionIdRef = useRef('')
     const stopSessionRef = useRef(null)
     const reconnectAttemptsRef = useRef(0)
     const reconnectTimerRef = useRef(null)
@@ -185,6 +187,7 @@ export function useVoiceSession({
         silenceDurationMsRef.current = 0
         turnDurationMsRef.current = 0
         captureWindowIdRef.current = NO_WINDOW_ID
+        captureQuestionIdRef.current = ''
     }, [])
 
     const canCaptureInState = useCallback((state) => {
@@ -294,14 +297,14 @@ export function useVoiceSession({
     }, [clearReconnectTimer])
 
     const enterRecoveringState = useCallback(() => {
-        resetPendingAudio()
-        clearInFlightTurn()
+        clearChunkRetryTimer()
         clearTtsPlayback()
         updateSpeechState(SPEECH_STATE.RECOVERING)
-    }, [clearInFlightTurn, clearTtsPlayback, resetPendingAudio, updateSpeechState])
+    }, [clearChunkRetryTimer, clearTtsPlayback, updateSpeechState])
 
     const applyRecoverySnapshot = useCallback((snapshot) => {
         const questionNode = snapshot?.currentQuestion
+        currentQuestionIdRef.current = questionNode?.id || ''
         if (questionNode) {
             questionPromptRef.current?.({
                 questionId: questionNode.id || '',
@@ -412,6 +415,50 @@ export function useVoiceSession({
         }, delayMs)
     }, [clearInFlightTurn, setStatus, stopDueToChunkUploadFailure, uploadInFlightTurn])
 
+    const resumeBufferedAudioAfterRecovery = useCallback(async (snapshot) => {
+        const hasInFlight = Boolean(inFlightTurnRef.current)
+        const hasPending = pendingAudioSizeRef.current > 0
+        if (!hasInFlight && !hasPending) {
+            return {droppedDueToMismatch: false}
+        }
+
+        const snapshotQuestionId = snapshot?.currentQuestion?.id || ''
+        const localQuestionId = inFlightTurnRef.current?.questionId || captureQuestionIdRef.current || ''
+        if (!snapshotQuestionId || !localQuestionId || snapshotQuestionId !== localQuestionId) {
+            resetPendingAudio()
+            clearInFlightTurn()
+            return {droppedDueToMismatch: true}
+        }
+
+        if (inFlightTurnRef.current) {
+            const lastAccepted = Number(snapshot?.lastAcceptedChunkSequence)
+            if (Number.isFinite(lastAccepted) && lastAccepted >= inFlightTurnRef.current.sequence) {
+                clearInFlightTurn()
+            } else {
+                const {ok, uploadedTurn} = await uploadInFlightTurn()
+                if (!ok) {
+                    scheduleChunkRetry()
+                    return {droppedDueToMismatch: false}
+                }
+                if (pendingAudioSizeRef.current > 0 && flushPendingAudioRef.current) {
+                    await flushPendingAudioRef.current({
+                        force: true,
+                        expectedWindowId: uploadedTurn?.capturedWindowId ?? null
+                    })
+                }
+                return {droppedDueToMismatch: false}
+            }
+        }
+
+        if (pendingAudioSizeRef.current > 0 && flushPendingAudioRef.current) {
+            await flushPendingAudioRef.current({
+                force: true,
+                expectedWindowId: captureWindowIdRef.current
+            })
+        }
+        return {droppedDueToMismatch: false}
+    }, [clearInFlightTurn, resetPendingAudio, scheduleChunkRetry, uploadInFlightTurn])
+
     const flushPendingAudio = useCallback(async ({force = false, expectedWindowId = null} = {}) => {
         if (inFlightTurnRef.current) {
             return
@@ -440,6 +487,7 @@ export function useVoiceSession({
         const totalSize = pendingAudioSizeRef.current
         const durationMs = turnDurationMsRef.current
         const sampleRate = sampleRateRef.current || DEFAULT_SAMPLE_RATE
+        const capturedQuestionId = captureQuestionIdRef.current || currentQuestionIdRef.current || ''
 
         if (durationMs < MIN_TURN_DURATION_MS) {
             resetPendingAudio()
@@ -470,6 +518,7 @@ export function useVoiceSession({
         speechActiveRef.current = false
         silenceDurationMsRef.current = 0
         turnDurationMsRef.current = 0
+        captureQuestionIdRef.current = ''
 
         updateSpeechState(SPEECH_STATE.WAITING_TTS)
         inFlightTurnRef.current = {
@@ -478,6 +527,7 @@ export function useVoiceSession({
             sampleRate,
             sequence: nextSequence,
             capturedWindowId,
+            questionId: capturedQuestionId,
             retryCount: 0
         }
 
@@ -535,6 +585,7 @@ export function useVoiceSession({
 
         closeEventSource()
         voiceSessionIdRef.current = ''
+        currentQuestionIdRef.current = ''
         lastSeenEventIdRef.current = 0
         replayTtsCutoffEventIdRef.current = 0
         setVoiceConnected(false)
@@ -575,6 +626,7 @@ export function useVoiceSession({
             updateSpeechState,
             speechState: SPEECH_STATE,
             onQuestionPrompt: (question) => {
+                currentQuestionIdRef.current = question?.questionId || ''
                 questionPromptRef.current?.(question)
             },
             onFeedback: (feedback) => {
@@ -669,6 +721,7 @@ export function useVoiceSession({
                     }
 
                     applyRecoverySnapshot(snapshot)
+                    const recoveryResult = await resumeBufferedAudioAfterRecovery(snapshot)
                     const replayFromEventId = Number.isFinite(snapshot?.replayFromEventId)
                         ? Math.max(0, Number(snapshot.replayFromEventId))
                         : lastSeenEventIdRef.current
@@ -680,7 +733,9 @@ export function useVoiceSession({
                     reconnectingRef.current = false
                     reconnectAttemptsRef.current = 0
                     setVoiceConnected(true)
-                    if (snapshot?.gapDetected) {
+                    if (recoveryResult?.droppedDueToMismatch) {
+                        setStatus('음성 이벤트 연결은 복구되었지만 질문 컨텍스트가 달라 미전송 음성을 폐기했습니다. 현재 질문에 다시 답변해 주세요.')
+                    } else if (snapshot?.gapDetected) {
                         setStatus('이벤트 일부가 누락되어 서버 상태 기준으로 동기화한 뒤 연결을 복구했습니다.')
                     } else {
                         setStatus('음성 이벤트 연결이 복구되었습니다.')
@@ -700,6 +755,7 @@ export function useVoiceSession({
         bindSessionEvents,
         closeEventSource,
         enterRecoveringState,
+        resumeBufferedAudioAfterRecovery,
         setStatus,
         stopSession
     ])
@@ -743,6 +799,8 @@ export function useVoiceSession({
             replayTtsCutoffEventIdRef.current = 0
             answerWindowIdRef.current = 0
             captureWindowIdRef.current = NO_WINDOW_ID
+            currentQuestionIdRef.current = ''
+            captureQuestionIdRef.current = ''
             updateSpeechState(SPEECH_STATE.WAITING_TTS)
 
             const created = await openVoiceSession({
@@ -777,7 +835,9 @@ export function useVoiceSession({
                 }
                 const currentState = speechStateRef.current
                 if (!canCaptureInState(currentState)) {
-                    resetPendingAudio()
+                    if (currentState !== SPEECH_STATE.RECOVERING) {
+                        resetPendingAudio()
+                    }
                     return
                 }
 
@@ -791,6 +851,7 @@ export function useVoiceSession({
                 if (rms >= VAD_RMS_THRESHOLD) {
                     if (currentState === SPEECH_STATE.READY_FOR_ANSWER) {
                         captureWindowIdRef.current = answerWindowIdRef.current
+                        captureQuestionIdRef.current = currentQuestionIdRef.current || ''
                         updateSpeechState(SPEECH_STATE.CAPTURING_ANSWER)
                     }
                     speechActiveRef.current = true
@@ -880,6 +941,7 @@ export function useVoiceSession({
             }
             closeEventSource()
             voiceSessionIdRef.current = ''
+            currentQuestionIdRef.current = ''
             lastSeenEventIdRef.current = 0
             replayTtsCutoffEventIdRef.current = 0
             sessionActiveRef.current = false
