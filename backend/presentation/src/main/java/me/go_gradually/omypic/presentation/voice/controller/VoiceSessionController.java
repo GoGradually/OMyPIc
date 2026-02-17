@@ -9,6 +9,7 @@ import me.go_gradually.omypic.application.voice.usecase.VoiceSessionUseCase;
 import me.go_gradually.omypic.presentation.voice.dto.VoiceAudioChunkRequest;
 import me.go_gradually.omypic.presentation.voice.dto.VoiceSessionCreateRequest;
 import me.go_gradually.omypic.presentation.voice.dto.VoiceSessionCreateResponse;
+import me.go_gradually.omypic.presentation.voice.dto.VoiceSessionRecoveryResponse;
 import me.go_gradually.omypic.presentation.voice.dto.VoiceSessionStopRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -46,13 +47,21 @@ public class VoiceSessionController {
     }
 
     @GetMapping(value = "/{voiceSessionId}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter events(@PathVariable("voiceSessionId") String voiceSessionId) {
+    public SseEmitter events(@PathVariable("voiceSessionId") String voiceSessionId,
+                             @RequestParam(name = "sinceEventId", required = false) Long sinceEventId) {
         SseEmitter emitter = new SseEmitter(Duration.ofMinutes(30).toMillis());
         AtomicBoolean open = new AtomicBoolean(true);
         VoiceEventSink sink = toSink(emitter, open);
         registerCallbacks(emitter, open, voiceSessionId, sink);
-        voiceSessionUseCase.registerSink(voiceSessionId, sink);
+        voiceSessionUseCase.registerSink(voiceSessionId, sink, sinceEventId);
         return emitter;
+    }
+
+    @GetMapping("/{voiceSessionId}/recovery")
+    public VoiceSessionRecoveryResponse recover(@PathVariable("voiceSessionId") String voiceSessionId,
+                                                @RequestParam(name = "lastSeenEventId", required = false) Long lastSeenEventId) {
+        VoiceSessionUseCase.RecoverySnapshot snapshot = voiceSessionUseCase.recover(voiceSessionId, lastSeenEventId);
+        return toRecoveryResponse(snapshot);
     }
 
     @PostMapping("/{voiceSessionId}/audio-chunks")
@@ -106,5 +115,36 @@ public class VoiceSessionController {
                            VoiceEventSink sink) {
         open.set(false);
         voiceSessionUseCase.unregisterSink(voiceSessionId, sink);
+    }
+
+    private VoiceSessionRecoveryResponse toRecoveryResponse(VoiceSessionUseCase.RecoverySnapshot snapshot) {
+        VoiceSessionRecoveryResponse response = new VoiceSessionRecoveryResponse();
+        response.setSessionId(snapshot.sessionId());
+        response.setVoiceSessionId(snapshot.voiceSessionId());
+        response.setActive(snapshot.active());
+        response.setStopped(snapshot.stopped());
+        response.setStopReason(snapshot.stopReason());
+        response.setCurrentTurnId(snapshot.currentTurnId());
+        response.setCurrentQuestion(toRecoveryQuestion(snapshot.currentQuestion()));
+        response.setTurnProcessing(snapshot.turnProcessing());
+        response.setHasBufferedAudio(snapshot.hasBufferedAudio());
+        response.setLastAcceptedChunkSequence(snapshot.lastAcceptedChunkSequence());
+        response.setLatestEventId(snapshot.latestEventId());
+        response.setReplayFromEventId(snapshot.replayFromEventId());
+        response.setGapDetected(snapshot.gapDetected());
+        return response;
+    }
+
+    private VoiceSessionRecoveryResponse.RecoveryQuestion toRecoveryQuestion(VoiceSessionUseCase.RecoveryQuestion question) {
+        if (question == null) {
+            return null;
+        }
+        VoiceSessionRecoveryResponse.RecoveryQuestion response = new VoiceSessionRecoveryResponse.RecoveryQuestion();
+        response.setId(question.id());
+        response.setText(question.text());
+        response.setGroup(question.group());
+        response.setGroupId(question.groupId());
+        response.setQuestionType(question.questionType());
+        return response;
     }
 }
