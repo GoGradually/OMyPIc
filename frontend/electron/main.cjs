@@ -291,8 +291,3 @@ ipcMain.handle('set-api-key', async (event, key) => {
     await keytar.setPassword(SERVICE, OPENAI_PROVIDER, key)
     return true
 })
-
-ipcMain.handle('delete-api-key', async () => {
-    await keytar.deletePassword(SERVICE, OPENAI_PROVIDER)
-    return true
-})

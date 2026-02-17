@@ -1,16 +1,7 @@
 import {describe, expect, it} from 'vitest'
-import {buildFeedbackFromVoice, parseVoiceEnvelope} from './voiceEvent.js'
+import {buildFeedbackFromVoice} from './voiceEvent.js'
 
 describe('voiceEvent', () => {
-    it('parses voice envelope safely', () => {
-        const parsed = parseVoiceEnvelope('{"type":"stt.partial","data":{"text":"hello"}}')
-
-        expect(parsed).toEqual({
-            type: 'stt.partial',
-            data: {text: 'hello'}
-        })
-    })
-
     it('builds feedback model with defaults', () => {
         const feedback = buildFeedbackFromVoice({
             policy: {

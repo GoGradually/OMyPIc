@@ -1,11 +1,3 @@
-export function parseVoiceEnvelope(raw) {
-    const envelope = JSON.parse(raw)
-    return {
-        type: envelope?.type || '',
-        data: envelope?.data || {}
-    }
-}
-
 function normalizeCorrection(detail = {}) {
     return {
         issue: detail.issue || '',
