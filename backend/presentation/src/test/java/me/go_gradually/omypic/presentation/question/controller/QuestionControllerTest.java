@@ -1,7 +1,6 @@
 package me.go_gradually.omypic.presentation.question.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import me.go_gradually.omypic.application.question.model.NextQuestion;
 import me.go_gradually.omypic.application.question.model.QuestionTagStat;
 import me.go_gradually.omypic.application.question.usecase.QuestionUseCase;
 import me.go_gradually.omypic.domain.question.QuestionGroupAggregate;
@@ -83,27 +82,6 @@ class QuestionControllerTest {
                 .andExpect(jsonPath("$.name").value("New Group"));
 
         verify(questionUseCase).createGroup("New Group", List.of("travel"));
-    }
-
-    @Test
-    void nextQuestion_mapsUseCaseResponse() throws Exception {
-        NextQuestion next = new NextQuestion();
-        next.setQuestionId("q9");
-        next.setText("What?");
-        next.setGroupId("g9");
-        next.setGroup("Travel");
-        next.setQuestionType("habit");
-        next.setSkipped(false);
-        when(questionUseCase.nextQuestion("s1")).thenReturn(next);
-
-        mockMvc.perform(get("/api/question-groups/next").param("sessionId", "s1"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.questionId").value("q9"))
-                .andExpect(jsonPath("$.text").value("What?"))
-                .andExpect(jsonPath("$.groupId").value("g9"))
-                .andExpect(jsonPath("$.group").value("Travel"))
-                .andExpect(jsonPath("$.questionType").value("habit"))
-                .andExpect(jsonPath("$.skipped").value(false));
     }
 
     @Test

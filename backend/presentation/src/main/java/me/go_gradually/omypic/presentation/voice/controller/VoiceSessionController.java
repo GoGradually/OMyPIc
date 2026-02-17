@@ -118,33 +118,33 @@ public class VoiceSessionController {
     }
 
     private VoiceSessionRecoveryResponse toRecoveryResponse(VoiceSessionUseCase.RecoverySnapshot snapshot) {
-        VoiceSessionRecoveryResponse response = new VoiceSessionRecoveryResponse();
-        response.setSessionId(snapshot.sessionId());
-        response.setVoiceSessionId(snapshot.voiceSessionId());
-        response.setActive(snapshot.active());
-        response.setStopped(snapshot.stopped());
-        response.setStopReason(snapshot.stopReason());
-        response.setCurrentTurnId(snapshot.currentTurnId());
-        response.setCurrentQuestion(toRecoveryQuestion(snapshot.currentQuestion()));
-        response.setTurnProcessing(snapshot.turnProcessing());
-        response.setHasBufferedAudio(snapshot.hasBufferedAudio());
-        response.setLastAcceptedChunkSequence(snapshot.lastAcceptedChunkSequence());
-        response.setLatestEventId(snapshot.latestEventId());
-        response.setReplayFromEventId(snapshot.replayFromEventId());
-        response.setGapDetected(snapshot.gapDetected());
-        return response;
+        return new VoiceSessionRecoveryResponse(
+                snapshot.sessionId(),
+                snapshot.voiceSessionId(),
+                snapshot.active(),
+                snapshot.stopped(),
+                snapshot.stopReason(),
+                snapshot.currentTurnId(),
+                toRecoveryQuestion(snapshot.currentQuestion()),
+                snapshot.turnProcessing(),
+                snapshot.hasBufferedAudio(),
+                snapshot.lastAcceptedChunkSequence(),
+                snapshot.latestEventId(),
+                snapshot.replayFromEventId(),
+                snapshot.gapDetected()
+        );
     }
 
     private VoiceSessionRecoveryResponse.RecoveryQuestion toRecoveryQuestion(VoiceSessionUseCase.RecoveryQuestion question) {
         if (question == null) {
             return null;
         }
-        VoiceSessionRecoveryResponse.RecoveryQuestion response = new VoiceSessionRecoveryResponse.RecoveryQuestion();
-        response.setId(question.id());
-        response.setText(question.text());
-        response.setGroup(question.group());
-        response.setGroupId(question.groupId());
-        response.setQuestionType(question.questionType());
-        return response;
+        return new VoiceSessionRecoveryResponse.RecoveryQuestion(
+                question.id(),
+                question.text(),
+                question.group(),
+                question.groupId(),
+                question.questionType()
+        );
     }
 }

@@ -5,8 +5,6 @@ import me.go_gradually.omypic.application.session.model.InvalidGroupTagsExceptio
 import me.go_gradually.omypic.application.session.model.ModeUpdateCommand;
 import me.go_gradually.omypic.application.session.usecase.SessionUseCase;
 import me.go_gradually.omypic.domain.session.ModeType;
-import me.go_gradually.omypic.domain.session.SessionId;
-import me.go_gradually.omypic.domain.session.SessionState;
 import me.go_gradually.omypic.presentation.TestBootApplication;
 import me.go_gradually.omypic.presentation.shared.error.ApiExceptionHandler;
 import org.junit.jupiter.api.Test;
@@ -44,11 +42,6 @@ class ModeControllerTest {
 
     @Test
     void update_usesUpdateMode_withSelectedGroupTags() throws Exception {
-        SessionState state = new SessionState(SessionId.of("s2"));
-        state.applyModeUpdate(ModeType.CONTINUOUS, 5);
-        state.configureQuestionGroups(java.util.Set.of("travel"), List.of("g1"));
-        when(sessionUseCase.updateMode(any(ModeUpdateCommand.class))).thenReturn(state);
-
         mockMvc.perform(put("/api/modes")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of(
@@ -57,11 +50,7 @@ class ModeControllerTest {
                                 "continuousBatchSize", 5,
                                 "selectedGroupTags", List.of("travel")
                         ))))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.sessionId").value("s2"))
-                .andExpect(jsonPath("$.mode").value("CONTINUOUS"))
-                .andExpect(jsonPath("$.continuousBatchSize").value(5))
-                .andExpect(jsonPath("$.selectedGroupTags[0]").value("travel"));
+                .andExpect(status().isNoContent());
 
         ArgumentCaptor<ModeUpdateCommand> captor = ArgumentCaptor.forClass(ModeUpdateCommand.class);
         verify(sessionUseCase).updateMode(captor.capture());

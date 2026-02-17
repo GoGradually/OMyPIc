@@ -1,10 +1,8 @@
 package me.go_gradually.omypic.presentation.question.controller;
 
-import me.go_gradually.omypic.application.question.model.NextQuestion;
 import me.go_gradually.omypic.application.question.model.QuestionTagStat;
 import me.go_gradually.omypic.application.question.usecase.QuestionUseCase;
 import me.go_gradually.omypic.domain.question.QuestionGroupAggregate;
-import me.go_gradually.omypic.presentation.question.dto.NextQuestionResponse;
 import me.go_gradually.omypic.presentation.question.dto.QuestionGroupRequest;
 import me.go_gradually.omypic.presentation.question.dto.QuestionGroupResponse;
 import me.go_gradually.omypic.presentation.question.dto.QuestionItemRequest;
@@ -65,27 +63,11 @@ public class QuestionController {
         return toResponse(service.deleteQuestion(groupId, itemId));
     }
 
-    @GetMapping("/next")
-    public NextQuestionResponse nextQuestion(@RequestParam("sessionId") String sessionId) {
-        return toResponse(service.nextQuestion(sessionId));
-    }
-
     @GetMapping("/tags/stats")
     public List<QuestionTagStatResponse> tagStats() {
         return service.listTagStats().stream()
                 .map(this::toResponse)
                 .toList();
-    }
-
-    private NextQuestionResponse toResponse(NextQuestion result) {
-        NextQuestionResponse response = new NextQuestionResponse();
-        response.setQuestionId(result.getQuestionId());
-        response.setText(result.getText());
-        response.setGroupId(result.getGroupId());
-        response.setGroup(result.getGroup());
-        response.setQuestionType(result.getQuestionType());
-        response.setSkipped(result.isSkipped());
-        return response;
     }
 
     private QuestionTagStatResponse toResponse(QuestionTagStat stat) {
