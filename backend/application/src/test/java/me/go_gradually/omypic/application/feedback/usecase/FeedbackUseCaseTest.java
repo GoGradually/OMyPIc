@@ -215,11 +215,20 @@ class FeedbackUseCaseTest {
 
         assertTrue(result.isGenerated());
         ArgumentCaptor<String> systemPromptCaptor = ArgumentCaptor.forClass(String.class);
-        verify(openAiClient, atLeastOnce()).generate(anyString(), anyString(), systemPromptCaptor.capture(), anyString(), any(), any());
-        String systemPrompt = systemPromptCaptor.getAllValues().get(0);
-        assertTrue(systemPrompt.contains("summary, corrections, recommendations, exampleAnswer, rulebookEvidence"));
-        assertTrue(systemPrompt.contains("\"grammar\": {\"issue\": \"string\", \"fix\": \"string\"}"));
-        assertTrue(systemPrompt.contains("\"filler\": {\"term\": \"string\", \"usage\": \"string\"}"));
+        ArgumentCaptor<String> userPromptCaptor = ArgumentCaptor.forClass(String.class);
+        verify(openAiClient, atLeastOnce()).generate(anyString(), anyString(), systemPromptCaptor.capture(), userPromptCaptor.capture(), any(), any());
+        List<String> systemPrompts = systemPromptCaptor.getAllValues();
+        String firstSystemPrompt = systemPrompts.get(0);
+        assertTrue(firstSystemPrompt.contains("summary, corrections, recommendations, exampleAnswer, rulebookEvidence"));
+        assertTrue(firstSystemPrompt.contains("\"grammar\": {\"issue\": \"string\", \"fix\": \"string\"}"));
+        assertTrue(firstSystemPrompt.contains("\"filler\": {\"term\": \"string\", \"usage\": \"string\"}"));
+        assertTrue(firstSystemPrompt.contains("recommendations.term/usage는 \"추가 제안\" 전용이다"));
+        assertTrue(firstSystemPrompt.contains("기존 표현을 제거하라는 피드백은 recommendation에 절대 포함하지 마라"));
+        assertTrue(systemPrompts.stream().anyMatch(prompt -> prompt.contains("중요 규칙(절대 준수):")));
+        assertTrue(systemPrompts.stream().anyMatch(prompt -> prompt.contains("금지 표현 예시: \"remove\", \"eliminate\"")));
+        List<String> userPrompts = userPromptCaptor.getAllValues();
+        assertTrue(userPrompts.stream().anyMatch(prompt -> prompt.contains("출력 점검 체크리스트:")));
+        assertTrue(userPrompts.stream().anyMatch(prompt -> prompt.contains("usage가 \"문장에 어떻게 덧붙일지\"를 설명하는가?")));
     }
 
     @Test

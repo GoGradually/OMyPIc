@@ -99,7 +99,8 @@ Function 35%%, Content&Context 35%%, Text Type 20%%, Accuracy 10%%
 
 위에 설명된 내용이 사용자가 취하고 있는 OPIc 고득점 전략이다.
 해당 전략을 바탕으로, 사용자의 답변이 전략을 잘 지켰는지 피드백을 수행한다.
-마지막으로, 사용자의 답변에 들어갈 법한 좋은 표현으로 filler words와 adjective, adverb를 각각 추천하고 사용법을 설명하라.
+마지막으로 recommendation은 반드시 "답변에 새로 추가하면 자연스러워지는 표현"만 제안하라.
+기존 표현을 제거하라는 피드백은 recommendation에 절대 포함하지 마라.
 
 ---
 이제 본격적으로 학습을 도와라.
@@ -126,6 +127,7 @@ JSON 타입 계약(반드시 동일하게 준수):
 - summary: 1~2문장
 - corrections: grammar/expression/logic 모두 필수
 - recommendations: filler/adjective/adverb 모두 필수
+- recommendations.term/usage는 "추가 제안" 전용이다. 삭제/금지/억제 지시 문구를 포함하면 안 된다.
 - exampleAnswer: 사용자 답변 길이의 0.8~1.2배
 - 본문 텍스트는 %s로 작성하라.
 """;
@@ -164,6 +166,13 @@ JSON 타입 계약(반드시 동일하게 준수):
 중복 처리 지침:
 %s
 
+중요 규칙(절대 준수):
+- recommendation은 "추가하면 자연스러워지는 표현"만 제안한다.
+- 사용자가 이미 쓴 filler/adjective/adverb를 "빼라/줄여라/제거하라/남용하지 마라" 형태로 지적하지 마라.
+- 추천은 교정/삭제 지시가 아니라, 현재 문장을 더 자연스럽게 확장하는 "추가 제안"이어야 한다.
+- 각 항목 usage에는 반드시 "어떤 문맥에서 문장에 덧붙이면 자연스러워지는지"를 1문장으로 쓴다.
+- 금지 표현 예시: "remove", "eliminate", "avoid using", "stop using", "빼라", "제거", "남용"
+
 summary/corrections/exampleAnswer/rulebookEvidence는 간결하게 작성해도 되지만 JSON 스키마를 반드시 만족해야 한다.
 """;
     private static final String RECOMMENDATION_USER_PROMPT_TEMPLATE = """
@@ -185,6 +194,11 @@ summary/corrections/exampleAnswer/rulebookEvidence는 간결하게 작성해도 
 - Filler: %s
 - Adjective: %s
 - Adverb: %s
+
+출력 점검 체크리스트:
+- 내가 제안한 term이 "삭제 지시"가 아닌가?
+- usage가 "문장에 어떻게 덧붙일지"를 설명하는가?
+- 현재 질문/답변 맥락에 직접 연결되는가?
 """;
 
     private final Map<String, LlmClient> clients;
