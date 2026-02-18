@@ -94,4 +94,16 @@ class SessionStateTest {
         assertEquals("q2", state.buildPromptContext().recentTurns().get(0).question());
         assertEquals("q3", state.buildPromptContext().recentTurns().get(1).question());
     }
+
+    @Test
+    void appendLlmRecommendationTerms_keepsRecentWindow() {
+        SessionState state = new SessionState(SessionId.of("session-6"));
+        state.appendLlmRecommendationTerms("well", "vivid", "definitely", 2);
+        state.appendLlmRecommendationTerms("actually", "memorable", "clearly", 2);
+        state.appendLlmRecommendationTerms("to be honest", "cozy", "personally", 2);
+
+        assertEquals(2, state.buildPromptContext().recentRecommendations().size());
+        assertEquals("actually", state.buildPromptContext().recentRecommendations().get(0).fillerTerm());
+        assertEquals("to be honest", state.buildPromptContext().recentRecommendations().get(1).fillerTerm());
+    }
 }

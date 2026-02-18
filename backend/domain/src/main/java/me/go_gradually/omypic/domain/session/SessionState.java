@@ -19,6 +19,7 @@ public class SessionState {
     private final SessionId sessionId;
     private final Deque<String> sttSegments = new ArrayDeque<>();
     private final Deque<LlmPromptContext.TurnRecord> llmRecentTurns = new ArrayDeque<>();
+    private final Deque<LlmPromptContext.RecommendationRecord> llmRecentRecommendations = new ArrayDeque<>();
     private final Set<String> selectedGroupTags = new LinkedHashSet<>();
     private final List<String> candidateGroupOrder = new ArrayList<>();
     private final Map<String, Integer> groupQuestionIndices = new ConcurrentHashMap<>();
@@ -198,7 +199,11 @@ public class SessionState {
     }
 
     public LlmPromptContext buildPromptContext() {
-        return new LlmPromptContext(llmSummary, new ArrayList<>(llmRecentTurns));
+        return new LlmPromptContext(
+                llmSummary,
+                new ArrayList<>(llmRecentTurns),
+                new ArrayList<>(llmRecentRecommendations)
+        );
     }
 
     public void appendLlmTurn(String question, String answer, String feedbackSummary, int maxRecentTurns) {
@@ -206,6 +211,17 @@ public class SessionState {
         int limit = Math.max(1, maxRecentTurns);
         while (llmRecentTurns.size() > limit) {
             llmRecentTurns.removeFirst();
+        }
+    }
+
+    public void appendLlmRecommendationTerms(String fillerTerm,
+                                             String adjectiveTerm,
+                                             String adverbTerm,
+                                             int maxRecentTurns) {
+        llmRecentRecommendations.addLast(new LlmPromptContext.RecommendationRecord(fillerTerm, adjectiveTerm, adverbTerm));
+        int limit = Math.max(1, maxRecentTurns);
+        while (llmRecentRecommendations.size() > limit) {
+            llmRecentRecommendations.removeFirst();
         }
     }
 
