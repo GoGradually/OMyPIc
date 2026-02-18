@@ -68,7 +68,7 @@ public final class Feedback {
                                List<RulebookContext> contexts) {
         String normalizedSummary = normalizeSummary(language, constraints.summaryMaxChars());
         List<String> points = normalizeCorrectionPoints(language);
-        List<String> recommendationPoints = normalizeRecommendationPoints(language);
+        List<String> recommendationPoints = normalizeRecommendationPoints();
         String example = normalizeExampleAnswer(userText, language, constraints.exampleMinRatio(), constraints.exampleMaxRatio());
         List<String> evidence = normalizeRulebookEvidence(contexts);
         return Feedback.of(
@@ -130,12 +130,12 @@ public final class Feedback {
         return points;
     }
 
-    private List<String> normalizeRecommendationPoints(FeedbackLanguage language) {
+    private List<String> normalizeRecommendationPoints() {
         List<String> rawPoints = collectRawPoints();
         return List.of(
-                resolveFillerPoint(rawPoints, language),
-                resolveAdjectivePoint(rawPoints, language),
-                resolveAdverbPoint(rawPoints, language)
+                resolveFillerPoint(rawPoints),
+                resolveAdjectivePoint(rawPoints),
+                resolveAdverbPoint(rawPoints)
         );
     }
 
@@ -156,13 +156,13 @@ public final class Feedback {
         return isFillerPoint(point) || isAdjectivePoint(point) || isAdverbPoint(point);
     }
 
-    private String resolveFillerPoint(List<String> rawPoints, FeedbackLanguage language) {
+    private String resolveFillerPoint(List<String> rawPoints) {
         for (String point : rawPoints) {
             if (isFillerPoint(point)) {
                 return normalizeFillerPoint(point);
             }
         }
-        return defaultFillerPoint(language);
+        return "Filler:";
     }
 
     private boolean isFillerPoint(String point) {
@@ -188,29 +188,22 @@ public final class Feedback {
         return "Filler: " + normalized;
     }
 
-    private String defaultFillerPoint(FeedbackLanguage language) {
-        if (language != null && language.isEnglish()) {
-            return "Filler: Well - Use it at the beginning of a sentence to buy a short moment before your main point.";
-        }
-        return "Filler: Well - 문장 시작에서 생각을 정리할 짧은 시간을 벌 때 자연스럽게 사용하세요.";
-    }
-
-    private String resolveAdjectivePoint(List<String> rawPoints, FeedbackLanguage language) {
+    private String resolveAdjectivePoint(List<String> rawPoints) {
         for (String point : rawPoints) {
             if (isAdjectivePoint(point)) {
                 return normalizeAdjectivePoint(point);
             }
         }
-        return defaultAdjectivePoint(language);
+        return "Adjective:";
     }
 
-    private String resolveAdverbPoint(List<String> rawPoints, FeedbackLanguage language) {
+    private String resolveAdverbPoint(List<String> rawPoints) {
         for (String point : rawPoints) {
             if (isAdverbPoint(point)) {
                 return normalizeAdverbPoint(point);
             }
         }
-        return defaultAdverbPoint(language);
+        return "Adverb:";
     }
 
     private boolean isAdjectivePoint(String point) {
@@ -250,20 +243,6 @@ public final class Feedback {
             return body.isEmpty() ? englishPrefix : englishPrefix + " " + body;
         }
         return englishPrefix + " " + normalized;
-    }
-
-    private String defaultAdjectivePoint(FeedbackLanguage language) {
-        if (language != null && language.isEnglish()) {
-            return "Adjective: impressive - Use it to describe your experience more vividly.";
-        }
-        return "Adjective: vivid - 상황을 더 생생하게 설명할 때 사용하세요.";
-    }
-
-    private String defaultAdverbPoint(FeedbackLanguage language) {
-        if (language != null && language.isEnglish()) {
-            return "Adverb: definitely - Use it to emphasize certainty naturally.";
-        }
-        return "Adverb: clearly - 의견의 확신도를 자연스럽게 강조할 때 사용하세요.";
     }
 
     private void fillUntilThree(List<String> points, FeedbackLanguage language) {
