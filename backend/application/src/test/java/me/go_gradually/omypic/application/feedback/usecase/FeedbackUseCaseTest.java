@@ -199,7 +199,7 @@ class FeedbackUseCaseTest {
         FeedbackResult result = useCase.generateFeedback("key", command("s4-fallback", "openai", "en", "answer text"));
 
         assertTrue(result.isGenerated());
-        verify(metrics).incrementFeedbackSchemaFallback();
+        verify(metrics, atLeastOnce()).incrementFeedbackSchemaFallback();
     }
 
     @Test
@@ -215,8 +215,8 @@ class FeedbackUseCaseTest {
 
         assertTrue(result.isGenerated());
         ArgumentCaptor<String> systemPromptCaptor = ArgumentCaptor.forClass(String.class);
-        verify(openAiClient).generate(anyString(), anyString(), systemPromptCaptor.capture(), anyString(), any(), any());
-        String systemPrompt = systemPromptCaptor.getValue();
+        verify(openAiClient, atLeastOnce()).generate(anyString(), anyString(), systemPromptCaptor.capture(), anyString(), any(), any());
+        String systemPrompt = systemPromptCaptor.getAllValues().get(0);
         assertTrue(systemPrompt.contains("summary, corrections, recommendations, exampleAnswer, rulebookEvidence"));
         assertTrue(systemPrompt.contains("\"grammar\": {\"issue\": \"string\", \"fix\": \"string\"}"));
         assertTrue(systemPrompt.contains("\"filler\": {\"term\": \"string\", \"usage\": \"string\"}"));
@@ -252,7 +252,7 @@ class FeedbackUseCaseTest {
         FeedbackResult result = useCase.generateFeedback("key", command("s5-retry", "openai", "en", "answer"));
 
         assertTrue(result.isGenerated());
-        verify(openAiClient, times(2)).generate(anyString(), anyString(), anyString(), anyString(), any(), any());
+        verify(openAiClient, times(3)).generate(anyString(), anyString(), anyString(), anyString(), any(), any());
         verify(openAiClient, times(1)).bootstrap(anyString(), anyString(), anyString(), any());
         verify(metrics, never()).incrementFeedbackError();
     }
@@ -268,8 +268,23 @@ class FeedbackUseCaseTest {
                     LlmConversationState previous = invocation.getArgument(4);
                     String conversationId = previous.conversationId().isBlank() ? "conv-1" : previous.conversationId();
                     int nextTurnCount = previous.turnCountSinceRebase() + 1;
+                    Feedback feedback = Feedback.of(
+                            "summary",
+                            new Corrections(
+                                    new CorrectionDetail("tense", "use past tense"),
+                                    new CorrectionDetail("wording", "use specific vocabulary"),
+                                    new CorrectionDetail("reason", "add one reason")
+                            ),
+                            new Recommendations(
+                                    new RecommendationDetail("Well-" + nextTurnCount, "Use this to start naturally."),
+                                    new RecommendationDetail("impressive-" + nextTurnCount, "Use it for vivid detail."),
+                                    new RecommendationDetail("definitely-" + nextTurnCount, "Use it for confidence.")
+                            ),
+                            "tiny",
+                            List.of()
+                    );
                     return new LlmGenerateResult(
-                            successResult().feedback(),
+                            feedback,
                             List.of(),
                             new LlmConversationState(conversationId, "resp-" + nextTurnCount, nextTurnCount),
                             "summary"
@@ -282,13 +297,16 @@ class FeedbackUseCaseTest {
         }
 
         ArgumentCaptor<LlmConversationState> captor = ArgumentCaptor.forClass(LlmConversationState.class);
-        verify(openAiClient, times(7)).generate(anyString(), anyString(), anyString(), anyString(), captor.capture(), any());
+        verify(openAiClient, times(14)).generate(anyString(), anyString(), anyString(), anyString(), captor.capture(), any());
         verify(openAiClient, never()).bootstrap(anyString(), anyString(), anyString(), any());
         List<LlmConversationState> values = captor.getAllValues();
         assertEquals("", values.get(0).conversationId());
-        assertEquals("conv-1", values.get(1).conversationId());
-        assertEquals("conv-1", values.get(5).conversationId());
-        assertEquals("", values.get(6).conversationId());
+        assertEquals("", values.get(1).conversationId());
+        assertEquals("conv-1", values.get(2).conversationId());
+        assertEquals("conv-1", values.get(10).conversationId());
+        assertEquals("", values.get(11).conversationId());
+        assertEquals("", values.get(12).conversationId());
+        assertEquals("", values.get(13).conversationId());
     }
 
     @Test
@@ -362,8 +380,59 @@ class FeedbackUseCaseTest {
 
         assertNotNull(feedback);
         verify(rulebookUseCase, times(1)).searchContextsForTurn(QuestionGroup.of("A"), "Question text", 2);
-        verify(openAiClient).generate(anyString(), anyString(), anyString(), contains("Answer text"), any(), any());
+        verify(openAiClient, atLeastOnce()).generate(anyString(), anyString(), anyString(), contains("Answer text"), any(), any());
         verify(wrongNoteUseCase).addFeedback(any(Feedback.class));
+    }
+
+    @Test
+    void generateFeedback_recommendationRepairTracksDuplicateWhenItCannotImprove() throws Exception {
+        stubDefaultFeedbackPolicy();
+        SessionState state = new SessionState(SessionId.of("s-duplicate"));
+        state.appendLlmRecommendationTerms("well", "impressive", "definitely", 5);
+        when(sessionStore.getOrCreate(SessionId.of("s-duplicate"))).thenReturn(state);
+        when(rulebookUseCase.searchContexts(anyString())).thenReturn(List.of());
+        when(openAiClient.generate(anyString(), anyString(), anyString(), anyString(), any(), any()))
+                .thenReturn(successResult())
+                .thenReturn(successResult())
+                .thenReturn(successResult());
+
+        FeedbackResult result = useCase.generateFeedback("key", command("s-duplicate", "openai", "en", "answer"));
+
+        assertTrue(result.isGenerated());
+        verify(openAiClient, times(3)).generate(anyString(), anyString(), anyString(), anyString(), any(), any());
+        verify(metrics).incrementRecommendationRepairAttempt();
+        verify(metrics).incrementRecommendationDuplicateDetected();
+        verify(metrics, never()).incrementRecommendationRepairSuccess();
+        verify(metrics, never()).incrementRecommendationMinimalFallback();
+    }
+
+    @Test
+    void generateFeedback_appliesMinimalRecommendationFallbackWhenRepairFails() throws Exception {
+        stubDefaultFeedbackPolicy();
+        SessionState state = new SessionState(SessionId.of("s-minimal"));
+        when(sessionStore.getOrCreate(SessionId.of("s-minimal"))).thenReturn(state);
+        when(rulebookUseCase.searchContexts(anyString())).thenReturn(List.of());
+        when(openAiClient.generate(anyString(), anyString(), anyString(), anyString(), any(), any()))
+                .thenReturn(resultWithRecommendations(
+                        new RecommendationDetail("", ""),
+                        new RecommendationDetail("", ""),
+                        new RecommendationDetail("", "")
+                ))
+                .thenThrow(new IllegalStateException("candidate failed"))
+                .thenThrow(new IllegalStateException("repair failed"));
+
+        FeedbackResult result = useCase.generateFeedback("key", command("s-minimal", "openai", "en", "answer text"));
+
+        assertTrue(result.isGenerated());
+        assertTrue(result.getFeedback().getRecommendations().filler().term().isBlank());
+        assertFalse(result.getFeedback().getRecommendations().filler().usage().isBlank());
+        assertTrue(result.getFeedback().getRecommendations().adjective().term().isBlank());
+        assertFalse(result.getFeedback().getRecommendations().adjective().usage().isBlank());
+        assertTrue(result.getFeedback().getRecommendations().adverb().term().isBlank());
+        assertFalse(result.getFeedback().getRecommendations().adverb().usage().isBlank());
+        verify(openAiClient, times(3)).generate(anyString(), anyString(), anyString(), anyString(), any(), any());
+        verify(metrics).incrementRecommendationRepairAttempt();
+        verify(metrics).incrementRecommendationMinimalFallback();
     }
 
     private LlmGenerateResult successResult() {
@@ -379,6 +448,28 @@ class FeedbackUseCaseTest {
                         new RecommendationDetail("impressive", "Use it for vivid detail."),
                         new RecommendationDetail("definitely", "Use it for confidence.")
                 ),
+                "tiny",
+                List.of()
+        );
+        return new LlmGenerateResult(
+                feedback,
+                List.of(),
+                new LlmConversationState("conv-1", "resp-1", 1),
+                "summary"
+        );
+    }
+
+    private LlmGenerateResult resultWithRecommendations(RecommendationDetail filler,
+                                                        RecommendationDetail adjective,
+                                                        RecommendationDetail adverb) {
+        Feedback feedback = Feedback.of(
+                "summary",
+                new Corrections(
+                        new CorrectionDetail("tense", "use past tense"),
+                        new CorrectionDetail("wording", "use specific vocabulary"),
+                        new CorrectionDetail("reason", "add one reason")
+                ),
+                new Recommendations(filler, adjective, adverb),
                 "tiny",
                 List.of()
         );

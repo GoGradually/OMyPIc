@@ -14,6 +14,8 @@ import me.go_gradually.omypic.application.wrongnote.usecase.WrongNoteUseCase;
 import me.go_gradually.omypic.domain.feedback.Feedback;
 import me.go_gradually.omypic.domain.feedback.FeedbackConstraints;
 import me.go_gradually.omypic.domain.feedback.FeedbackLanguage;
+import me.go_gradually.omypic.domain.feedback.RecommendationDetail;
+import me.go_gradually.omypic.domain.feedback.Recommendations;
 import me.go_gradually.omypic.domain.question.QuestionGroup;
 import me.go_gradually.omypic.domain.rulebook.RulebookContext;
 import me.go_gradually.omypic.domain.session.SessionId;
@@ -21,10 +23,12 @@ import me.go_gradually.omypic.domain.session.SessionState;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
@@ -35,7 +39,10 @@ public class FeedbackUseCase {
     private static final String NO_RULEBOOK_DOC = "(문서 없음)";
     private static final int DEFAULT_CONVERSATION_REBASE_TURNS = 6;
     private static final int RECENT_TURNS_LIMIT = 6;
+    private static final int RECENT_RECOMMENDATIONS_LIMIT = 5;
     private static final String EMPTY_SYSTEM_PROMPT = "";
+    private static final String UNKNOWN_QUESTION = "(질문 없음)";
+    private static final String NO_RECENT_RECOMMENDATIONS = "(없음)";
     private static final String BASE_COACH_PROMPT_TEMPLATE = """
 지금부터 너는 OPIc(Oral Proficiency Interview Computer) 학습용 선생님이다.
 
@@ -144,6 +151,40 @@ JSON 타입 계약(반드시 동일하게 준수):
 %s
 
 이 문서 기반 + 문법 및 단어 뉘앙스의 사용을 피드백하라.
+""";
+    private static final String RECOMMENDATION_SYSTEM_PROMPT_TEMPLATE = """
+지금부터 너의 핵심 임무는 현재 답변에 가장 어울리는 추천 표현 3개를 생성하는 것이다.
+추천 표현 카테고리는 filler/adjective/adverb 각 1개이며, 사용자가 지금 말한 문맥과 의미를 직접 반영해야 한다.
+문장에 어울리지 않는 상투 표현 반복은 피하고, 최근 추천 이력과 겹칠 경우 다른 표현을 우선 검토하라.
+단, 문맥 적합도가 가장 높다면 중복을 허용해도 된다.
+
+다음은 적용할 전략/룰북이다.
+%s
+
+중복 처리 지침:
+%s
+
+summary/corrections/exampleAnswer/rulebookEvidence는 간결하게 작성해도 되지만 JSON 스키마를 반드시 만족해야 한다.
+""";
+    private static final String RECOMMENDATION_USER_PROMPT_TEMPLATE = """
+# 추천 표현 전용 생성
+
+질문:
+%s
+
+사용자 답변:
+%s
+
+룰북 문서 1:
+%s
+
+룰북 문서 2:
+%s
+
+최근 5턴 추천 이력(중복 회피 참고):
+- Filler: %s
+- Adjective: %s
+- Adverb: %s
 """;
 
     private final Map<String, LlmClient> clients;
@@ -346,15 +387,30 @@ JSON 타입 계약(반드시 동일하게 준수):
             );
             logSchemaFallbackIfNeeded(command, provider, generated.schemaFallbackReasons());
             Feedback feedback = generated.feedback();
-            FeedbackConstraints constraints = new FeedbackConstraints(
-                    feedbackPolicy.getSummaryMaxChars(),
-                    feedbackPolicy.getExampleMinRatio(),
-                    feedbackPolicy.getExampleMaxRatio()
-            );
+            FeedbackConstraints constraints = feedbackConstraints();
             feedback = feedback.normalized(constraints, text, language, contexts);
+            feedback = applyRecommendationStrategy(
+                    apiKey,
+                    command,
+                    client,
+                    provider,
+                    language,
+                    feedback,
+                    constraints,
+                    contexts,
+                    questionText,
+                    text,
+                    promptContext
+            );
             safeState.updateConversationState(generated.conversationState());
             safeState.setLlmSummary(resolveSummaryForNextTurn(generated, feedback));
             safeState.appendLlmTurn(questionText, text, feedback.getSummary(), RECENT_TURNS_LIMIT);
+            safeState.appendLlmRecommendationTerms(
+                    feedback.getRecommendations().filler().term(),
+                    feedback.getRecommendations().adjective().term(),
+                    feedback.getRecommendations().adverb().term(),
+                    RECENT_RECOMMENDATIONS_LIMIT
+            );
             metrics.recordFeedbackLatency(Duration.between(start, Instant.now()));
             wrongNoteUseCase.addFeedback(feedback);
             return feedback;
@@ -407,6 +463,297 @@ JSON 타입 계약(반드시 동일하게 준수):
                     promptContext
             );
         }
+    }
+
+    private FeedbackConstraints feedbackConstraints() {
+        return new FeedbackConstraints(
+                feedbackPolicy.getSummaryMaxChars(),
+                feedbackPolicy.getExampleMinRatio(),
+                feedbackPolicy.getExampleMaxRatio()
+        );
+    }
+
+    private Feedback applyRecommendationStrategy(String apiKey,
+                                                 FeedbackCommand command,
+                                                 LlmClient client,
+                                                 String provider,
+                                                 FeedbackLanguage language,
+                                                 Feedback baseFeedback,
+                                                 FeedbackConstraints constraints,
+                                                 List<RulebookContext> contexts,
+                                                 String questionText,
+                                                 String answerText,
+                                                 LlmPromptContext promptContext) {
+        RecommendationHistory history = recommendationHistory(promptContext);
+        Recommendations selected = baseFeedback.getRecommendations();
+        RecommendationEvaluation selectedEvaluation = evaluateRecommendations(selected, history);
+
+        if (shouldGenerateRecommendationCandidate(selectedEvaluation)) {
+            Recommendations candidate = generateRecommendationCandidate(
+                    apiKey,
+                    command,
+                    client,
+                    provider,
+                    language,
+                    constraints,
+                    contexts,
+                    questionText,
+                    answerText,
+                    history,
+                    false
+            );
+            RecommendationEvaluation candidateEvaluation = evaluateRecommendations(candidate, history);
+            if (isBetterRecommendation(candidateEvaluation, selectedEvaluation)) {
+                selected = candidate;
+                selectedEvaluation = candidateEvaluation;
+            }
+
+            if (shouldAttemptRecommendationRepair(selectedEvaluation)) {
+                metrics.incrementRecommendationRepairAttempt();
+                Recommendations repaired = generateRecommendationCandidate(
+                        apiKey,
+                        command,
+                        client,
+                        provider,
+                        language,
+                        constraints,
+                        contexts,
+                        questionText,
+                        answerText,
+                        history,
+                        true
+                );
+                RecommendationEvaluation repairedEvaluation = evaluateRecommendations(repaired, history);
+                if (isBetterRecommendation(repairedEvaluation, selectedEvaluation)) {
+                    selected = repaired;
+                    selectedEvaluation = repairedEvaluation;
+                    metrics.incrementRecommendationRepairSuccess();
+                }
+            }
+        }
+
+        RecommendationCompletion completion = ensureRecommendationCompleteness(selected, language);
+        if (completion.minimalFallbackApplied()) {
+            metrics.incrementRecommendationMinimalFallback();
+        }
+        RecommendationEvaluation finalEvaluation = evaluateRecommendations(completion.recommendations(), history);
+        if (finalEvaluation.duplicateCount() > 0) {
+            metrics.incrementRecommendationDuplicateDetected();
+        }
+        return Feedback.of(
+                baseFeedback.getSummary(),
+                baseFeedback.getCorrections(),
+                completion.recommendations(),
+                baseFeedback.getExampleAnswer(),
+                baseFeedback.getRulebookEvidence()
+        );
+    }
+
+    private boolean shouldGenerateRecommendationCandidate(RecommendationEvaluation evaluation) {
+        return true;
+    }
+
+    private boolean shouldAttemptRecommendationRepair(RecommendationEvaluation evaluation) {
+        return evaluation.missingCount() > 0 || evaluation.duplicateCount() >= 2;
+    }
+
+    private Recommendations generateRecommendationCandidate(String apiKey,
+                                                            FeedbackCommand command,
+                                                            LlmClient client,
+                                                            String provider,
+                                                            FeedbackLanguage language,
+                                                            FeedbackConstraints constraints,
+                                                            List<RulebookContext> contexts,
+                                                            String questionText,
+                                                            String answerText,
+                                                            RecommendationHistory history,
+                                                            boolean strictDeduplication) {
+        String systemPrompt = buildRecommendationSystemPrompt(language.value(), contexts, strictDeduplication);
+        String userPrompt = buildRecommendationUserPrompt(questionText, answerText, contexts, history);
+        try {
+            LlmGenerateResult generated = client.generate(
+                    apiKey,
+                    command.getModel(),
+                    systemPrompt,
+                    userPrompt,
+                    LlmConversationState.empty(),
+                    LlmPromptContext.empty()
+            );
+            logSchemaFallbackIfNeeded(command, provider, generated.schemaFallbackReasons());
+            Feedback normalized = generated.feedback().normalized(constraints, answerText, language, contexts);
+            return normalized.getRecommendations();
+        } catch (Exception error) {
+            log.warning(String.format(
+                    "recommendation generation failed sessionId=%s model=%s strict=%s reason=%s",
+                    command.getSessionId(),
+                    command.getModel(),
+                    strictDeduplication,
+                    failureMessage(error)
+            ));
+            return emptyRecommendations();
+        }
+    }
+
+    private String buildRecommendationSystemPrompt(String language,
+                                                   List<RulebookContext> contexts,
+                                                   boolean strictDeduplication) {
+        String duplicateGuideline = strictDeduplication
+                ? "최근 추천어와 같은 term은 피하고, 특히 이미 중복된 항목은 다른 표현으로 교체하라."
+                : "최근 추천어와의 중복을 줄이되, 현재 문맥에 가장 적합하면 중복을 허용해도 된다.";
+        return RECOMMENDATION_SYSTEM_PROMPT_TEMPLATE.formatted(renderStrategy(contexts), duplicateGuideline)
+                + "\n\n"
+                + structuredOutputInstruction(promptLanguage(language));
+    }
+
+    private String buildRecommendationUserPrompt(String questionText,
+                                                 String answerText,
+                                                 List<RulebookContext> contexts,
+                                                 RecommendationHistory history) {
+        String safeQuestion = trimText(questionText);
+        if (safeQuestion.isBlank()) {
+            safeQuestion = UNKNOWN_QUESTION;
+        }
+        return RECOMMENDATION_USER_PROMPT_TEMPLATE.formatted(
+                safeQuestion,
+                trimText(answerText),
+                rulebookDoc(contexts, 0),
+                rulebookDoc(contexts, 1),
+                joinHistory(history.fillerTerms()),
+                joinHistory(history.adjectiveTerms()),
+                joinHistory(history.adverbTerms())
+        );
+    }
+
+    private RecommendationHistory recommendationHistory(LlmPromptContext promptContext) {
+        if (promptContext == null || promptContext.recentRecommendations() == null || promptContext.recentRecommendations().isEmpty()) {
+            return RecommendationHistory.empty();
+        }
+        Set<String> fillers = new LinkedHashSet<>();
+        Set<String> adjectives = new LinkedHashSet<>();
+        Set<String> adverbs = new LinkedHashSet<>();
+        for (LlmPromptContext.RecommendationRecord record : promptContext.recentRecommendations()) {
+            appendTerm(fillers, record.fillerTerm());
+            appendTerm(adjectives, record.adjectiveTerm());
+            appendTerm(adverbs, record.adverbTerm());
+        }
+        return new RecommendationHistory(List.copyOf(fillers), List.copyOf(adjectives), List.copyOf(adverbs));
+    }
+
+    private void appendTerm(Set<String> terms, String term) {
+        String normalized = normalizeTerm(term);
+        if (!normalized.isBlank()) {
+            terms.add(normalized);
+        }
+    }
+
+    private RecommendationEvaluation evaluateRecommendations(Recommendations recommendations,
+                                                             RecommendationHistory history) {
+        Recommendations safeRecommendations = recommendations == null ? emptyRecommendations() : recommendations;
+        RecommendationHistory safeHistory = history == null ? RecommendationHistory.empty() : history;
+        int missing = 0;
+        int duplicates = 0;
+        if (isRecommendationMissing(safeRecommendations.filler())) {
+            missing += 1;
+        } else if (isDuplicateTerm(safeRecommendations.filler().term(), safeHistory.fillerTerms())) {
+            duplicates += 1;
+        }
+        if (isRecommendationMissing(safeRecommendations.adjective())) {
+            missing += 1;
+        } else if (isDuplicateTerm(safeRecommendations.adjective().term(), safeHistory.adjectiveTerms())) {
+            duplicates += 1;
+        }
+        if (isRecommendationMissing(safeRecommendations.adverb())) {
+            missing += 1;
+        } else if (isDuplicateTerm(safeRecommendations.adverb().term(), safeHistory.adverbTerms())) {
+            duplicates += 1;
+        }
+        return new RecommendationEvaluation(missing, duplicates);
+    }
+
+    private boolean isRecommendationMissing(RecommendationDetail detail) {
+        if (detail == null) {
+            return true;
+        }
+        return detail.term().isBlank() && detail.usage().isBlank();
+    }
+
+    private boolean isDuplicateTerm(String term, List<String> history) {
+        if (history == null || history.isEmpty()) {
+            return false;
+        }
+        String normalized = normalizeTerm(term);
+        return !normalized.isBlank() && history.contains(normalized);
+    }
+
+    private String normalizeTerm(String term) {
+        return term == null ? "" : term.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private boolean isBetterRecommendation(RecommendationEvaluation candidate,
+                                           RecommendationEvaluation baseline) {
+        if (candidate.missingCount() != baseline.missingCount()) {
+            return candidate.missingCount() < baseline.missingCount();
+        }
+        if (candidate.duplicateCount() != baseline.duplicateCount()) {
+            return candidate.duplicateCount() < baseline.duplicateCount();
+        }
+        return false;
+    }
+
+    private RecommendationCompletion ensureRecommendationCompleteness(Recommendations recommendations,
+                                                                      FeedbackLanguage language) {
+        Recommendations safe = recommendations == null ? emptyRecommendations() : recommendations;
+        boolean[] fallbackApplied = new boolean[]{false};
+        RecommendationDetail filler = ensureRecommendationDetail(safe.filler(), language, "filler", fallbackApplied);
+        RecommendationDetail adjective = ensureRecommendationDetail(safe.adjective(), language, "adjective", fallbackApplied);
+        RecommendationDetail adverb = ensureRecommendationDetail(safe.adverb(), language, "adverb", fallbackApplied);
+        return new RecommendationCompletion(
+                new Recommendations(filler, adjective, adverb),
+                fallbackApplied[0]
+        );
+    }
+
+    private RecommendationDetail ensureRecommendationDetail(RecommendationDetail detail,
+                                                            FeedbackLanguage language,
+                                                            String category,
+                                                            boolean[] fallbackApplied) {
+        RecommendationDetail safeDetail = detail == null ? new RecommendationDetail("", "") : detail;
+        if (!safeDetail.term().isBlank() || !safeDetail.usage().isBlank()) {
+            return safeDetail;
+        }
+        fallbackApplied[0] = true;
+        return new RecommendationDetail("", minimalFallbackUsage(language, category));
+    }
+
+    private String minimalFallbackUsage(FeedbackLanguage language, String category) {
+        boolean english = language != null && language.isEnglish();
+        if (english) {
+            return switch (category) {
+                case "filler" -> "No safe filler extracted in this turn. Regenerate with the next answer context.";
+                case "adjective" -> "No safe adjective extracted in this turn. Regenerate with the next answer context.";
+                default -> "No safe adverb extracted in this turn. Regenerate with the next answer context.";
+            };
+        }
+        return switch (category) {
+            case "filler" -> "이번 턴에서 자연스러운 필러를 확정하지 못했습니다. 다음 답변 문맥에서 재생성합니다.";
+            case "adjective" -> "이번 턴에서 자연스러운 형용사를 확정하지 못했습니다. 다음 답변 문맥에서 재생성합니다.";
+            default -> "이번 턴에서 자연스러운 부사를 확정하지 못했습니다. 다음 답변 문맥에서 재생성합니다.";
+        };
+    }
+
+    private Recommendations emptyRecommendations() {
+        return new Recommendations(
+                new RecommendationDetail("", ""),
+                new RecommendationDetail("", ""),
+                new RecommendationDetail("", "")
+        );
+    }
+
+    private String joinHistory(List<String> terms) {
+        if (terms == null || terms.isEmpty()) {
+            return NO_RECENT_RECOMMENDATIONS;
+        }
+        return String.join(", ", terms);
     }
 
     private String resolveSummaryForNextTurn(LlmGenerateResult generated, Feedback feedback) {
@@ -557,6 +904,26 @@ JSON 타입 계약(반드시 동일하게 준수):
                                        List<RulebookContext> contexts,
                                        String language,
                                        String systemPrompt) {
+    }
+
+    private record RecommendationHistory(List<String> fillerTerms,
+                                         List<String> adjectiveTerms,
+                                         List<String> adverbTerms) {
+        private RecommendationHistory {
+            fillerTerms = fillerTerms == null ? List.of() : List.copyOf(fillerTerms);
+            adjectiveTerms = adjectiveTerms == null ? List.of() : List.copyOf(adjectiveTerms);
+            adverbTerms = adverbTerms == null ? List.of() : List.copyOf(adverbTerms);
+        }
+
+        private static RecommendationHistory empty() {
+            return new RecommendationHistory(List.of(), List.of(), List.of());
+        }
+    }
+
+    private record RecommendationEvaluation(int missingCount, int duplicateCount) {
+    }
+
+    private record RecommendationCompletion(Recommendations recommendations, boolean minimalFallbackApplied) {
     }
 
     private record PromptInput(String questionText, String answerText, String generalText) {
