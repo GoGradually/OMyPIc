@@ -27,6 +27,10 @@ class MicrometerMetricsAdapterTest {
         adapter.incrementFeedbackError();
         adapter.incrementFeedbackSchemaFallback();
         adapter.incrementTtsError();
+        adapter.incrementRecommendationDuplicateDetected();
+        adapter.incrementRecommendationRepairAttempt();
+        adapter.incrementRecommendationRepairSuccess();
+        adapter.incrementRecommendationMinimalFallback();
 
         assertNotNull(registry.find("stt.latency").timer());
         assertEquals(1, registry.find("stt.latency").timer().count());
@@ -41,5 +45,9 @@ class MicrometerMetricsAdapterTest {
         assertEquals(1.0, registry.find("feedback.errors").counter().count());
         assertEquals(1.0, registry.find("feedback.schema_fallbacks").counter().count());
         assertEquals(1.0, registry.find("tts.errors").counter().count());
+        assertEquals(1.0, registry.find("feedback.recommendation.duplicate_detected").counter().count());
+        assertEquals(1.0, registry.find("feedback.recommendation.repair_attempt").counter().count());
+        assertEquals(1.0, registry.find("feedback.recommendation.repair_success").counter().count());
+        assertEquals(1.0, registry.find("feedback.recommendation.minimal_fallback").counter().count());
     }
 }

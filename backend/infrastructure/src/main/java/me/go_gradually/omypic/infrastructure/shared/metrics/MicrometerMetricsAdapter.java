@@ -70,6 +70,26 @@ public class MicrometerMetricsAdapter implements MetricsPort {
         meterRegistry.counter("tts.errors").increment();
     }
 
+    @Override
+    public void incrementRecommendationDuplicateDetected() {
+        meterRegistry.counter("feedback.recommendation.duplicate_detected").increment();
+    }
+
+    @Override
+    public void incrementRecommendationRepairAttempt() {
+        meterRegistry.counter("feedback.recommendation.repair_attempt").increment();
+    }
+
+    @Override
+    public void incrementRecommendationRepairSuccess() {
+        meterRegistry.counter("feedback.recommendation.repair_success").increment();
+    }
+
+    @Override
+    public void incrementRecommendationMinimalFallback() {
+        meterRegistry.counter("feedback.recommendation.minimal_fallback").increment();
+    }
+
     private void record(String name, Duration duration) {
         Timer.builder(name)
                 .publishPercentiles(0.5, 0.95, 0.99)

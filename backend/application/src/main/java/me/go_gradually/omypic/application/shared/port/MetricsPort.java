@@ -24,4 +24,12 @@ public interface MetricsPort {
     void incrementFeedbackSchemaFallback();
 
     void incrementTtsError();
+
+    void incrementRecommendationDuplicateDetected();
+
+    void incrementRecommendationRepairAttempt();
+
+    void incrementRecommendationRepairSuccess();
+
+    void incrementRecommendationMinimalFallback();
 }
