@@ -410,7 +410,9 @@ public class OpenAiLlmClient implements LlmClient {
         String summary = safe(promptContext.summary());
         List<LlmPromptContext.TurnRecord> turns = promptContext.recentTurns();
         boolean hasTurns = turns != null && !turns.isEmpty();
-        if (summary.isBlank() && !hasTurns) {
+        List<LlmPromptContext.RecommendationRecord> recommendationHistory = promptContext.recentRecommendations();
+        boolean hasRecommendations = recommendationHistory != null && !recommendationHistory.isEmpty();
+        if (summary.isBlank() && !hasTurns && !hasRecommendations) {
             return prompt;
         }
 
@@ -432,6 +434,21 @@ public class OpenAiLlmClient implements LlmClient {
                         .append("\n")
                         .append("Feedback summary: ")
                         .append(safe(turn.feedbackSummary()))
+                        .append("\n");
+            }
+            builder.append("\n");
+        }
+        if (hasRecommendations) {
+            builder.append("Recent recommendation terms:\n");
+            int index = 1;
+            for (LlmPromptContext.RecommendationRecord record : recommendationHistory) {
+                builder.append(index++)
+                        .append(") Filler: ")
+                        .append(safe(record.fillerTerm()))
+                        .append(", Adjective: ")
+                        .append(safe(record.adjectiveTerm()))
+                        .append(", Adverb: ")
+                        .append(safe(record.adverbTerm()))
                         .append("\n");
             }
             builder.append("\n");

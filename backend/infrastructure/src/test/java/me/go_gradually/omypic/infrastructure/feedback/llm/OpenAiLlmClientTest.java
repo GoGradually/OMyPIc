@@ -13,6 +13,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -160,6 +162,31 @@ class OpenAiLlmClientTest {
         JsonNode payload = objectMapper.readTree(server.takeRequest().getBody().readUtf8());
         assertEquals("gpt-5-mini", payload.path("model").asText());
         assertFalse(payload.has("temperature"));
+    }
+
+    @Test
+    void generate_includesRecentRecommendationHistoryInMergedPrompt() throws Exception {
+        enqueueResponsesResponse(minimalStructuredResponse(), "resp-1", "conv-1");
+
+        OpenAiLlmClient client = client();
+        client.generate(
+                "api-key",
+                "gpt-4o-mini",
+                "sys",
+                "user",
+                LlmConversationState.empty(),
+                new LlmPromptContext(
+                        "",
+                        List.of(),
+                        List.of(new LlmPromptContext.RecommendationRecord("well", "vivid", "definitely"))
+                )
+        );
+
+        JsonNode payload = objectMapper.readTree(server.takeRequest().getBody().readUtf8());
+        String mergedPrompt = payload.path("input").path(0).path("content").path(0).path("text").asText();
+        assertTrue(mergedPrompt.contains("Recent recommendation terms"));
+        assertTrue(mergedPrompt.contains("Filler: well"));
+        assertTrue(mergedPrompt.contains("# Current input"));
     }
 
     private OpenAiLlmClient client() {
