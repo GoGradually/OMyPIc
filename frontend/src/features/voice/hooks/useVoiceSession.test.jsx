@@ -214,6 +214,7 @@ async function prepareConfirmedReplay({
         emitAudioFrame(0.1)
         emitAudioFrame(0)
         emitAudioFrame(0)
+        emitAudioFrame(0)
     })
     await waitFor(() => {
         expect(sendVoiceAudioChunk.mock.calls.length).toBeGreaterThan(uploadCallsBefore)
@@ -330,6 +331,7 @@ describe('useVoiceSession', () => {
             emitAudioFrame(0.1)
             emitAudioFrame(0)
             emitAudioFrame(0)
+            emitAudioFrame(0)
         })
 
         await act(async () => {
@@ -373,6 +375,7 @@ describe('useVoiceSession', () => {
 
         act(() => {
             emitAudioFrame(0.1)
+            emitAudioFrame(0)
             emitAudioFrame(0)
             emitAudioFrame(0)
         })
@@ -727,6 +730,7 @@ describe('useVoiceSession', () => {
                 emitAudioFrame(0.1)
                 emitAudioFrame(0)
                 emitAudioFrame(0)
+                emitAudioFrame(0)
             })
             await act(async () => {
                 await Promise.resolve()
@@ -832,6 +836,7 @@ describe('useVoiceSession', () => {
                 emitAudioFrame(0.1)
                 emitAudioFrame(0)
                 emitAudioFrame(0)
+                emitAudioFrame(0)
             })
             await act(async () => {
                 await Promise.resolve()
@@ -927,6 +932,7 @@ describe('useVoiceSession', () => {
                 emitAudioFrame(0.1)
                 emitAudioFrame(0)
                 emitAudioFrame(0)
+                emitAudioFrame(0)
             })
             await act(async () => {
                 await Promise.resolve()
@@ -991,6 +997,7 @@ describe('useVoiceSession', () => {
             sendVoiceAudioChunk.mockRejectedValueOnce(new Error('temporary network'))
             act(() => {
                 emitAudioFrame(0.1)
+                emitAudioFrame(0)
                 emitAudioFrame(0)
                 emitAudioFrame(0)
             })
@@ -1271,6 +1278,7 @@ describe('useVoiceSession', () => {
             emitAudioFrame(0.1)
             emitAudioFrame(0)
             emitAudioFrame(0)
+            emitAudioFrame(0)
         })
 
         await waitFor(() => {
@@ -1314,6 +1322,7 @@ describe('useVoiceSession', () => {
 
             act(() => {
                 emitAudioFrame(0.1)
+                emitAudioFrame(0)
                 emitAudioFrame(0)
                 emitAudioFrame(0)
             })
@@ -1398,6 +1407,7 @@ describe('useVoiceSession', () => {
                 emitAudioFrame(0.1)
                 emitAudioFrame(0)
                 emitAudioFrame(0)
+                emitAudioFrame(0)
             })
             await act(async () => {
                 await Promise.resolve()
@@ -1467,6 +1477,7 @@ describe('useVoiceSession', () => {
 
             act(() => {
                 emitAudioFrame(0.1)
+                emitAudioFrame(0)
                 emitAudioFrame(0)
                 emitAudioFrame(0)
             })
@@ -1647,6 +1658,7 @@ describe('useVoiceSession', () => {
 
         act(() => {
             emitAudioFrame(0.1)
+            emitAudioFrame(0)
             emitAudioFrame(0)
             emitAudioFrame(0)
         })
