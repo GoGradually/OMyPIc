@@ -291,3 +291,31 @@ ipcMain.handle('set-api-key', async (event, key) => {
     await keytar.setPassword(SERVICE, OPENAI_PROVIDER, key)
     return true
 })
+
+ipcMain.handle('save-backup-file', async (event, defaultName, bytes) => {
+    const {canceled, filePath} = await dialog.showSaveDialog({
+        defaultPath: defaultName || 'omypic-backup.zip',
+        filters: [{name: 'Zip Archive', extensions: ['zip']}]
+    })
+    if (canceled || !filePath) {
+        return false
+    }
+    fs.writeFileSync(filePath, Buffer.from(bytes))
+    return true
+})
+
+ipcMain.handle('pick-backup-file', async () => {
+    const {canceled, filePaths} = await dialog.showOpenDialog({
+        properties: ['openFile'],
+        filters: [{name: 'Zip Archive', extensions: ['zip']}]
+    })
+    if (canceled || !filePaths || filePaths.length === 0) {
+        return null
+    }
+    const filePath = filePaths[0]
+    const bytes = fs.readFileSync(filePath)
+    return {
+        name: path.basename(filePath),
+        bytes: Uint8Array.from(bytes)
+    }
+})

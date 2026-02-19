@@ -58,6 +58,21 @@ export async function getModelMeta() {
     return response.json()
 }
 
+export async function exportDataBundle() {
+    const response = await callApi('/api/data-transfer/export')
+    return response.blob()
+}
+
+export async function importDataBundle(file) {
+    const formData = new FormData()
+    formData.append('file', file)
+    const response = await callApi('/api/data-transfer/import', {
+        method: 'POST',
+        body: formData
+    })
+    return response.json()
+}
+
 export async function openVoiceSession(payload) {
     const response = await callApi('/api/voice/sessions', {
         method: 'POST',

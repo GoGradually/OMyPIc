@@ -19,7 +19,9 @@ export function ModelSettingsOverlay({
                                          feedbackLang,
                                          setFeedbackLang,
                                          feedbackLanguageOptions = [],
-                                         onSaveApiKey
+                                         onSaveApiKey,
+                                         onExportData,
+                                         onImportData
                                      }) {
     const feedbackLanguageList = Array.isArray(feedbackLanguageOptions) && feedbackLanguageOptions.length > 0
         ? feedbackLanguageOptions
@@ -84,6 +86,11 @@ export function ModelSettingsOverlay({
 
             <div className="action-row">
                 <button className="control-button" onClick={onSaveApiKey}>저장 + 검증</button>
+            </div>
+
+            <div className="action-row">
+                <button className="control-button secondary" onClick={onExportData}>데이터 내보내기</button>
+                <button className="control-button secondary" onClick={onImportData}>데이터 가져오기</button>
             </div>
 
             <p className="tiny-meta">음성 세션 기능은 OpenAI API Key가 필요합니다.</p>

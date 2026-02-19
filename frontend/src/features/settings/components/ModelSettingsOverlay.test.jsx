@@ -26,10 +26,14 @@ describe('ModelSettingsOverlay', () => {
                 setFeedbackLang={vi.fn()}
                 feedbackLanguageOptions={['ko', 'en']}
                 onSaveApiKey={vi.fn()}
+                onExportData={vi.fn()}
+                onImportData={vi.fn()}
             />
         )
 
         expect(screen.getByText('기본 설정(gpt-5-nano) 기준으로 세션 1회당 약 50원이 사용됩니다.')).toBeTruthy()
         expect(screen.getByText('실제 비용은 발화 길이와 선택 모델에 따라 달라질 수 있습니다.')).toBeTruthy()
+        expect(screen.getByRole('button', {name: '데이터 내보내기'})).toBeTruthy()
+        expect(screen.getByRole('button', {name: '데이터 가져오기'})).toBeTruthy()
     })
 })

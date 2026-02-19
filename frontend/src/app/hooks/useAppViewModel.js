@@ -1,5 +1,12 @@
 import {useCallback, useEffect, useState} from 'react'
-import {getApiKey, getModelMeta, setApiKey, verifyApiKey} from '../../shared/api/http.js'
+import {
+    exportDataBundle,
+    getApiKey,
+    getModelMeta,
+    importDataBundle,
+    setApiKey,
+    verifyApiKey
+} from '../../shared/api/http.js'
 import {getModeSummary, PANEL_TITLES} from '../../shared/constants/models.js'
 import {copyText} from '../../shared/utils/clipboard.js'
 import {getCurrentQuestionLabel} from '../../shared/utils/mode.js'
@@ -56,6 +63,38 @@ function resolveSelectedValue(currentValue, options, preferredDefault) {
         return preferredDefault
     }
     return options[0] || currentValue || ''
+}
+
+function buildBackupFilename() {
+    const now = new Date()
+    const pad2 = (value) => String(value).padStart(2, '0')
+    const datePart = `${now.getFullYear()}${pad2(now.getMonth() + 1)}${pad2(now.getDate())}`
+    const timePart = `${pad2(now.getHours())}${pad2(now.getMinutes())}${pad2(now.getSeconds())}`
+    return `omypic-backup-${datePart}-${timePart}.zip`
+}
+
+function triggerBlobDownload(blob, filename) {
+    const objectUrl = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = objectUrl
+    anchor.download = filename
+    document.body.appendChild(anchor)
+    anchor.click()
+    document.body.removeChild(anchor)
+    URL.revokeObjectURL(objectUrl)
+}
+
+function pickFileFromInput() {
+    return new Promise((resolve) => {
+        const input = document.createElement('input')
+        input.type = 'file'
+        input.accept = '.zip,application/zip'
+        input.onchange = () => {
+            const selected = input.files && input.files[0] ? input.files[0] : null
+            resolve(selected)
+        }
+        input.click()
+    })
 }
 
 export function useAppViewModel() {
@@ -231,6 +270,65 @@ export function useAppViewModel() {
         }
     }, [apiKeyInput, feedbackModel, modelMeta.defaultFeedbackModel])
 
+    const handleExportData = useCallback(async () => {
+        try {
+            const backupBlob = await exportDataBundle()
+            const filename = buildBackupFilename()
+            if (window.omypic && window.omypic.saveBackupFile) {
+                const bytes = new Uint8Array(await backupBlob.arrayBuffer())
+                const saved = await window.omypic.saveBackupFile(filename, bytes)
+                if (!saved) {
+                    setStatusMessage('데이터 내보내기를 취소했습니다.')
+                    return
+                }
+            } else {
+                triggerBlobDownload(backupBlob, filename)
+            }
+            setStatusMessage('데이터 내보내기를 완료했습니다.')
+        } catch (error) {
+            setStatusMessage(`데이터 내보내기에 실패했습니다: ${error.message}`)
+        }
+    }, [])
+
+    const handleImportData = useCallback(async () => {
+        const confirmed = window.confirm('데이터 가져오기를 진행하면 현재 저장 데이터가 전체 교체됩니다. 계속하시겠습니까?')
+        if (!confirmed) {
+            return
+        }
+
+        try {
+            let file = null
+            if (window.omypic && window.omypic.pickBackupFile) {
+                const selected = await window.omypic.pickBackupFile()
+                if (!selected || !selected.bytes) {
+                    setStatusMessage('데이터 가져오기를 취소했습니다.')
+                    return
+                }
+                file = new File([new Uint8Array(selected.bytes)], selected.name || 'omypic-backup.zip', {
+                    type: 'application/zip'
+                })
+            } else {
+                file = await pickFileFromInput()
+                if (!file) {
+                    setStatusMessage('데이터 가져오기를 취소했습니다.')
+                    return
+                }
+            }
+
+            const result = await importDataBundle(file)
+            await Promise.all([
+                refreshRulebooks(),
+                refreshQuestionGroups(),
+                refreshWrongNotes()
+            ])
+            setStatusMessage(
+                `데이터 가져오기를 완료했습니다. 질문 그룹 ${result.questionGroupCount}개, 룰북 ${result.rulebookCount}개가 반영되었습니다. 앱을 재시작하면 안정적으로 반영됩니다.`
+            )
+        } catch (error) {
+            setStatusMessage(`데이터 가져오기에 실패했습니다: ${error.message}`)
+        }
+    }, [refreshQuestionGroups, refreshRulebooks, refreshWrongNotes])
+
     const copyUserText = useCallback(async () => {
         if (!userText.trim()) {
             return
@@ -375,7 +473,9 @@ export function useAppViewModel() {
         feedbackLang,
         setFeedbackLang,
         feedbackLanguageOptions: modelMeta.feedbackLanguages,
-        onSaveApiKey: handleSaveApiKey
+        onSaveApiKey: handleSaveApiKey,
+        onExportData: handleExportData,
+        onImportData: handleImportData
     }
 
     return {
