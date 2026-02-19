@@ -312,6 +312,11 @@
         justify-self: flex-start;
     }
 
+    .player-row {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
     .count-banner {
         font-size: 21px;
     }

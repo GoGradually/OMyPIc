@@ -219,8 +219,19 @@
 .player-row {
     margin-top: 12px;
     display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+}
+
+.player-row__main {
+    display: flex;
     flex-wrap: wrap;
     gap: 10px;
+}
+
+.player-row__replay {
+    display: inline-flex;
 }
 
 .action-button {
@@ -250,6 +261,10 @@
 
 .action-button.danger {
     background: linear-gradient(135deg, #ea4f4f 0%, #c33535 100%);
+}
+
+.action-button.neutral {
+    background: linear-gradient(135deg, #4a78b8 0%, #355d93 100%);
 }
 
 .audio-quick-strip {
@@ -504,4 +519,3 @@ textarea[readonly] {
     font-size: 12px;
     color: var(--muted);
 }
-
