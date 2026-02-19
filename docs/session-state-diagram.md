@@ -19,7 +19,10 @@ stateDiagram-v2
 
     BootstrapDone --> SessionReady: session.ready emit
     SessionReady --> QuestionPrompted: 첫 question.prompt emit
-    QuestionPrompted --> Capturing: 사용자 음성 입력
+QuestionPrompted --> QuestionTtsPlaying: 질문 TTS 1차 재생
+QuestionTtsPlaying --> QuestionTtsRepeatDelay: 1차 재생 완료
+QuestionTtsRepeatDelay --> QuestionTtsReplay: 3초 대기
+QuestionTtsReplay --> Capturing: 질문 TTS 2차 재생 완료 후 사용자 음성 입력
     Capturing --> TurnProcessing: STT + 피드백 파이프라인
     TurnProcessing --> QuestionPrompted: 다음 질문
     TurnProcessing --> VoiceStopped: 세션 종료/문제소진/강제중지
