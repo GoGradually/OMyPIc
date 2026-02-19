@@ -5,7 +5,10 @@ function parseQuestionPayload(data) {
     const hasStructuredQuestion = data && Object.prototype.hasOwnProperty.call(data, 'question')
     const questionNode = hasStructuredQuestion ? data?.question : data
     const selection = data?.selection || {}
+    const parsedTurnId = Number(data?.turnId)
+    const turnId = Number.isFinite(parsedTurnId) ? Math.trunc(parsedTurnId) : 0
     return {
+        turnId,
         questionId: questionNode?.id || questionNode?.questionId || '',
         text: questionNode?.text || '',
         group: questionNode?.group || '',
@@ -32,6 +35,7 @@ export function bindVoiceEvents({
                                     shouldResumeImmediatelyOnQuestionPrompt,
                                     enqueueTtsAudio,
                                     handleTtsFailure,
+                                    onSttFinal,
                                     onSttSkipped,
                                     shouldProcessEvent,
                                     shouldSkipReplayTts,
@@ -59,6 +63,7 @@ export function bindVoiceEvents({
         if (!data) {
             return
         }
+        onSttFinal?.(data)
         const text = data?.text || ''
         setPartialTranscript('')
         setTranscript(text)
