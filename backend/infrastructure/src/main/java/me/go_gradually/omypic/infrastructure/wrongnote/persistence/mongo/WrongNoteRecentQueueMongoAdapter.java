@@ -40,4 +40,9 @@ public class WrongNoteRecentQueueMongoAdapter implements WrongNoteRecentQueuePor
         doc.setUpdatedAt(Instant.now());
         repository.save(doc);
     }
+
+    @Override
+    public void clearGlobalQueue() {
+        repository.deleteById(GLOBAL_ID);
+    }
 }

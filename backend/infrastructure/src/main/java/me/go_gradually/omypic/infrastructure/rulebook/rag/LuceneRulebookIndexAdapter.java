@@ -71,6 +71,14 @@ public class LuceneRulebookIndexAdapter implements RulebookIndexPort {
         return searchEnabledContexts(enabledIds, queryVector, topK);
     }
 
+    @Override
+    public void reset() throws IOException {
+        synchronized (indexLock) {
+            resetIndexDirectory();
+            writeMetadata(expectedMetadata());
+        }
+    }
+
     private IndexWriter createWriter() throws IOException {
         Directory directory = FSDirectory.open(indexPath);
         IndexWriterConfig config = new IndexWriterConfig(new StandardAnalyzer());

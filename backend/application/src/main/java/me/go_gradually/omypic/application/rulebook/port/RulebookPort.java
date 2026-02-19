@@ -18,4 +18,6 @@ public interface RulebookPort {
     Rulebook save(Rulebook rulebook);
 
     void deleteById(RulebookId id);
+
+    void deleteAll();
 }

@@ -17,4 +17,6 @@ public interface QuestionGroupPort {
     QuestionGroupAggregate save(QuestionGroupAggregate group);
 
     void deleteById(QuestionGroupId id);
+
+    void deleteAll();
 }

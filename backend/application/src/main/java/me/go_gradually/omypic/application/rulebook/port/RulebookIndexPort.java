@@ -11,4 +11,6 @@ public interface RulebookIndexPort {
     void indexRulebookChunks(RulebookId rulebookId, String filename, List<String> chunks) throws IOException;
 
     List<RulebookContext> search(String query, int topK, Set<RulebookId> enabledRulebookIds) throws IOException;
+
+    void reset() throws IOException;
 }

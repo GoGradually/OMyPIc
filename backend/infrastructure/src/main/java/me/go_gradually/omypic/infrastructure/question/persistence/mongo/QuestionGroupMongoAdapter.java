@@ -54,6 +54,11 @@ public class QuestionGroupMongoAdapter implements QuestionGroupPort {
         repository.deleteById(id.value());
     }
 
+    @Override
+    public void deleteAll() {
+        repository.deleteAll();
+    }
+
     private QuestionGroupAggregate toDomain(QuestionGroupDocument doc) {
         List<QuestionItemDocument> items = doc.getQuestions() == null ? List.of() : doc.getQuestions();
         List<QuestionItem> questions = items.stream().map(this::toDomainItem).collect(Collectors.toList());

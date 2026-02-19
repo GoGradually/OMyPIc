@@ -12,4 +12,6 @@ dependencyManagement {
 dependencies {
     implementation project(':domain')
     implementation 'com.fasterxml.jackson.core:jackson-databind'
+
+    testImplementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
 }

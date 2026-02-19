@@ -14,4 +14,6 @@ public interface WrongNotePort {
     WrongNote save(WrongNote note);
 
     void deleteById(WrongNoteId id);
+
+    void deleteAll();
 }

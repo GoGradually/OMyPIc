@@ -42,6 +42,11 @@ public class RulebookMongoAdapter implements RulebookPort {
         repository.deleteById(id.value());
     }
 
+    @Override
+    public void deleteAll() {
+        repository.deleteAll();
+    }
+
     private Rulebook toDomain(RulebookDocument doc) {
         return Rulebook.rehydrate(
                 RulebookId.of(doc.getId()),

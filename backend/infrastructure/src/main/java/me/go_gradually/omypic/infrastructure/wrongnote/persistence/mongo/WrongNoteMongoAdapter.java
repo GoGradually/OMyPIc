@@ -40,6 +40,11 @@ public class WrongNoteMongoAdapter implements WrongNotePort {
         repository.deleteById(id.value());
     }
 
+    @Override
+    public void deleteAll() {
+        repository.deleteAll();
+    }
+
     private WrongNote toDomain(WrongNoteDocument doc) {
         return WrongNote.rehydrate(
                 WrongNoteId.of(doc.getId()),

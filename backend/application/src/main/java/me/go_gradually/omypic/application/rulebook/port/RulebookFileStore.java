@@ -9,4 +9,8 @@ public interface RulebookFileStore {
     StoredRulebookFile store(String filename, byte[] bytes) throws IOException;
 
     String readText(String path) throws IOException;
+
+    byte[] readBytes(String path) throws IOException;
+
+    void clearAll() throws IOException;
 }

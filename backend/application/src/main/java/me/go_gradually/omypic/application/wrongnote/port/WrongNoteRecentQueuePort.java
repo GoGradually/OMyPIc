@@ -6,4 +6,6 @@ public interface WrongNoteRecentQueuePort {
     List<String> loadGlobalQueue();
 
     void saveGlobalQueue(List<String> patterns);
+
+    void clearGlobalQueue();
 }

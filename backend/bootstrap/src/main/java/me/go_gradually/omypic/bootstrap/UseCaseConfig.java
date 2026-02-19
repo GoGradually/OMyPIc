@@ -1,7 +1,9 @@
 package me.go_gradually.omypic.bootstrap;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import me.go_gradually.omypic.application.apikey.port.ApiKeyProbePort;
 import me.go_gradually.omypic.application.apikey.usecase.ApiKeyVerifyUseCase;
+import me.go_gradually.omypic.application.datatransfer.usecase.DataTransferUseCase;
 import me.go_gradually.omypic.application.feedback.policy.FeedbackPolicy;
 import me.go_gradually.omypic.application.feedback.port.LlmClient;
 import me.go_gradually.omypic.application.feedback.usecase.FeedbackUseCase;
@@ -124,5 +126,24 @@ public class UseCaseConfig {
     @Bean
     public ApiKeyVerifyUseCase apiKeyVerifyUseCase(ApiKeyProbePort probePort) {
         return new ApiKeyVerifyUseCase(probePort);
+    }
+
+    @Bean
+    public DataTransferUseCase dataTransferUseCase(QuestionGroupPort questionGroupPort,
+                                                   RulebookPort rulebookPort,
+                                                   WrongNotePort wrongNotePort,
+                                                   WrongNoteRecentQueuePort wrongNoteRecentQueuePort,
+                                                   RulebookFileStore rulebookFileStore,
+                                                   RulebookIndexPort rulebookIndexPort,
+                                                   ObjectMapper objectMapper) {
+        return new DataTransferUseCase(
+                questionGroupPort,
+                rulebookPort,
+                wrongNotePort,
+                wrongNoteRecentQueuePort,
+                rulebookFileStore,
+                rulebookIndexPort,
+                objectMapper
+        );
     }
 }
