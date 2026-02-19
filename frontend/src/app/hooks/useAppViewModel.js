@@ -152,7 +152,11 @@ export function useAppViewModel() {
         audioDeviceStatus,
         startSession,
         stopSession,
-        handleAudioQuickAction
+        handleAudioQuickAction,
+        replayButtonLabel,
+        replayButtonDisabled,
+        replayButtonDisabledReason,
+        handleReplayAction
     } = useVoiceSession({
         sessionId,
         feedbackModel,
@@ -403,7 +407,11 @@ export function useAppViewModel() {
             audioQuickHint,
             audioPermission,
             audioDeviceStatus,
-            handleAudioQuickAction
+            handleAudioQuickAction,
+            replayButtonLabel,
+            replayButtonDisabled,
+            replayButtonDisabledReason,
+            handleReplayAction
         },
         questionPanelProps: {
             currentQuestionLabel,
