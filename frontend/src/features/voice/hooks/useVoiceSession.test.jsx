@@ -103,10 +103,10 @@ class MockAudioContext {
 }
 
 class MockAudio {
-    constructor() {
+    constructor(src = '') {
         this.onended = null
         this.onerror = null
-        this.src = ''
+        this.src = src
         audioInstances.push(this)
     }
 
@@ -157,6 +157,43 @@ function createAbortError() {
     const error = new Error('The operation was aborted.')
     error.name = 'AbortError'
     return error
+}
+
+async function prepareConfirmedReplay({
+                                          turnId = 1,
+                                          questionId = 'q-1',
+                                          questionText = 'question-1',
+                                          sequence = 1
+                                      } = {}) {
+    await act(async () => {
+        activeEventSource.emit('question.prompt', {
+            turnId,
+            question: {id: questionId, text: questionText, group: 'travel'},
+            selection: {exhausted: false}
+        })
+        activeEventSource.emit('tts.audio', {
+            role: 'question',
+            audio: 'AQID',
+            mimeType: 'audio/wav',
+            sequence
+        })
+    })
+    await act(async () => {
+        audioInstances[audioInstances.length - 1].onended()
+    })
+
+    const uploadCallsBefore = sendVoiceAudioChunk.mock.calls.length
+    act(() => {
+        emitAudioFrame(0.1)
+        emitAudioFrame(0)
+        emitAudioFrame(0)
+    })
+    await waitFor(() => {
+        expect(sendVoiceAudioChunk.mock.calls.length).toBeGreaterThan(uploadCallsBefore)
+    })
+    await act(async () => {
+        activeEventSource.emit('stt.final', {turnId, text: 'confirmed answer'})
+    })
 }
 
 describe('useVoiceSession', () => {
@@ -543,6 +580,7 @@ describe('useVoiceSession', () => {
         expect(recoverVoiceSession).toHaveBeenCalledWith('voice-1', 0)
         expect(getVoiceEventsUrl).toHaveBeenLastCalledWith('voice-1', 4)
         expect(onQuestionPrompt).toHaveBeenCalledWith({
+            turnId: 5,
             questionId: 'q-2',
             text: 'recovered question',
             group: 'travel',
@@ -1443,6 +1481,235 @@ describe('useVoiceSession', () => {
         })
         expect(result.current.sessionActive).toBe(false)
         expect(sendVoiceAudioChunk).not.toHaveBeenCalled()
+        unmount()
+    })
+
+    it('keeps confirmed replay audio after session stop', async () => {
+        const {result, unmount} = renderHook(() => useVoiceSession({
+            sessionId: 's1',
+            feedbackModel: 'gpt-4o-mini',
+            voiceSttModel: 'gpt-4o-mini-transcribe',
+            feedbackLang: 'ko',
+            voice: 'alloy',
+            onStatus: vi.fn(),
+            onFeedback: vi.fn(),
+            refreshWrongNotes: vi.fn(async () => {
+            }),
+            onQuestionPrompt: vi.fn()
+        }))
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+        await prepareConfirmedReplay({turnId: 1, questionId: 'q-1', sequence: 1})
+
+        expect(result.current.replayButtonDisabled).toBe(false)
+        expect(result.current.replayButtonLabel).toBe('내 응답 재생')
+
+        await act(async () => {
+            await result.current.stopSession()
+        })
+        expect(result.current.sessionActive).toBe(false)
+        expect(result.current.replayButtonDisabled).toBe(false)
+
+        await act(async () => {
+            result.current.handleReplayAction()
+        })
+        expect(result.current.replayButtonLabel).toBe('중지')
+
+        await act(async () => {
+            audioInstances[audioInstances.length - 1].onended()
+        })
+        expect(result.current.replayButtonLabel).toBe('내 응답 재생')
+        unmount()
+    })
+
+    it('clears replay audio when a new session starts', async () => {
+        const {result, unmount} = renderHook(() => useVoiceSession({
+            sessionId: 's1',
+            feedbackModel: 'gpt-4o-mini',
+            voiceSttModel: 'gpt-4o-mini-transcribe',
+            feedbackLang: 'ko',
+            voice: 'alloy',
+            onStatus: vi.fn(),
+            onFeedback: vi.fn(),
+            refreshWrongNotes: vi.fn(async () => {
+            }),
+            onQuestionPrompt: vi.fn()
+        }))
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+        await prepareConfirmedReplay({turnId: 1, questionId: 'q-1', sequence: 1})
+        expect(result.current.replayButtonDisabled).toBe(false)
+
+        await act(async () => {
+            await result.current.stopSession()
+        })
+        expect(result.current.replayButtonDisabled).toBe(false)
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+        expect(result.current.replayButtonDisabled).toBe(true)
+        expect(result.current.replayButtonDisabledReason).toBe('다시 들을 수 있는 응답이 없습니다.')
+        unmount()
+    })
+
+    it('does not confirm replay audio when stt.skipped is received', async () => {
+        const {result, unmount} = renderHook(() => useVoiceSession({
+            sessionId: 's1',
+            feedbackModel: 'gpt-4o-mini',
+            voiceSttModel: 'gpt-4o-mini-transcribe',
+            feedbackLang: 'ko',
+            voice: 'alloy',
+            onStatus: vi.fn(),
+            onFeedback: vi.fn(),
+            refreshWrongNotes: vi.fn(async () => {
+            }),
+            onQuestionPrompt: vi.fn()
+        }))
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+        await act(async () => {
+            activeEventSource.emit('question.prompt', {
+                turnId: 1,
+                question: {id: 'q-1', text: 'question-1', group: 'travel'},
+                selection: {exhausted: false}
+            })
+            activeEventSource.emit('tts.audio', {
+                role: 'question',
+                audio: 'AQID',
+                mimeType: 'audio/wav',
+                sequence: 1
+            })
+        })
+        await act(async () => {
+            audioInstances[audioInstances.length - 1].onended()
+        })
+
+        act(() => {
+            emitAudioFrame(0.1)
+            emitAudioFrame(0)
+            emitAudioFrame(0)
+        })
+        await waitFor(() => {
+            expect(sendVoiceAudioChunk).toHaveBeenCalledTimes(1)
+        })
+
+        await act(async () => {
+            activeEventSource.emit('stt.skipped', {turnId: 1, reason: 'empty_transcript'})
+        })
+
+        expect(result.current.replayButtonDisabled).toBe(true)
+        expect(result.current.replayButtonDisabledReason).toBe('다시 들을 수 있는 응답이 없습니다.')
+        unmount()
+    })
+
+    it('queues tts audio while replay playback is active and flushes after replay ends', async () => {
+        const {result, unmount} = renderHook(() => useVoiceSession({
+            sessionId: 's1',
+            feedbackModel: 'gpt-4o-mini',
+            voiceSttModel: 'gpt-4o-mini-transcribe',
+            feedbackLang: 'ko',
+            voice: 'alloy',
+            onStatus: vi.fn(),
+            onFeedback: vi.fn(),
+            refreshWrongNotes: vi.fn(async () => {
+            }),
+            onQuestionPrompt: vi.fn()
+        }))
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+        await prepareConfirmedReplay({turnId: 1, questionId: 'q-1', sequence: 1})
+
+        const beforeReplayAudioCount = audioInstances.length
+        await act(async () => {
+            result.current.handleReplayAction()
+        })
+        expect(result.current.replayButtonLabel).toBe('중지')
+        expect(audioInstances.length).toBe(beforeReplayAudioCount + 1)
+
+        const replayAudio = audioInstances[audioInstances.length - 1]
+        await act(async () => {
+            activeEventSource.emit('tts.audio', {
+                role: 'feedback',
+                audio: 'AQID',
+                mimeType: 'audio/wav',
+                sequence: 2
+            })
+        })
+        expect(audioInstances.length).toBe(beforeReplayAudioCount + 1)
+
+        await act(async () => {
+            replayAudio.onended()
+        })
+
+        await waitFor(() => {
+            expect(audioInstances.length).toBe(beforeReplayAudioCount + 2)
+        })
+        expect(result.current.speechState).toBe('PLAYING_FEEDBACK_TTS')
+        unmount()
+    })
+
+    it('blocks microphone capture while replay starts from READY_FOR_ANSWER', async () => {
+        const {result, unmount} = renderHook(() => useVoiceSession({
+            sessionId: 's1',
+            feedbackModel: 'gpt-4o-mini',
+            voiceSttModel: 'gpt-4o-mini-transcribe',
+            feedbackLang: 'ko',
+            voice: 'alloy',
+            onStatus: vi.fn(),
+            onFeedback: vi.fn(),
+            refreshWrongNotes: vi.fn(async () => {
+            }),
+            onQuestionPrompt: vi.fn()
+        }))
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+        await prepareConfirmedReplay({turnId: 1, questionId: 'q-1', sequence: 1})
+
+        await act(async () => {
+            activeEventSource.emit('question.prompt', {
+                turnId: 2,
+                question: {id: 'q-2', text: 'question-2', group: 'travel'},
+                selection: {exhausted: false}
+            })
+            activeEventSource.emit('tts.audio', {
+                role: 'question',
+                audio: 'AQID',
+                mimeType: 'audio/wav',
+                sequence: 2
+            })
+        })
+        await act(async () => {
+            audioInstances[audioInstances.length - 1].onended()
+        })
+        expect(result.current.speechState).toBe('READY_FOR_ANSWER')
+
+        const uploadsBeforeReplay = sendVoiceAudioChunk.mock.calls.length
+        await act(async () => {
+            result.current.handleReplayAction()
+        })
+        expect(result.current.replayButtonLabel).toBe('중지')
+
+        act(() => {
+            emitAudioFrame(0.1)
+        })
+
+        expect(result.current.speechState).toBe('READY_FOR_ANSWER')
+        expect(sendVoiceAudioChunk.mock.calls.length).toBe(uploadsBeforeReplay)
+
+        await act(async () => {
+            audioInstances[audioInstances.length - 1].onended()
+        })
         unmount()
     })
 })
