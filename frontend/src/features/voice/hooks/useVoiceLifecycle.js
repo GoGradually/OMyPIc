@@ -6,7 +6,7 @@ import {
     sendVoiceAudioChunk,
     stopVoiceSession
 } from '../../../shared/api/http.js'
-import {float32ToInt16, toBase64} from '../../../shared/utils/audioCodec.js'
+import {float32ToInt16, pcm16ToWav, toBase64} from '../../../shared/utils/audioCodec.js'
 import {useAudioDevices} from './useAudioDevices.js'
 import {useTtsPlaybackQueue} from './useTtsPlaybackQueue.js'
 import {bindVoiceEvents} from './bindVoiceEvents.js'
@@ -29,6 +29,10 @@ import {
 import {computeRms, joinByteChunks} from './voiceSessionAudio.js'
 
 const VOICE_CHUNK_UPLOAD_TIMEOUT_MS = 3000
+const REPLAY_STATE = {
+    IDLE: 'IDLE',
+    PLAYING: 'PLAYING'
+}
 
 export function useVoiceLifecycle({
                                     sessionId,
@@ -49,6 +53,8 @@ export function useVoiceLifecycle({
     const [transcript, setTranscript] = useState('')
     const [userText, setUserText] = useState('')
     const [speechState, setSpeechState] = useState(SPEECH_STATE.IDLE)
+    const [replayState, setReplayState] = useState(REPLAY_STATE.IDLE)
+    const [replayAvailable, setReplayAvailable] = useState(false)
 
     const statusRef = useRef(onStatus)
     const feedbackRef = useRef(onFeedback)
@@ -100,6 +106,15 @@ export function useVoiceLifecycle({
     const reconnectingRef = useRef(false)
     const lastSeenEventIdRef = useRef(0)
     const replayTtsCutoffEventIdRef = useRef(0)
+    const currentQuestionTurnIdRef = useRef(0)
+    const captureTurnIdRef = useRef(0)
+    const captureBlockRef = useRef(false)
+    const replayStateRef = useRef(REPLAY_STATE.IDLE)
+    const replayCandidateRef = useRef(null)
+    const replayConfirmedRef = useRef(null)
+    const replayAudioRef = useRef(null)
+    const replayAudioUrlRef = useRef('')
+    const deferredTtsQueueRef = useRef([])
     const onConnectionErrorRef = useRef(() => {
     })
 
@@ -140,6 +155,25 @@ export function useVoiceLifecycle({
         setSpeechState(nextState)
     }, [])
 
+    const updateReplayState = useCallback((nextState) => {
+        replayStateRef.current = nextState
+        setReplayState(nextState)
+    }, [])
+
+    const updateReplayConfirmed = useCallback((nextConfirmed) => {
+        replayConfirmedRef.current = nextConfirmed
+        setReplayAvailable(Boolean(nextConfirmed))
+    }, [])
+
+    const parseTurnId = useCallback((value) => {
+        const parsed = Number(value)
+        if (!Number.isFinite(parsed)) {
+            return null
+        }
+        const turnId = Math.trunc(parsed)
+        return turnId > 0 ? turnId : null
+    }, [])
+
     const parseEventId = useCallback((data) => {
         const raw = data?.eventId
         const parsed = Number(raw)
@@ -162,15 +196,16 @@ export function useVoiceLifecycle({
     }, [parseEventId])
 
     const shouldSkipReplayTts = useCallback((data) => {
-        const cutoff = replayTtsCutoffEventIdRef.current
-        if (cutoff <= 0) {
-            return false
-        }
         const eventId = parseEventId(data)
-        if (eventId === null) {
-            return false
+        const cutoff = replayTtsCutoffEventIdRef.current
+        if (cutoff > 0 && eventId !== null && eventId <= cutoff) {
+            return true
         }
-        return eventId <= cutoff
+        if (replayStateRef.current === REPLAY_STATE.PLAYING) {
+            deferredTtsQueueRef.current.push(data)
+            return true
+        }
+        return false
     }, [parseEventId])
 
     const shouldResumeImmediatelyOnQuestionPrompt = useCallback((data) => {
@@ -193,9 +228,13 @@ export function useVoiceLifecycle({
         turnDurationMsRef.current = 0
         captureWindowIdRef.current = NO_WINDOW_ID
         captureQuestionIdRef.current = ''
+        captureTurnIdRef.current = 0
     }, [])
 
     const canCaptureInState = useCallback((state) => {
+        if (captureBlockRef.current) {
+            return false
+        }
         return state === SPEECH_STATE.READY_FOR_ANSWER || state === SPEECH_STATE.CAPTURING_ANSWER
     }, [])
 
@@ -228,6 +267,143 @@ export function useVoiceLifecycle({
         onTtsFailure: handleTtsFailure,
         speechState: SPEECH_STATE
     })
+
+    const clearReplayCandidateForTurn = useCallback((turnId) => {
+        const candidate = replayCandidateRef.current
+        if (!candidate || candidate.turnId !== turnId) {
+            return
+        }
+        replayCandidateRef.current = null
+    }, [])
+
+    const clearReplayCandidateForQuestion = useCallback((questionId) => {
+        if (!questionId) {
+            return
+        }
+        const candidate = replayCandidateRef.current
+        if (!candidate || candidate.questionId !== questionId) {
+            return
+        }
+        replayCandidateRef.current = null
+    }, [])
+
+    const flushDeferredTtsQueue = useCallback(() => {
+        const queued = deferredTtsQueueRef.current
+        if (!queued.length) {
+            return
+        }
+        deferredTtsQueueRef.current = []
+        queued.forEach((item) => {
+            enqueueTtsAudio(item)
+        })
+    }, [enqueueTtsAudio])
+
+    const stopReplayPlayback = useCallback(({
+                                                flushDeferred = true,
+                                                clearDeferred = false,
+                                                statusMessage = ''
+                                            } = {}) => {
+        const activeAudio = replayAudioRef.current
+        if (activeAudio) {
+            activeAudio.onended = null
+            activeAudio.onerror = null
+            activeAudio.pause()
+            activeAudio.src = ''
+            replayAudioRef.current = null
+        }
+        if (replayAudioUrlRef.current) {
+            URL.revokeObjectURL(replayAudioUrlRef.current)
+            replayAudioUrlRef.current = ''
+        }
+        captureBlockRef.current = false
+        updateReplayState(REPLAY_STATE.IDLE)
+
+        if (clearDeferred) {
+            deferredTtsQueueRef.current = []
+        } else if (flushDeferred) {
+            flushDeferredTtsQueue()
+        }
+
+        if (statusMessage) {
+            setStatus(statusMessage)
+        }
+    }, [flushDeferredTtsQueue, setStatus, updateReplayState])
+
+    const startReplayPlayback = useCallback(() => {
+        const confirmed = replayConfirmedRef.current
+        if (!confirmed) {
+            return false
+        }
+
+        const state = speechStateRef.current
+        if (sessionActiveRef.current) {
+            const allowedWhileActive = state === SPEECH_STATE.WAITING_TTS || state === SPEECH_STATE.READY_FOR_ANSWER
+            if (!allowedWhileActive || state === SPEECH_STATE.CAPTURING_ANSWER) {
+                return false
+            }
+        }
+
+        const sampleRate = Number.isFinite(confirmed.sampleRate) ? confirmed.sampleRate : DEFAULT_SAMPLE_RATE
+        const wav = pcm16ToWav(confirmed.pcm16Bytes, sampleRate, 1)
+        if (!wav.length) {
+            setStatus('다시듣기 재생에 실패했습니다.')
+            return false
+        }
+
+        const blob = new Blob([wav], {type: 'audio/wav'})
+        const url = URL.createObjectURL(blob)
+        const audio = new Audio(url)
+        replayAudioRef.current = audio
+        replayAudioUrlRef.current = url
+        if (sessionActiveRef.current && state === SPEECH_STATE.READY_FOR_ANSWER) {
+            captureBlockRef.current = true
+        }
+        updateReplayState(REPLAY_STATE.PLAYING)
+
+        const finish = ({failed = false} = {}) => {
+            stopReplayPlayback({
+                flushDeferred: true,
+                statusMessage: failed ? '다시듣기 재생에 실패했습니다.' : ''
+            })
+        }
+        audio.onended = () => finish()
+        audio.onerror = () => finish({failed: true})
+        audio.play().catch(() => {
+            finish({failed: true})
+        })
+        return true
+    }, [setStatus, stopReplayPlayback, updateReplayState])
+
+    const getReplayDisabledReason = useCallback(() => {
+        if (replayState === REPLAY_STATE.PLAYING) {
+            return ''
+        }
+        if (!replayAvailable) {
+            return '다시 들을 수 있는 응답이 없습니다.'
+        }
+        if (!sessionActive) {
+            return ''
+        }
+        if (speechState === SPEECH_STATE.CAPTURING_ANSWER) {
+            return '답변을 수집 중에는 다시듣기를 사용할 수 없습니다.'
+        }
+        const allowed = speechState === SPEECH_STATE.WAITING_TTS || speechState === SPEECH_STATE.READY_FOR_ANSWER
+        if (!allowed) {
+            return '지금은 다시듣기를 사용할 수 없습니다.'
+        }
+        return ''
+    }, [replayAvailable, replayState, sessionActive, speechState])
+
+    const handleReplayAction = useCallback(() => {
+        if (replayStateRef.current === REPLAY_STATE.PLAYING) {
+            stopReplayPlayback({flushDeferred: true})
+            return
+        }
+        if (getReplayDisabledReason()) {
+            return
+        }
+        startReplayPlayback()
+    }, [getReplayDisabledReason, startReplayPlayback, stopReplayPlayback])
 
     const {
         audioPermission,
@@ -276,6 +452,7 @@ export function useVoiceLifecycle({
         resetPendingAudio()
         clearInFlightTurn()
         clearTtsPlayback()
+        stopReplayPlayback({flushDeferred: false, clearDeferred: true})
 
         if (processorRef.current) {
             processorRef.current.disconnect()
@@ -304,7 +481,14 @@ export function useVoiceLifecycle({
         }
         refreshAudioDeviceStatus().catch(() => {
         })
-    }, [clearInFlightTurn, clearTtsPlayback, refreshAudioDeviceStatus, resetPendingAudio, setStatus])
+    }, [
+        clearInFlightTurn,
+        clearTtsPlayback,
+        refreshAudioDeviceStatus,
+        resetPendingAudio,
+        setStatus,
+        stopReplayPlayback
+    ])
 
     const clearReconnectTimer = useCallback(() => {
         if (reconnectTimerRef.current !== null) {
@@ -327,9 +511,12 @@ export function useVoiceLifecycle({
 
     const applyRecoverySnapshot = useCallback((snapshot) => {
         const questionNode = snapshot?.currentQuestion
+        const turnId = parseTurnId(snapshot?.currentTurnId) || 0
         currentQuestionIdRef.current = questionNode?.id || ''
+        currentQuestionTurnIdRef.current = questionNode ? turnId : 0
         if (questionNode) {
             questionPromptRef.current?.({
+                turnId,
                 questionId: questionNode.id || '',
                 text: questionNode.text || '',
                 group: questionNode.group || '',
@@ -341,15 +528,39 @@ export function useVoiceLifecycle({
         }
         questionPromptRef.current?.(null)
         updateSpeechState(SPEECH_STATE.WAITING_TTS)
-    }, [updateSpeechState])
+    }, [parseTurnId, updateSpeechState])
 
-    const handleSttSkipped = useCallback(() => {
+    const handleSttFinal = useCallback((data) => {
+        const turnId = parseTurnId(data?.turnId)
+        if (turnId === null) {
+            return
+        }
+        const candidate = replayCandidateRef.current
+        if (!candidate || candidate.turnId !== turnId) {
+            return
+        }
+        updateReplayConfirmed({
+            turnId: candidate.turnId,
+            questionId: candidate.questionId,
+            sampleRate: candidate.sampleRate,
+            pcm16Bytes: candidate.pcm16Bytes,
+            confirmedAt: Date.now(),
+            confirmedBy: 'stt.final'
+        })
+        replayCandidateRef.current = null
+    }, [parseTurnId, updateReplayConfirmed])
+
+    const handleSttSkipped = useCallback((data) => {
+        const skippedTurnId = parseTurnId(data?.turnId)
+        if (skippedTurnId !== null) {
+            clearReplayCandidateForTurn(skippedTurnId)
+        }
         if (!sessionActiveRef.current || !voiceSessionIdRef.current || localStopRef.current || serverStopRef.current) {
             return
         }
         resetPendingAudio()
         updateSpeechState(SPEECH_STATE.READY_FOR_ANSWER)
-    }, [resetPendingAudio, updateSpeechState])
+    }, [clearReplayCandidateForTurn, parseTurnId, resetPendingAudio, updateSpeechState])
 
     const stopDueToChunkUploadFailure = useCallback((message = '오디오 전송 재시도에 실패해 세션을 종료했습니다.') => {
         const stop = stopSessionRef.current
@@ -477,6 +688,11 @@ export function useVoiceLifecycle({
         const snapshotQuestionId = snapshot?.currentQuestion?.id || ''
         const localQuestionId = inFlightTurnRef.current?.questionId || captureQuestionIdRef.current || ''
         if (!snapshotQuestionId || !localQuestionId || snapshotQuestionId !== localQuestionId) {
+            clearReplayCandidateForQuestion(localQuestionId)
+            const captureTurnId = parseTurnId(captureTurnIdRef.current)
+            if (captureTurnId !== null) {
+                clearReplayCandidateForTurn(captureTurnId)
+            }
             resetPendingAudio()
             clearInFlightTurn()
             return {droppedDueToMismatch: true}
@@ -543,6 +759,7 @@ export function useVoiceLifecycle({
         const durationMs = turnDurationMsRef.current
         const sampleRate = sampleRateRef.current || DEFAULT_SAMPLE_RATE
         const capturedQuestionId = captureQuestionIdRef.current || currentQuestionIdRef.current || ''
+        const capturedTurnId = parseTurnId(captureTurnIdRef.current) || parseTurnId(currentQuestionTurnIdRef.current)
 
         if (durationMs < MIN_TURN_DURATION_MS) {
             resetPendingAudio()
@@ -567,6 +784,17 @@ export function useVoiceLifecycle({
 
         const merged = joinByteChunks(chunks, totalSize)
         const nextSequence = ++chunkSequenceRef.current
+        if (capturedTurnId !== null) {
+            replayCandidateRef.current = {
+                turnId: capturedTurnId,
+                questionId: capturedQuestionId,
+                sampleRate,
+                pcm16Bytes: merged,
+                capturedAt: Date.now()
+            }
+        } else {
+            replayCandidateRef.current = null
+        }
 
         pendingAudioChunksRef.current = []
         pendingAudioSizeRef.current = 0
@@ -574,6 +802,7 @@ export function useVoiceLifecycle({
         silenceDurationMsRef.current = 0
         turnDurationMsRef.current = 0
         captureQuestionIdRef.current = ''
+        captureTurnIdRef.current = 0
 
         updateSpeechState(SPEECH_STATE.WAITING_TTS)
         inFlightTurnRef.current = {
@@ -583,6 +812,7 @@ export function useVoiceLifecycle({
             sequence: nextSequence,
             capturedWindowId,
             questionId: capturedQuestionId,
+            turnId: capturedTurnId || 0,
             retryCount: 0
         }
 
@@ -602,7 +832,17 @@ export function useVoiceLifecycle({
                 })
             }, 0)
         }
-    }, [canCaptureInState, scheduleChunkRetry, setStatus, resetPendingAudio, updateSpeechState, uploadInFlightTurn])
+    }, [
+        canCaptureInState,
+        clearReplayCandidateForQuestion,
+        clearReplayCandidateForTurn,
+        parseTurnId,
+        scheduleChunkRetry,
+        setStatus,
+        resetPendingAudio,
+        updateSpeechState,
+        uploadInFlightTurn
+    ])
 
     useEffect(() => {
         flushPendingAudioRef.current = flushPendingAudio
@@ -643,6 +883,8 @@ export function useVoiceLifecycle({
         closeEventSource()
         voiceSessionIdRef.current = ''
         currentQuestionIdRef.current = ''
+        currentQuestionTurnIdRef.current = 0
+        replayCandidateRef.current = null
         lastSeenEventIdRef.current = 0
         replayTtsCutoffEventIdRef.current = 0
         setVoiceConnected(false)
@@ -684,6 +926,7 @@ export function useVoiceLifecycle({
             speechState: SPEECH_STATE,
             onQuestionPrompt: (question) => {
                 currentQuestionIdRef.current = question?.questionId || ''
+                currentQuestionTurnIdRef.current = parseTurnId(question?.turnId) || 0
                 questionPromptRef.current?.(question)
             },
             onFeedback: (feedback) => {
@@ -694,6 +937,7 @@ export function useVoiceLifecycle({
             shouldResumeImmediatelyOnQuestionPrompt,
             enqueueTtsAudio,
             handleTtsFailure,
+            onSttFinal: handleSttFinal,
             onSttSkipped: handleSttSkipped,
             shouldProcessEvent,
             shouldSkipReplayTts,
@@ -703,8 +947,10 @@ export function useVoiceLifecycle({
         })
     }, [
         enqueueTtsAudio,
+        handleSttFinal,
         handleSttSkipped,
         handleTtsFailure,
+        parseTurnId,
         resetPendingAudio,
         resetReconnectState,
         setStatus,
@@ -853,6 +1099,9 @@ export function useVoiceLifecycle({
             setSessionPhase('STARTING')
             localStopRef.current = false
             serverStopRef.current = false
+            stopReplayPlayback({flushDeferred: false, clearDeferred: true})
+            replayCandidateRef.current = null
+            updateReplayConfirmed(null)
             resetReconnectState()
             clearInFlightTurn()
             chunkSequenceRef.current = 0
@@ -861,7 +1110,9 @@ export function useVoiceLifecycle({
             answerWindowIdRef.current = 0
             captureWindowIdRef.current = NO_WINDOW_ID
             currentQuestionIdRef.current = ''
+            currentQuestionTurnIdRef.current = 0
             captureQuestionIdRef.current = ''
+            captureTurnIdRef.current = 0
             updateSpeechState(SPEECH_STATE.WAITING_TTS)
 
             const created = await openVoiceSession({
@@ -913,6 +1164,7 @@ export function useVoiceLifecycle({
                     if (currentState === SPEECH_STATE.READY_FOR_ANSWER) {
                         captureWindowIdRef.current = answerWindowIdRef.current
                         captureQuestionIdRef.current = currentQuestionIdRef.current || ''
+                        captureTurnIdRef.current = parseTurnId(currentQuestionTurnIdRef.current) || 0
                         updateSpeechState(SPEECH_STATE.CAPTURING_ANSWER)
                     }
                     speechActiveRef.current = true
@@ -1003,6 +1255,7 @@ export function useVoiceLifecycle({
             closeEventSource()
             voiceSessionIdRef.current = ''
             currentQuestionIdRef.current = ''
+            currentQuestionTurnIdRef.current = 0
             lastSeenEventIdRef.current = 0
             replayTtsCutoffEventIdRef.current = 0
             sessionActiveRef.current = false
@@ -1025,6 +1278,7 @@ export function useVoiceLifecycle({
         clearInFlightTurn,
         closeEventSource,
         flushPendingAudio,
+        parseTurnId,
         refreshAudioDeviceStatus,
         resetPendingAudio,
         resetReconnectState,
@@ -1032,12 +1286,18 @@ export function useVoiceLifecycle({
         setAudioPermission,
         setStatus,
         stopCapture,
+        stopReplayPlayback,
+        updateReplayConfirmed,
         updateSpeechState
     ])
 
     const syncVoiceSettings = useCallback(async () => {
         setStatus('설정은 다음 세션 시작 시 반영됩니다.')
     }, [setStatus])
+
+    const replayButtonDisabledReason = getReplayDisabledReason()
+    const replayButtonDisabled = replayState !== REPLAY_STATE.PLAYING && Boolean(replayButtonDisabledReason)
+    const replayButtonLabel = replayState === REPLAY_STATE.PLAYING ? '중지' : '내 응답 재생'
 
     useEffect(() => {
         return () => {
@@ -1059,6 +1319,10 @@ export function useVoiceLifecycle({
         startSession,
         stopSession,
         syncVoiceSettings,
-        handleAudioQuickAction
+        handleAudioQuickAction,
+        replayButtonLabel,
+        replayButtonDisabled,
+        replayButtonDisabledReason,
+        handleReplayAction
     }
 }
