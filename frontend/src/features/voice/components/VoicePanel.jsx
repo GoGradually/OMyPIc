@@ -13,7 +13,11 @@ export function VoicePanel({
                                audioQuickHint,
                                audioPermission,
                                audioDeviceStatus,
-                               handleAudioQuickAction
+                               handleAudioQuickAction,
+                               replayButtonLabel,
+                               replayButtonDisabled,
+                               replayButtonDisabledReason,
+                               handleReplayAction
                            }) {
     let stageCaption = '세션 시작을 누르면 첫 질문이 자동으로 제시됩니다.'
     if (sessionActive) {
@@ -53,20 +57,34 @@ export function VoicePanel({
             </div>
 
             <div className="player-row voice-panel__actions">
-                <button
-                    className="action-button primary"
-                    onClick={startSession}
-                    disabled={sessionActive}
+                <div className="player-row__main">
+                    <button
+                        className="action-button primary"
+                        onClick={startSession}
+                        disabled={sessionActive}
+                    >
+                        세션 시작
+                    </button>
+                    <button
+                        className="action-button danger"
+                        onClick={stopSession}
+                        disabled={!sessionActive}
+                    >
+                        세션 종료
+                    </button>
+                </div>
+                <span
+                    className="player-row__replay"
+                    title={replayButtonDisabled && replayButtonDisabledReason ? replayButtonDisabledReason : undefined}
                 >
-                    세션 시작
-                </button>
-                <button
-                    className="action-button danger"
-                    onClick={stopSession}
-                    disabled={!sessionActive}
-                >
-                    세션 종료
-                </button>
+                    <button
+                        className="action-button neutral"
+                        onClick={handleReplayAction}
+                        disabled={replayButtonDisabled}
+                    >
+                        {replayButtonLabel}
+                    </button>
+                </span>
             </div>
 
             <div className={`audio-quick-strip voice-panel__audio-strip ${audioConnectionReady ? 'is-ready' : ''}`}>
