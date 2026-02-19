@@ -1,6 +1,8 @@
 import {useCallback, useRef} from 'react'
 import {fromBase64} from '../../../shared/utils/audioCodec.js'
 
+const QUESTION_REPEAT_DELAY_MS = 3000
+
 export function useTtsPlaybackQueue({
                                         resetPendingAudio,
                                         updateSpeechState,
@@ -11,12 +13,17 @@ export function useTtsPlaybackQueue({
     const ttsPlaybackQueueRef = useRef([])
     const ttsPlayingRef = useRef(false)
     const ttsActiveAudioRef = useRef(null)
+    const ttsDelayTimerRef = useRef(null)
     const ttsReceiveOrderRef = useRef(0)
 
     const clearTtsPlayback = useCallback(() => {
         ttsPlaybackQueueRef.current = []
         ttsPlayingRef.current = false
         ttsReceiveOrderRef.current = 0
+        if (ttsDelayTimerRef.current !== null) {
+            clearTimeout(ttsDelayTimerRef.current)
+            ttsDelayTimerRef.current = null
+        }
         const activeAudio = ttsActiveAudioRef.current
         if (!activeAudio) {
             return
@@ -34,6 +41,20 @@ export function useTtsPlaybackQueue({
         }
         const nextItem = ttsPlaybackQueueRef.current.shift()
         if (!nextItem) {
+            return
+        }
+
+        if (nextItem.delayMs > 0) {
+            ttsPlayingRef.current = true
+            ttsDelayTimerRef.current = setTimeout(() => {
+                ttsDelayTimerRef.current = null
+                ttsPlayingRef.current = false
+                ttsPlaybackQueueRef.current.unshift({
+                    ...nextItem,
+                    delayMs: 0
+                })
+                playNextTtsAudio()
+            }, nextItem.delayMs)
             return
         }
 
@@ -67,7 +88,9 @@ export function useTtsPlaybackQueue({
                 return
             }
             if (nextItem.role === 'question') {
-                onQuestionPlaybackCompleted()
+                if (nextItem.isRepeat) {
+                    onQuestionPlaybackCompleted()
+                }
             } else {
                 updateSpeechState(speechState.WAITING_TTS)
             }
@@ -95,14 +118,27 @@ export function useTtsPlaybackQueue({
             sequence,
             order: ++ttsReceiveOrderRef.current,
             audioBase64,
-            mimeType: data?.mimeType || 'audio/wav'
+            mimeType: data?.mimeType || 'audio/wav',
+            isRepeat: false,
+            delayMs: 0
         }
         ttsPlaybackQueueRef.current.push(item)
+        if (role === 'question') {
+            ttsPlaybackQueueRef.current.push({
+                ...item,
+                order: ++ttsReceiveOrderRef.current,
+                isRepeat: true,
+                delayMs: QUESTION_REPEAT_DELAY_MS
+            })
+        }
         ttsPlaybackQueueRef.current.sort((left, right) => {
             const leftHasSequence = left.sequence !== null
             const rightHasSequence = right.sequence !== null
             if (leftHasSequence && rightHasSequence) {
-                return left.sequence - right.sequence
+                if (left.sequence !== right.sequence) {
+                    return left.sequence - right.sequence
+                }
+                return left.order - right.order
             }
             if (leftHasSequence) {
                 return -1

@@ -159,6 +159,35 @@ function createAbortError() {
     return error
 }
 
+async function completeQuestionPlayback({timersMocked = false} = {}) {
+    const restoreRealTimers = !timersMocked
+    if (restoreRealTimers) {
+        vi.useFakeTimers()
+    }
+    try {
+        const firstQuestionAudio = audioInstances[audioInstances.length - 1]
+        if (typeof firstQuestionAudio?.onended === 'function') {
+            await act(async () => {
+                firstQuestionAudio.onended()
+            })
+        }
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(3000)
+        })
+        const repeatedQuestionAudio = audioInstances[audioInstances.length - 1]
+        if (repeatedQuestionAudio !== firstQuestionAudio
+            && typeof repeatedQuestionAudio?.onended === 'function') {
+            await act(async () => {
+                repeatedQuestionAudio.onended()
+            })
+        }
+    } finally {
+        if (restoreRealTimers) {
+            vi.useRealTimers()
+        }
+    }
+}
+
 async function prepareConfirmedReplay({
                                           turnId = 1,
                                           questionId = 'q-1',
@@ -178,9 +207,7 @@ async function prepareConfirmedReplay({
             sequence
         })
     })
-    await act(async () => {
-        audioInstances[audioInstances.length - 1].onended()
-    })
+    await completeQuestionPlayback()
 
     const uploadCallsBefore = sendVoiceAudioChunk.mock.calls.length
     act(() => {
@@ -340,10 +367,7 @@ describe('useVoiceSession', () => {
             })
         })
 
-        await act(async () => {
-            const questionAudio = audioInstances[audioInstances.length - 1]
-            questionAudio.onended()
-        })
+        await completeQuestionPlayback()
 
         expect(result.current.speechState).toBe('READY_FOR_ANSWER')
 
@@ -367,6 +391,66 @@ describe('useVoiceSession', () => {
             })
         )
         unmount()
+    })
+
+    it('replays question tts 3 seconds later before opening answer capture', async () => {
+        vi.useFakeTimers()
+        try {
+            const {result, unmount} = renderHook(() => useVoiceSession({
+                sessionId: 's1',
+                feedbackModel: 'gpt-4o-mini',
+                voiceSttModel: 'gpt-4o-mini-transcribe',
+                feedbackLang: 'ko',
+                voice: 'alloy',
+                onStatus: vi.fn(),
+                onFeedback: vi.fn(),
+                refreshWrongNotes: vi.fn(async () => {
+                }),
+                onQuestionPrompt: vi.fn()
+            }))
+
+            await act(async () => {
+                await result.current.startSession()
+            })
+
+            await act(async () => {
+                activeEventSource.emit('tts.audio', {
+                    role: 'question',
+                    audio: 'AQID',
+                    mimeType: 'audio/wav',
+                    sequence: 1
+                })
+            })
+
+            expect(audioInstances.length).toBe(1)
+            const firstQuestionAudio = audioInstances[audioInstances.length - 1]
+            await act(async () => {
+                firstQuestionAudio.onended()
+            })
+            expect(result.current.speechState).toBe('PLAYING_QUESTION_TTS')
+
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(2999)
+            })
+            expect(audioInstances.length).toBe(1)
+            expect(result.current.speechState).toBe('PLAYING_QUESTION_TTS')
+
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(1)
+            })
+            expect(audioInstances.length).toBe(2)
+            const repeatedQuestionAudio = audioInstances[audioInstances.length - 1]
+            expect(repeatedQuestionAudio).not.toBe(firstQuestionAudio)
+            expect(result.current.speechState).toBe('PLAYING_QUESTION_TTS')
+
+            await act(async () => {
+                repeatedQuestionAudio.onended()
+            })
+            expect(result.current.speechState).toBe('READY_FOR_ANSWER')
+            unmount()
+        } finally {
+            vi.useRealTimers()
+        }
     })
 
     it('stops session immediately when tts error arrives', async () => {
@@ -636,9 +720,7 @@ describe('useVoiceSession', () => {
                     sequence: 1
                 })
             })
-            await act(async () => {
-                audioInstances[audioInstances.length - 1].onended()
-            })
+            await completeQuestionPlayback({timersMocked: true})
 
             sendVoiceAudioChunk.mockRejectedValueOnce(new Error('temporary network'))
             act(() => {
@@ -744,9 +826,7 @@ describe('useVoiceSession', () => {
                     sequence: 1
                 })
             })
-            await act(async () => {
-                audioInstances[audioInstances.length - 1].onended()
-            })
+            await completeQuestionPlayback({timersMocked: true})
 
             act(() => {
                 emitAudioFrame(0.1)
@@ -840,9 +920,7 @@ describe('useVoiceSession', () => {
                     sequence: 1
                 })
             })
-            await act(async () => {
-                audioInstances[audioInstances.length - 1].onended()
-            })
+            await completeQuestionPlayback({timersMocked: true})
 
             sendVoiceAudioChunk.mockRejectedValueOnce(new Error('temporary network'))
             act(() => {
@@ -908,9 +986,7 @@ describe('useVoiceSession', () => {
                     sequence: 1
                 })
             })
-            await act(async () => {
-                audioInstances[audioInstances.length - 1].onended()
-            })
+            await completeQuestionPlayback({timersMocked: true})
 
             sendVoiceAudioChunk.mockRejectedValueOnce(new Error('temporary network'))
             act(() => {
@@ -1012,9 +1088,7 @@ describe('useVoiceSession', () => {
                 sequence: 1
             })
         })
-        await act(async () => {
-            audioInstances[audioInstances.length - 1].onended()
-        })
+        await completeQuestionPlayback()
         expect(result.current.speechState).toBe('READY_FOR_ANSWER')
 
         act(() => {
@@ -1057,10 +1131,7 @@ describe('useVoiceSession', () => {
                 sequence: 1
             })
         })
-        await act(async () => {
-            const questionAudio = audioInstances[audioInstances.length - 1]
-            questionAudio.onended()
-        })
+        await completeQuestionPlayback()
         expect(result.current.speechState).toBe('READY_FOR_ANSWER')
 
         act(() => {
@@ -1114,10 +1185,7 @@ describe('useVoiceSession', () => {
                 sequence: 1
             })
         })
-        await act(async () => {
-            const questionAudio = audioInstances[audioInstances.length - 1]
-            questionAudio.onended()
-        })
+        await completeQuestionPlayback()
         expect(result.current.speechState).toBe('READY_FOR_ANSWER')
 
         act(() => {
@@ -1174,9 +1242,7 @@ describe('useVoiceSession', () => {
                 sequence: 1
             })
         })
-        await act(async () => {
-            audioInstances[audioInstances.length - 1].onended()
-        })
+        await completeQuestionPlayback()
         expect(result.current.speechState).toBe('READY_FOR_ANSWER')
 
         // Start speaking for question 1, but switch to next question before silence flush.
@@ -1197,9 +1263,7 @@ describe('useVoiceSession', () => {
                 sequence: 2
             })
         })
-        await act(async () => {
-            audioInstances[audioInstances.length - 1].onended()
-        })
+        await completeQuestionPlayback()
         expect(result.current.speechState).toBe('READY_FOR_ANSWER')
 
         // Speak for question 2 only.
@@ -1242,9 +1306,7 @@ describe('useVoiceSession', () => {
                     sequence: 1
                 })
             })
-            await act(async () => {
-                audioInstances[audioInstances.length - 1].onended()
-            })
+            await completeQuestionPlayback({timersMocked: true})
 
             sendVoiceAudioChunk
                 .mockRejectedValueOnce(new Error('temporary'))
@@ -1330,9 +1392,7 @@ describe('useVoiceSession', () => {
                     sequence: 1
                 })
             })
-            await act(async () => {
-                audioInstances[audioInstances.length - 1].onended()
-            })
+            await completeQuestionPlayback({timersMocked: true})
 
             act(() => {
                 emitAudioFrame(0.1)
@@ -1401,9 +1461,7 @@ describe('useVoiceSession', () => {
                     sequence: 1
                 })
             })
-            await act(async () => {
-                audioInstances[audioInstances.length - 1].onended()
-            })
+            await completeQuestionPlayback({timersMocked: true})
 
             sendVoiceAudioChunk.mockRejectedValue(new Error('network down'))
 
@@ -1463,9 +1521,7 @@ describe('useVoiceSession', () => {
                 sequence: 1
             })
         })
-        await act(async () => {
-            audioInstances[audioInstances.length - 1].onended()
-        })
+        await completeQuestionPlayback()
 
         act(() => {
             for (let i = 0; i < 151; i += 1) {
@@ -1587,9 +1643,7 @@ describe('useVoiceSession', () => {
                 sequence: 1
             })
         })
-        await act(async () => {
-            audioInstances[audioInstances.length - 1].onended()
-        })
+        await completeQuestionPlayback()
 
         act(() => {
             emitAudioFrame(0.1)
@@ -1689,9 +1743,7 @@ describe('useVoiceSession', () => {
                 sequence: 2
             })
         })
-        await act(async () => {
-            audioInstances[audioInstances.length - 1].onended()
-        })
+        await completeQuestionPlayback()
         expect(result.current.speechState).toBe('READY_FOR_ANSWER')
 
         const uploadsBeforeReplay = sendVoiceAudioChunk.mock.calls.length
