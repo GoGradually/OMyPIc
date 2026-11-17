@@ -64,6 +64,17 @@ npm run electron:build
 산출물은 `frontend/dist/` 하위에 생성됩니다.
 Windows 설치형은 Windows 환경에서, macOS DMG는 macOS 환경에서 빌드하는 것을 권장합니다.
 
+### GitHub Actions 릴리스
+
+`.github/workflows/release.yml`이 설치본을 대상 OS의 러너에서 빌드합니다.
+
+1. `frontend/package.json`의 `version`을 올립니다.
+2. 같은 버전의 태그를 푸시합니다: `git tag v0.2.0 && git push origin v0.2.0`
+3. 워크플로가 테스트 후 Windows(NSIS, x64)와 macOS(DMG, Apple Silicon) 설치본을 빌드하고, 릴리스 초안에 첨부합니다.
+4. GitHub Releases에서 초안을 확인한 뒤 직접 게시합니다. 태그에 `-`가 있으면(예: `v0.2.0-rc.1`) 사전 릴리스로 표시됩니다.
+
+Intel Mac용 DMG는 워크플로에 포함되어 있지 않습니다. 필요하면 Intel Mac에서 `npm run electron:build:mac`으로 빌드합니다.
+
 ## 4) 런타임 기동 순서
 
 패키지된 앱 실행 시 Electron 메인 프로세스는 아래 순서로 동작합니다.
