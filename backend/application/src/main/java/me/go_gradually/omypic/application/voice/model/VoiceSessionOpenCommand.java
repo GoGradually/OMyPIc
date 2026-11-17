@@ -5,7 +5,7 @@ public class VoiceSessionOpenCommand {
     private String apiKey;
     private String feedbackApiKey;
     private String feedbackProvider;
-    private Boolean feedbackEnabled;
+    private Boolean aiEnabled;
     private String feedbackModel;
     private String feedbackLanguage;
     private String sttModel;
@@ -49,14 +49,15 @@ public class VoiceSessionOpenCommand {
     }
 
     /**
-     * null is treated as enabled so existing clients keep getting AI feedback.
+     * false runs the session with no AI at all: no STT, no TTS, no feedback, and no API key.
+     * null is treated as enabled so existing clients keep their behavior.
      */
-    public Boolean getFeedbackEnabled() {
-        return feedbackEnabled;
+    public Boolean getAiEnabled() {
+        return aiEnabled;
     }
 
-    public void setFeedbackEnabled(Boolean feedbackEnabled) {
-        this.feedbackEnabled = feedbackEnabled;
+    public void setAiEnabled(Boolean aiEnabled) {
+        this.aiEnabled = aiEnabled;
     }
 
     public String getFeedbackModel() {

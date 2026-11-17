@@ -6,19 +6,19 @@ export function SummaryPanel({
                                  voice,
                                  voiceSttModel,
                                  feedbackModel,
-                                 aiFeedbackEnabled = true,
+                                 aiEnabled = true,
                                  ttsModel,
                                  enabledRulebookCount,
                                  questionGroupCount,
                                  onOpenSettings
                              }) {
     const rows = [
-        {label: 'AI 피드백', value: aiFeedbackEnabled ? '켜짐' : '꺼짐'},
-        {label: '피드백 모델', value: feedbackModel, title: getModelLabel(feedbackModel), muted: !aiFeedbackEnabled},
-        {label: '피드백 언어', value: feedbackLang === 'ko' ? '한국어' : 'English', muted: !aiFeedbackEnabled},
-        {label: 'STT 모델', value: voiceSttModel},
-        {label: 'TTS 모델', value: ttsModel},
-        {label: '음성 스타일', value: voice},
+        {label: 'AI 사용', value: aiEnabled ? '켜짐' : '꺼짐'},
+        {label: '피드백 모델', value: feedbackModel, title: getModelLabel(feedbackModel), muted: !aiEnabled},
+        {label: '피드백 언어', value: feedbackLang === 'ko' ? '한국어' : 'English', muted: !aiEnabled},
+        {label: 'STT 모델', value: voiceSttModel, muted: !aiEnabled},
+        {label: 'TTS 모델', value: ttsModel, muted: !aiEnabled},
+        {label: '음성 스타일', value: voice, muted: !aiEnabled},
         {label: '활성 룰북', value: `${enabledRulebookCount}개`},
         {label: '질문 그룹', value: `${questionGroupCount}개`}
     ]

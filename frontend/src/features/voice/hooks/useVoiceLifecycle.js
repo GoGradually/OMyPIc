@@ -3,6 +3,7 @@ import {
     getVoiceEventsUrl,
     openVoiceSession,
     recoverVoiceSession,
+    sendVoiceAnswer,
     sendVoiceAudioChunk,
     stopVoiceSession
 } from '../../../shared/api/http.js'
@@ -38,7 +39,7 @@ export function useVoiceLifecycle({
                                     sessionId,
                                     feedbackModel,
                                     feedbackProvider = '',
-                                    feedbackEnabled = true,
+                                    aiEnabled = true,
                                     autoReplay = false,
                                     voiceSttModel,
                                     ttsModel,
@@ -59,7 +60,7 @@ export function useVoiceLifecycle({
     const [replayState, setReplayState] = useState(REPLAY_STATE.IDLE)
     const [replayAvailable, setReplayAvailable] = useState(false)
     // What the running session was opened with. The toggle in the UI only applies to the next session.
-    const [sessionFeedbackEnabled, setSessionFeedbackEnabled] = useState(true)
+    const [sessionAiEnabled, setSessionAiEnabled] = useState(true)
     // True from the moment an answer is sent until the next question starts playing.
     const [awaitingReview, setAwaitingReview] = useState(false)
 
@@ -71,14 +72,14 @@ export function useVoiceLifecycle({
     const settingsRef = useRef({
         feedbackModel,
         feedbackProvider,
-        feedbackEnabled,
+        aiEnabled,
         autoReplay,
         voiceSttModel,
         ttsModel,
         feedbackLang,
         voice
     })
-    const sessionFeedbackEnabledRef = useRef(true)
+    const sessionAiEnabledRef = useRef(true)
 
     const voiceSessionIdRef = useRef('')
     const eventSourceRef = useRef(null)
@@ -126,6 +127,7 @@ export function useVoiceLifecycle({
     const replayAudioRef = useRef(null)
     const replayAudioUrlRef = useRef('')
     const deferredTtsQueueRef = useRef([])
+    const pendingAnswerWindowRef = useRef(false)
     const onConnectionErrorRef = useRef(() => {
     })
 
@@ -149,14 +151,14 @@ export function useVoiceLifecycle({
         settingsRef.current = {
             feedbackModel,
             feedbackProvider,
-            feedbackEnabled,
+            aiEnabled,
             autoReplay,
             voiceSttModel,
             ttsModel,
             feedbackLang,
             voice
         }
-    }, [feedbackModel, feedbackProvider, feedbackEnabled, autoReplay, voiceSttModel, ttsModel, feedbackLang, voice])
+    }, [feedbackModel, feedbackProvider, aiEnabled, autoReplay, voiceSttModel, ttsModel, feedbackLang, voice])
 
     const setStatus = useCallback((message) => {
         if (statusRef.current) {
@@ -276,6 +278,17 @@ export function useVoiceLifecycle({
         updateSpeechState(SPEECH_STATE.READY_FOR_ANSWER)
     }, [updateSpeechState])
 
+    // AI off: no question audio arrives. The question is on screen, so the answer window opens
+    // right away, or as soon as the learner's own answer has finished replaying.
+    const openAnswerWindowWithoutAudio = useCallback(() => {
+        if (replayStateRef.current === REPLAY_STATE.PLAYING) {
+            pendingAnswerWindowRef.current = true
+            return
+        }
+        pendingAnswerWindowRef.current = false
+        onQuestionPlaybackCompleted()
+    }, [onQuestionPlaybackCompleted])
+
     const {
         clearTtsPlayback,
         enqueueTtsAudio
@@ -339,14 +352,19 @@ export function useVoiceLifecycle({
 
         if (clearDeferred) {
             deferredTtsQueueRef.current = []
+            pendingAnswerWindowRef.current = false
         } else if (flushDeferred) {
             flushDeferredTtsQueue()
+            if (pendingAnswerWindowRef.current && sessionActiveRef.current) {
+                pendingAnswerWindowRef.current = false
+                onQuestionPlaybackCompleted()
+            }
         }
 
         if (statusMessage) {
             setStatus(statusMessage)
         }
-    }, [flushDeferredTtsQueue, setStatus, updateReplayState])
+    }, [flushDeferredTtsQueue, onQuestionPlaybackCompleted, setStatus, updateReplayState])
 
     const startReplayPlayback = useCallback(() => {
         const confirmed = replayConfirmedRef.current
@@ -475,6 +493,7 @@ export function useVoiceLifecycle({
             // The session ended on its own while the learner's answer is still playing back
             // (last question with AI feedback off). Let it finish; only drop what was queued behind it.
             deferredTtsQueueRef.current = []
+            pendingAnswerWindowRef.current = false
             captureBlockRef.current = false
         } else {
             stopReplayPlayback({flushDeferred: false, clearDeferred: true})
@@ -575,10 +594,10 @@ export function useVoiceLifecycle({
         })
         replayCandidateRef.current = null
 
-        // AI feedback off: there is nothing to read back, so the learner hears their own answer
-        // instead. The next question's audio queues behind this playback (deferredTtsQueue).
+        // AI off: there is no feedback to read back, so the learner hears their own answer instead.
+        // The next question's answer window waits for this playback (pendingAnswerWindowRef).
         const shouldAutoReplay = sessionActiveRef.current
-            && !sessionFeedbackEnabledRef.current
+            && !sessionAiEnabledRef.current
             && settingsRef.current.autoReplay
         if (shouldAutoReplay && startReplayPlayback()) {
             setStatus('내 응답을 다시 듣는 중입니다. 재생이 끝나면 다음 질문으로 넘어갑니다.')
@@ -634,13 +653,19 @@ export function useVoiceLifecycle({
             abortController.abort()
         }, VOICE_CHUNK_UPLOAD_TIMEOUT_MS)
         try {
-            await sendVoiceAudioChunk(turn.voiceSessionId, {
-                pcm16Base64: turn.pcm16Base64,
-                sampleRate: turn.sampleRate,
-                sequence: turn.sequence
-            }, {
-                signal: abortController.signal
-            })
+            if (turn.kind === 'answer') {
+                await sendVoiceAnswer(turn.voiceSessionId, {sequence: turn.sequence}, {
+                    signal: abortController.signal
+                })
+            } else {
+                await sendVoiceAudioChunk(turn.voiceSessionId, {
+                    pcm16Base64: turn.pcm16Base64,
+                    sampleRate: turn.sampleRate,
+                    sequence: turn.sequence
+                }, {
+                    signal: abortController.signal
+                })
+            }
             if (inFlightTurnRef.current?.sequence === turn.sequence) {
                 inFlightTurnRef.current = null
             }
@@ -841,9 +866,13 @@ export function useVoiceLifecycle({
 
         updateSpeechState(SPEECH_STATE.WAITING_TTS)
         setAwaitingReview(true)
+        // AI on uploads the recording for transcription. AI off keeps it on the device (it is only
+        // used for replay) and reports just the end of the answer.
+        const aiOn = sessionAiEnabledRef.current
         inFlightTurnRef.current = {
+            kind: aiOn ? 'audio' : 'answer',
             voiceSessionId,
-            pcm16Base64: toBase64(merged),
+            pcm16Base64: aiOn ? toBase64(merged) : '',
             sampleRate,
             sequence: nextSequence,
             capturedWindowId,
@@ -965,6 +994,17 @@ export function useVoiceLifecycle({
                 currentQuestionIdRef.current = question?.questionId || ''
                 currentQuestionTurnIdRef.current = parseTurnId(question?.turnId) || 0
                 questionPromptRef.current?.(question)
+                if (!sessionAiEnabledRef.current && question && !question.exhausted) {
+                    openAnswerWindowWithoutAudio()
+                }
+            },
+            getQuestionPromptStatus: () => {
+                if (sessionAiEnabledRef.current) {
+                    return ''
+                }
+                return replayStateRef.current === REPLAY_STATE.PLAYING
+                    ? '내 응답을 다시 듣는 중입니다. 재생이 끝나면 다음 질문에 답변해 주세요.'
+                    : '다음 질문입니다. 질문을 읽고 답변해 주세요.'
             },
             onFeedback: (feedback) => {
                 feedbackRef.current?.(feedback)
@@ -975,6 +1015,7 @@ export function useVoiceLifecycle({
             enqueueTtsAudio,
             handleTtsFailure,
             onSttFinal: handleSttFinal,
+            onAnswerCaptured: handleSttFinal,
             onSttSkipped: handleSttSkipped,
             shouldProcessEvent,
             shouldSkipReplayTts,
@@ -987,6 +1028,7 @@ export function useVoiceLifecycle({
         handleSttFinal,
         handleSttSkipped,
         handleTtsFailure,
+        openAnswerWindowWithoutAudio,
         parseTurnId,
         resetPendingAudio,
         resetReconnectState,
@@ -1152,14 +1194,14 @@ export function useVoiceLifecycle({
             captureTurnIdRef.current = 0
             updateSpeechState(SPEECH_STATE.WAITING_TTS)
 
-            const aiFeedbackOn = settingsRef.current.feedbackEnabled !== false
-            sessionFeedbackEnabledRef.current = aiFeedbackOn
-            setSessionFeedbackEnabled(aiFeedbackOn)
+            const aiOn = settingsRef.current.aiEnabled !== false
+            sessionAiEnabledRef.current = aiOn
+            setSessionAiEnabled(aiOn)
             setAwaitingReview(false)
 
             const created = await openVoiceSession({
                 sessionId,
-                feedbackEnabled: aiFeedbackOn,
+                aiEnabled: aiOn,
                 feedbackProvider: settingsRef.current.feedbackProvider || undefined,
                 feedbackModel: settingsRef.current.feedbackModel,
                 feedbackLanguage: settingsRef.current.feedbackLang,
@@ -1280,9 +1322,9 @@ export function useVoiceLifecycle({
             sessionActiveRef.current = true
             setSessionPhase('ACTIVE')
             setAudioPermission('granted')
-            setStatus(aiFeedbackOn
+            setStatus(aiOn
                 ? '세션을 시작했습니다. 질문을 듣고 답변해 주세요.'
-                : '세션을 시작했습니다. AI 피드백 없이 질문과 답변만 진행합니다.')
+                : '세션을 시작했습니다. AI 없이 진행합니다. 질문을 읽고 답변해 주세요.')
             refreshAudioDeviceStatus().catch(() => {
             })
         } catch (error) {
@@ -1371,7 +1413,7 @@ export function useVoiceLifecycle({
         replayButtonDisabledReason,
         handleReplayAction,
         replayPlaying: replayState === REPLAY_STATE.PLAYING,
-        sessionFeedbackEnabled,
+        sessionAiEnabled,
         awaitingReview
     }
 }

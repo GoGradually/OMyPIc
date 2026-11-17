@@ -57,4 +57,24 @@ class VoiceSessionUseCaseValidationTest {
 
         assertEquals("Unsupported feedback model: gpt-5.2", error.getMessage());
     }
+
+    @Test
+    void open_requiresApiKeyWhileAiIsOn() {
+        VoiceSessionUseCase useCase = new VoiceSessionUseCase(
+                sttUseCase,
+                feedbackUseCase,
+                sessionUseCase,
+                questionUseCase,
+                ttsGateway,
+                asyncExecutor,
+                voicePolicy,
+                metrics
+        );
+        VoiceSessionOpenCommand command = new VoiceSessionOpenCommand();
+        command.setSessionId("s1");
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () -> useCase.open(command));
+
+        assertEquals("sessionId and apiKey are required", error.getMessage());
+    }
 }

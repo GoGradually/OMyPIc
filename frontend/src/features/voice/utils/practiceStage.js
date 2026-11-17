@@ -1,23 +1,24 @@
 // The practice turn is a real sequence, so the stage is shown as numbered steps:
-//   AI feedback on (immediate) : 질문 듣기 → 답변 → 피드백
-//   AI feedback on (continuous): 질문 듣기 → 답변   (feedback arrives once per question group)
-//   AI feedback off            : 질문 듣기 → 답변 → 내 응답 다시듣기 (when auto replay is on)
+//   AI on (immediate) : 질문 듣기 → 답변 → 피드백
+//   AI on (continuous): 질문 듣기 → 답변   (feedback arrives once per question group)
+//   AI off            : 질문 읽기 → 답변 → 내 응답 다시듣기 (the last step only with auto replay)
+// With AI off nothing is spoken or transcribed: the question is shown as text.
 
-export function getPracticeSteps({feedbackEnabled, autoReplayEnabled, continuousMode}) {
-    const steps = ['질문 듣기', '답변']
-    if (feedbackEnabled) {
-        if (!continuousMode) {
-            steps.push('피드백')
-        }
-        return steps
+export function getPracticeSteps({aiEnabled, autoReplayEnabled, continuousMode}) {
+    if (aiEnabled) {
+        return continuousMode ? ['질문 듣기', '답변'] : ['질문 듣기', '답변', '피드백']
     }
-    if (autoReplayEnabled) {
-        steps.push('내 응답 다시듣기')
-    }
-    return steps
+    return autoReplayEnabled ? ['질문 읽기', '답변', '내 응답 다시듣기'] : ['질문 읽기', '답변']
 }
 
-export function getActiveStepIndex({sessionActive, speechState, replayPlaying, awaitingReview, stepCount}) {
+export function getActiveStepIndex({
+                                       sessionActive,
+                                       speechState,
+                                       replayPlaying,
+                                       awaitingReview,
+                                       stepCount,
+                                       aiEnabled = true
+                                   }) {
     if (!sessionActive) {
         return -1
     }
@@ -25,8 +26,13 @@ export function getActiveStepIndex({sessionActive, speechState, replayPlaying, a
     if (replayPlaying || speechState === 'PLAYING_FEEDBACK_TTS') {
         return lastStep
     }
-    if (speechState === 'READY_FOR_ANSWER' || speechState === 'CAPTURING_ANSWER') {
+    if (speechState === 'CAPTURING_ANSWER') {
         return 1
+    }
+    if (speechState === 'READY_FOR_ANSWER') {
+        // AI on: the question was just read aloud, so it is the learner's turn to answer.
+        // AI off: the learner is still reading the question until they start speaking.
+        return aiEnabled ? 1 : 0
     }
     if (speechState === 'PLAYING_QUESTION_TTS') {
         return 0
@@ -37,15 +43,15 @@ export function getActiveStepIndex({sessionActive, speechState, replayPlaying, a
     return -1
 }
 
-export function getIdleCaption({feedbackEnabled, autoReplayEnabled, continuousMode}) {
-    if (feedbackEnabled) {
+export function getIdleCaption({aiEnabled, autoReplayEnabled, continuousMode}) {
+    if (aiEnabled) {
         return continuousMode
             ? '질문 그룹이 끝날 때마다 AI가 한 번에 첨삭합니다.'
             : '답변을 마칠 때마다 AI가 첨삭합니다.'
     }
     return autoReplayEnabled
-        ? 'AI 없이 질문 듣기, 답변, 내 응답 다시듣기가 자동으로 이어집니다.'
-        : 'AI 없이 질문 듣기와 답변만 자동으로 이어집니다.'
+        ? 'AI 없이 질문 표시, 답변 녹음, 내 응답 다시듣기가 자동으로 이어집니다.'
+        : 'AI 없이 질문 표시와 답변 녹음만 자동으로 이어집니다.'
 }
 
 export function getStageCaption({
@@ -53,21 +59,23 @@ export function getStageCaption({
                                     speechState,
                                     replayPlaying,
                                     awaitingReview,
-                                    feedbackEnabled,
+                                    aiEnabled,
                                     autoReplayEnabled,
                                     continuousMode
                                 }) {
     if (!sessionActive) {
-        return getIdleCaption({feedbackEnabled, autoReplayEnabled, continuousMode})
+        return getIdleCaption({aiEnabled, autoReplayEnabled, continuousMode})
     }
     if (replayPlaying) {
         return '내 응답을 다시 듣는 중입니다.'
     }
     switch (speechState) {
         case 'READY_FOR_ANSWER':
-            return '지금 답변해 주세요.'
+            return aiEnabled ? '지금 답변해 주세요.' : '질문을 읽고 답변을 시작해 주세요.'
         case 'CAPTURING_ANSWER':
-            return '답변을 듣고 있습니다. 말을 멈추면 3초 뒤 자동으로 넘어갑니다.'
+            return aiEnabled
+                ? '답변을 듣고 있습니다. 말을 멈추면 3초 뒤 자동으로 넘어갑니다.'
+                : '답변을 녹음하고 있습니다. 말을 멈추면 3초 뒤 자동으로 넘어갑니다.'
         case 'PLAYING_QUESTION_TTS':
             return '질문을 읽어 드립니다. 두 번 재생됩니다.'
         case 'PLAYING_FEEDBACK_TTS':
@@ -77,7 +85,7 @@ export function getStageCaption({
         case 'STOPPING':
             return '세션을 정리하고 있습니다.'
         case 'WAITING_TTS':
-            if (awaitingReview && feedbackEnabled && !continuousMode) {
+            if (awaitingReview && aiEnabled && !continuousMode) {
                 return 'AI가 답변을 첨삭하고 있습니다.'
             }
             return awaitingReview ? '다음 질문을 준비하고 있습니다.' : '질문을 준비하고 있습니다.'

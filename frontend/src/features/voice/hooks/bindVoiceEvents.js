@@ -37,6 +37,8 @@ export function bindVoiceEvents({
                                     handleTtsFailure,
                                     onSttFinal,
                                     onSttSkipped,
+                                    onAnswerCaptured,
+                                    getQuestionPromptStatus,
                                     shouldProcessEvent,
                                     shouldSkipReplayTts,
                                     onConnectionError
@@ -70,6 +72,17 @@ export function bindVoiceEvents({
         setUserText(text)
     })
 
+    // AI off: the server acknowledges the end of an answer without transcribing anything.
+    eventSource.addEventListener('answer.captured', (event) => {
+        const data = processData(event)
+        if (!data) {
+            return
+        }
+        setPartialTranscript('')
+        setStatus('답변을 녹음했습니다.')
+        onAnswerCaptured?.(data)
+    })
+
     eventSource.addEventListener('stt.skipped', (event) => {
         const data = processData(event)
         if (!data) {
@@ -97,7 +110,7 @@ export function bindVoiceEvents({
             return
         }
         if (normalizedQuestion.text) {
-            setStatus('다음 질문입니다. 질문을 끝까지 들은 뒤 답변해 주세요.')
+            setStatus(getQuestionPromptStatus?.() || '다음 질문입니다. 질문을 끝까지 들은 뒤 답변해 주세요.')
         }
     })
 

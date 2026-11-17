@@ -57,8 +57,8 @@ export function ModelSettingsOverlay({
                                          claudeKeyInput = '',
                                          setClaudeKeyInput = () => {
                                          },
-                                         aiFeedbackEnabled = true,
-                                         setAiFeedbackEnabled = () => {
+                                         aiEnabled = true,
+                                         setAiEnabled = () => {
                                          },
                                          autoReplayEnabled = false,
                                          setAutoReplayEnabled = () => {
@@ -82,28 +82,28 @@ export function ModelSettingsOverlay({
     return (
         <div className="overlay-content settings">
             <section className="settings__group" aria-labelledby="settings-feedback">
-                <h3 id="settings-feedback">AI 피드백</h3>
+                <h3 id="settings-feedback">AI 사용</h3>
                 <div className="ai-control">
                     <button
                         type="button"
                         role="switch"
                         className="switch"
-                        aria-checked={aiFeedbackEnabled}
-                        aria-label="AI 피드백 사용"
-                        onClick={() => setAiFeedbackEnabled(!aiFeedbackEnabled)}
+                        aria-checked={aiEnabled}
+                        aria-label="AI 사용"
+                        onClick={() => setAiEnabled(!aiEnabled)}
                         disabled={sessionActive}
                     >
                         <span className="switch__thumb"/>
                     </button>
                     <div className="ai-control__copy">
-                        <strong>AI 피드백 {aiFeedbackEnabled ? '켜짐' : '꺼짐'}</strong>
+                        <strong>AI {aiEnabled ? '켜짐' : '꺼짐'}</strong>
                         <span>
-                            {aiFeedbackEnabled
-                                ? '답변마다 선택한 모델이 첨삭합니다.'
-                                : '피드백 모델을 호출하지 않습니다. 질문 듣기와 답변 인식은 그대로 진행됩니다.'}
+                            {aiEnabled
+                                ? '질문을 읽어 주고, 답변을 인식해 선택한 모델로 첨삭합니다.'
+                                : '음성 인식(STT), 음성 합성(TTS), 피드백을 모두 쓰지 않습니다. API Key가 필요 없습니다.'}
                         </span>
                     </div>
-                    {!aiFeedbackEnabled && (
+                    {!aiEnabled && (
                         <label className="check">
                             <input
                                 type="checkbox"
@@ -122,7 +122,7 @@ export function ModelSettingsOverlay({
                             id="feedback-model"
                             value={feedbackModel}
                             onChange={(event) => setFeedbackModel(event.target.value)}
-                            disabled={!aiFeedbackEnabled}
+                            disabled={!aiEnabled}
                         >
                             {feedbackProviderGroups.length > 0
                                 ? feedbackProviderGroups.map((group) => (
@@ -132,7 +132,7 @@ export function ModelSettingsOverlay({
                                 ))
                                 : <ModelOptions models={feedbackModelOptions}/>}
                         </select>
-                        {aiFeedbackEnabled && usesClaude && (
+                        {aiEnabled && usesClaude && (
                             <p className="tiny-meta">Claude 모델은 아래 Claude API Key로 호출합니다.</p>
                         )}
                     </div>
@@ -142,7 +142,7 @@ export function ModelSettingsOverlay({
                             id="feedback-language"
                             value={feedbackLang}
                             onChange={(event) => setFeedbackLang(event.target.value)}
-                            disabled={!aiFeedbackEnabled}
+                            disabled={!aiEnabled}
                         >
                             {feedbackLanguageList.map((item) => (
                                 <option key={item} value={item}>{FEEDBACK_LANGUAGE_LABELS[item] || item}</option>
@@ -161,19 +161,30 @@ export function ModelSettingsOverlay({
                             id="stt-model"
                             value={voiceSttModel}
                             onChange={(event) => setVoiceSttModel(event.target.value)}
+                            disabled={!aiEnabled}
                         >
                             <ModelOptions models={voiceSttModelOptions}/>
                         </select>
                     </div>
                     <div className="field-block">
                         <label htmlFor="tts-model">TTS 모델</label>
-                        <select id="tts-model" value={ttsModel} onChange={(event) => setTtsModel(event.target.value)}>
+                        <select
+                            id="tts-model"
+                            value={ttsModel}
+                            onChange={(event) => setTtsModel(event.target.value)}
+                            disabled={!aiEnabled}
+                        >
                             <ModelOptions models={ttsModelOptions}/>
                         </select>
                     </div>
                     <div className="field-block">
                         <label htmlFor="tts-voice">음성 스타일</label>
-                        <select id="tts-voice" value={voice} onChange={(event) => setVoice(event.target.value)}>
+                        <select
+                            id="tts-voice"
+                            value={voice}
+                            onChange={(event) => setVoice(event.target.value)}
+                            disabled={!aiEnabled}
+                        >
                             {voiceOptions.map((item) => (
                                 <option key={item} value={item}>{item}</option>
                             ))}
@@ -187,7 +198,7 @@ export function ModelSettingsOverlay({
                 <ApiKeyField
                     id="openai-key"
                     label="OpenAI API Key"
-                    hint="질문 음성(TTS)과 답변 인식(STT)에 항상 사용합니다. GPT 피드백 모델도 이 키로 호출합니다."
+                    hint="AI를 켰을 때 질문 음성(TTS)과 답변 인식(STT)에 사용합니다. GPT 피드백 모델도 이 키로 호출합니다."
                     value={apiKeyInput}
                     onChange={setApiKeyInput}
                     placeholder="sk-..."
@@ -210,7 +221,7 @@ export function ModelSettingsOverlay({
                 <h3 id="settings-cost">비용 안내</h3>
                 <p className="tiny-meta">기본 설정(gpt-5-nano) 기준으로 세션 1회당 약 50원이 사용됩니다.</p>
                 <p className="tiny-meta">실제 비용은 발화 길이와 선택 모델에 따라 달라질 수 있습니다.</p>
-                <p className="tiny-meta">AI 피드백을 끄면 피드백 모델 비용이 들지 않습니다. 음성 합성과 인식 비용은 그대로입니다.</p>
+                <p className="tiny-meta">AI를 끄면 어떤 API도 호출하지 않으므로 비용이 들지 않습니다.</p>
             </section>
 
             <section className="settings__group" aria-labelledby="settings-data">

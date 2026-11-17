@@ -1,5 +1,6 @@
 package me.go_gradually.omypic.presentation.voice.controller;
 
+import me.go_gradually.omypic.application.voice.model.VoiceAnswerCommand;
 import me.go_gradually.omypic.application.voice.model.VoiceAudioChunkCommand;
 import me.go_gradually.omypic.application.voice.model.VoiceSessionOpenCommand;
 import me.go_gradually.omypic.application.voice.model.VoiceSessionStopCommand;
@@ -76,7 +77,7 @@ class VoiceSessionControllerTest {
                                   "sessionId":"s2",
                                   "feedbackModel":"claude-opus-5-5",
                                   "feedbackProvider":"anthropic",
-                                  "feedbackEnabled":false
+                                  "aiEnabled":false
                                 }
                                 """))
                 .andExpect(status().isOk())
@@ -87,7 +88,40 @@ class VoiceSessionControllerTest {
         assertEquals("openai-key", captor.getValue().getApiKey());
         assertEquals("sk-ant-key", captor.getValue().getFeedbackApiKey());
         assertEquals("anthropic", captor.getValue().getFeedbackProvider());
-        assertEquals(Boolean.FALSE, captor.getValue().getFeedbackEnabled());
+        assertEquals(Boolean.FALSE, captor.getValue().getAiEnabled());
+    }
+
+    @Test
+    void open_withoutApiKeyHeader_reachesUseCaseForAiOffSessions() throws Exception {
+        when(voiceSessionUseCase.open(any())).thenReturn("voice-off");
+
+        mockMvc.perform(post("/api/voice/sessions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"sessionId":"s3","aiEnabled":false}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.voiceSessionId").value("voice-off"));
+
+        ArgumentCaptor<VoiceSessionOpenCommand> captor = ArgumentCaptor.forClass(VoiceSessionOpenCommand.class);
+        verify(voiceSessionUseCase).open(captor.capture());
+        assertEquals(null, captor.getValue().getApiKey());
+        assertEquals(Boolean.FALSE, captor.getValue().getAiEnabled());
+    }
+
+    @Test
+    void completeAnswer_returnsNoContent() throws Exception {
+        mockMvc.perform(post("/api/voice/sessions/voice-off/answers")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"sequence":4}
+                                """))
+                .andExpect(status().isNoContent());
+
+        ArgumentCaptor<VoiceAnswerCommand> captor = ArgumentCaptor.forClass(VoiceAnswerCommand.class);
+        verify(voiceSessionUseCase).completeAnswer(captor.capture());
+        assertEquals("voice-off", captor.getValue().getVoiceSessionId());
+        assertEquals(4L, captor.getValue().getSequence());
     }
 
     @Test

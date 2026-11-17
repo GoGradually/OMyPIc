@@ -6,6 +6,7 @@ import {
     getVoiceEventsUrl,
     openVoiceSession,
     recoverVoiceSession,
+    sendVoiceAnswer,
     sendVoiceAudioChunk,
     stopVoiceSession
 } from '../../../shared/api/http.js'
@@ -14,6 +15,7 @@ vi.mock('../../../shared/api/http.js', () => ({
     openVoiceSession: vi.fn(),
     getVoiceEventsUrl: vi.fn(),
     recoverVoiceSession: vi.fn(),
+    sendVoiceAnswer: vi.fn(),
     sendVoiceAudioChunk: vi.fn(),
     stopVoiceSession: vi.fn()
 }))
@@ -224,6 +226,31 @@ async function prepareConfirmedReplay({
     })
 }
 
+// AI off: no question audio and no transcription. The question arrives as text, the learner
+// answers, and the server only acknowledges the end of the answer.
+async function answerWithoutAi({turnId = 1, questionId = 'q-1'} = {}) {
+    await act(async () => {
+        activeEventSource.emit('question.prompt', {
+            turnId,
+            question: {id: questionId, text: `question-${turnId}`, group: 'travel'},
+            selection: {exhausted: false}
+        })
+    })
+    const answersBefore = sendVoiceAnswer.mock.calls.length
+    act(() => {
+        emitAudioFrame(0.1)
+        emitAudioFrame(0)
+        emitAudioFrame(0)
+        emitAudioFrame(0)
+    })
+    await waitFor(() => {
+        expect(sendVoiceAnswer.mock.calls.length).toBeGreaterThan(answersBefore)
+    })
+    await act(async () => {
+        activeEventSource.emit('answer.captured', {turnId})
+    })
+}
+
 describe('useVoiceSession', () => {
     beforeEach(() => {
         vi.clearAllMocks()
@@ -265,6 +292,7 @@ describe('useVoiceSession', () => {
         getVoiceEventsUrl.mockResolvedValue('http://localhost/events')
         recoverVoiceSession.mockResolvedValue(createRecoverySnapshot())
         sendVoiceAudioChunk.mockResolvedValue(undefined)
+        sendVoiceAnswer.mockResolvedValue(undefined)
         stopVoiceSession.mockResolvedValue(undefined)
     })
 
@@ -1551,13 +1579,13 @@ describe('useVoiceSession', () => {
         unmount()
     })
 
-    it('opens the session with AI feedback off and the selected provider', async () => {
+    it('opens an AI-off session and tells the learner no AI is used', async () => {
         const onStatus = vi.fn()
         const {result, unmount} = renderHook(() => useVoiceSession({
             sessionId: 's1',
             feedbackModel: 'claude-opus-5-5',
             feedbackProvider: 'anthropic',
-            feedbackEnabled: false,
+            aiEnabled: false,
             autoReplay: true,
             voiceSttModel: 'gpt-4o-mini-transcribe',
             feedbackLang: 'ko',
@@ -1573,21 +1601,79 @@ describe('useVoiceSession', () => {
             await result.current.startSession()
         })
 
-        expect(openVoiceSession).toHaveBeenCalledWith(expect.objectContaining({
-            feedbackEnabled: false,
-            feedbackProvider: 'anthropic',
-            feedbackModel: 'claude-opus-5-5'
-        }))
-        expect(result.current.sessionFeedbackEnabled).toBe(false)
-        expect(onStatus).toHaveBeenCalledWith('세션을 시작했습니다. AI 피드백 없이 질문과 답변만 진행합니다.')
+        expect(openVoiceSession).toHaveBeenCalledWith(expect.objectContaining({aiEnabled: false}))
+        expect(result.current.sessionAiEnabled).toBe(false)
+        expect(onStatus).toHaveBeenCalledWith('세션을 시작했습니다. AI 없이 진행합니다. 질문을 읽고 답변해 주세요.')
         unmount()
     })
 
-    it('replays the answer automatically when AI feedback is off, then plays the next question', async () => {
+    it('opens the answer window as soon as the question is shown when AI is off', async () => {
         const {result, unmount} = renderHook(() => useVoiceSession({
             sessionId: 's1',
             feedbackModel: 'gpt-4o-mini',
-            feedbackEnabled: false,
+            aiEnabled: false,
+            autoReplay: false,
+            voiceSttModel: 'gpt-4o-mini-transcribe',
+            feedbackLang: 'ko',
+            voice: 'alloy',
+            onStatus: vi.fn(),
+            onFeedback: vi.fn(),
+            refreshWrongNotes: vi.fn(async () => {
+            }),
+            onQuestionPrompt: vi.fn()
+        }))
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+        const audioCount = audioInstances.length
+        await act(async () => {
+            activeEventSource.emit('question.prompt', {
+                turnId: 1,
+                question: {id: 'q-1', text: 'question-1', group: 'travel'},
+                selection: {exhausted: false}
+            })
+        })
+
+        // No question audio is played: the learner reads the question and answers.
+        expect(result.current.speechState).toBe('READY_FOR_ANSWER')
+        expect(audioInstances.length).toBe(audioCount)
+        unmount()
+    })
+
+    it('reports the end of the answer instead of uploading audio when AI is off', async () => {
+        const {result, unmount} = renderHook(() => useVoiceSession({
+            sessionId: 's1',
+            feedbackModel: 'gpt-4o-mini',
+            aiEnabled: false,
+            autoReplay: false,
+            voiceSttModel: 'gpt-4o-mini-transcribe',
+            feedbackLang: 'ko',
+            voice: 'alloy',
+            onStatus: vi.fn(),
+            onFeedback: vi.fn(),
+            refreshWrongNotes: vi.fn(async () => {
+            }),
+            onQuestionPrompt: vi.fn()
+        }))
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+        await answerWithoutAi({turnId: 1, questionId: 'q-1'})
+
+        expect(sendVoiceAudioChunk).not.toHaveBeenCalled()
+        expect(sendVoiceAnswer).toHaveBeenCalledWith('voice-1', {sequence: 1}, expect.anything())
+        expect(result.current.replayPlaying).toBe(false)
+        expect(result.current.replayButtonDisabled).toBe(false)
+        unmount()
+    })
+
+    it('replays the answer automatically when AI is off, then opens the next answer window', async () => {
+        const {result, unmount} = renderHook(() => useVoiceSession({
+            sessionId: 's1',
+            feedbackModel: 'gpt-4o-mini',
+            aiEnabled: false,
             autoReplay: true,
             voiceSttModel: 'gpt-4o-mini-transcribe',
             feedbackLang: 'ko',
@@ -1602,15 +1688,12 @@ describe('useVoiceSession', () => {
         await act(async () => {
             await result.current.startSession()
         })
-        const audioCountBeforeAnswer = audioInstances.length
-        await prepareConfirmedReplay({turnId: 1, questionId: 'q-1', sequence: 1})
+        await answerWithoutAi({turnId: 1, questionId: 'q-1'})
 
-        // stt.final alone started the playback: no click on the replay button.
+        // answer.captured alone started the playback: no click on the replay button.
         expect(result.current.replayPlaying).toBe(true)
         expect(result.current.replayButtonLabel).toBe('중지')
         const replayAudio = audioInstances[audioInstances.length - 1]
-        const audioCountDuringReplay = audioInstances.length
-        expect(audioCountDuringReplay).toBeGreaterThan(audioCountBeforeAnswer)
 
         await act(async () => {
             activeEventSource.emit('question.prompt', {
@@ -1618,25 +1701,24 @@ describe('useVoiceSession', () => {
                 question: {id: 'q-2', text: 'question-2', group: 'travel'},
                 selection: {exhausted: false}
             })
-            activeEventSource.emit('tts.audio', {role: 'question', audio: 'AQID', mimeType: 'audio/wav', sequence: 2})
         })
-        expect(audioInstances.length).toBe(audioCountDuringReplay)
+        // The next question is on screen, but the microphone stays closed while the replay plays.
+        expect(result.current.speechState).toBe('WAITING_TTS')
 
         await act(async () => {
             replayAudio.onended()
         })
-        await waitFor(() => {
-            expect(audioInstances.length).toBe(audioCountDuringReplay + 1)
-        })
         expect(result.current.replayPlaying).toBe(false)
-        expect(result.current.speechState).toBe('PLAYING_QUESTION_TTS')
+        expect(result.current.speechState).toBe('READY_FOR_ANSWER')
         unmount()
     })
 
-    it('does not replay automatically when AI feedback is on or auto replay is off', async () => {
-        const base = {
+    it('does not replay automatically when AI is on', async () => {
+        const {result, unmount} = renderHook(() => useVoiceSession({
             sessionId: 's1',
             feedbackModel: 'gpt-4o-mini',
+            aiEnabled: true,
+            autoReplay: true,
             voiceSttModel: 'gpt-4o-mini-transcribe',
             feedbackLang: 'ko',
             voice: 'alloy',
@@ -1645,31 +1727,23 @@ describe('useVoiceSession', () => {
             refreshWrongNotes: vi.fn(async () => {
             }),
             onQuestionPrompt: vi.fn()
-        }
-        const aiOn = renderHook(() => useVoiceSession({...base, feedbackEnabled: true, autoReplay: true}))
+        }))
         await act(async () => {
-            await aiOn.result.current.startSession()
+            await result.current.startSession()
         })
         await prepareConfirmedReplay({turnId: 1, questionId: 'q-1', sequence: 1})
-        expect(aiOn.result.current.replayPlaying).toBe(false)
-        expect(aiOn.result.current.awaitingReview).toBe(true)
-        aiOn.unmount()
 
-        const manualReplay = renderHook(() => useVoiceSession({...base, feedbackEnabled: false, autoReplay: false}))
-        await act(async () => {
-            await manualReplay.result.current.startSession()
-        })
-        await prepareConfirmedReplay({turnId: 1, questionId: 'q-1', sequence: 1})
-        expect(manualReplay.result.current.replayPlaying).toBe(false)
-        expect(manualReplay.result.current.replayButtonDisabled).toBe(false)
-        manualReplay.unmount()
+        expect(sendVoiceAnswer).not.toHaveBeenCalled()
+        expect(result.current.replayPlaying).toBe(false)
+        expect(result.current.awaitingReview).toBe(true)
+        unmount()
     })
 
     it('lets the last answer finish replaying when the server ends the session', async () => {
         const {result, unmount} = renderHook(() => useVoiceSession({
             sessionId: 's1',
             feedbackModel: 'gpt-4o-mini',
-            feedbackEnabled: false,
+            aiEnabled: false,
             autoReplay: true,
             voiceSttModel: 'gpt-4o-mini-transcribe',
             feedbackLang: 'ko',
@@ -1684,7 +1758,7 @@ describe('useVoiceSession', () => {
         await act(async () => {
             await result.current.startSession()
         })
-        await prepareConfirmedReplay({turnId: 1, questionId: 'q-1', sequence: 1})
+        await answerWithoutAi({turnId: 1, questionId: 'q-1'})
         expect(result.current.replayPlaying).toBe(true)
         const replayAudio = audioInstances[audioInstances.length - 1]
 
@@ -1707,7 +1781,7 @@ describe('useVoiceSession', () => {
         const {result, unmount} = renderHook(() => useVoiceSession({
             sessionId: 's1',
             feedbackModel: 'gpt-4o-mini',
-            feedbackEnabled: false,
+            aiEnabled: false,
             autoReplay: true,
             voiceSttModel: 'gpt-4o-mini-transcribe',
             feedbackLang: 'ko',
@@ -1722,7 +1796,7 @@ describe('useVoiceSession', () => {
         await act(async () => {
             await result.current.startSession()
         })
-        await prepareConfirmedReplay({turnId: 1, questionId: 'q-1', sequence: 1})
+        await answerWithoutAi({turnId: 1, questionId: 'q-1'})
         expect(result.current.replayPlaying).toBe(true)
 
         await act(async () => {

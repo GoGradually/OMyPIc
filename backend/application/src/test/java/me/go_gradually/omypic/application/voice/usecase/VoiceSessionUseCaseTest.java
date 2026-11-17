@@ -9,6 +9,7 @@ import me.go_gradually.omypic.application.shared.port.AsyncExecutor;
 import me.go_gradually.omypic.application.shared.port.MetricsPort;
 import me.go_gradually.omypic.application.stt.model.SttCommand;
 import me.go_gradually.omypic.application.stt.usecase.SttUseCase;
+import me.go_gradually.omypic.application.voice.model.VoiceAnswerCommand;
 import me.go_gradually.omypic.application.voice.model.VoiceAudioChunkCommand;
 import me.go_gradually.omypic.application.voice.model.VoiceEventSink;
 import me.go_gradually.omypic.application.voice.model.VoiceSessionOpenCommand;
@@ -484,7 +485,7 @@ class VoiceSessionUseCaseTest {
     }
 
     @Test
-    void feedbackDisabled_skipsLlmAndMovesStraightToNextQuestion() throws Exception {
+    void aiOff_runsWithoutApiKeySttTtsOrFeedback() throws Exception {
         SessionState state = new SessionState(SessionId.of("s-off"));
         state.applyModeUpdate(ModeType.IMMEDIATE, null);
         when(sessionUseCase.getOrCreate("s-off")).thenReturn(state);
@@ -492,35 +493,62 @@ class VoiceSessionUseCaseTest {
                 question("q-1", "question-1", "g-1", "travel"),
                 question("q-2", "question-2", "g-2", "hobby")
         );
-        VoiceSessionOpenCommand command = openCommand("s-off");
-        command.setFeedbackEnabled(false);
 
-        String voiceSessionId = useCase.open(command);
+        String voiceSessionId = useCase.open(aiOffCommand("s-off"));
         List<EventRecord> events = new ArrayList<>();
         useCase.registerSink(voiceSessionId, capture(events));
 
         int readyIndex = firstIndex(events, event -> "session.ready".equals(event.type()));
-        assertEquals(false, events.get(readyIndex).payload().get("feedbackEnabled"));
+        assertEquals(false, events.get(readyIndex).payload().get("aiEnabled"));
+        assertTrue(firstIndex(events, event -> "question.prompt".equals(event.type())) > readyIndex);
 
         events.clear();
-        useCase.appendAudio(audioChunk(voiceSessionId));
+        useCase.completeAnswer(answer(voiceSessionId, 1L));
 
-        int sttIndex = firstIndex(events, event -> "stt.final".equals(event.type()));
+        int capturedIndex = firstIndex(events, event -> "answer.captured".equals(event.type()));
         int questionPromptIndex = firstIndex(events, event -> "question.prompt".equals(event.type()));
-        int questionSpeechIndex = firstIndex(events, event -> isTtsRole(event, "question"));
-        assertTrue(sttIndex >= 0);
-        assertTrue(questionPromptIndex > sttIndex);
-        assertTrue(questionSpeechIndex > questionPromptIndex);
+        assertTrue(capturedIndex >= 0);
+        assertEquals(1L, ((Number) events.get(capturedIndex).payload().get("turnId")).longValue());
+        assertTrue(questionPromptIndex > capturedIndex);
+        assertEquals(-1, firstIndex(events, event -> "stt.final".equals(event.type())));
+        assertEquals(-1, firstIndex(events, event -> "tts.audio".equals(event.type())));
         assertEquals(-1, firstIndex(events, event -> "feedback.final".equals(event.type())));
-        assertEquals(-1, firstIndex(events, event -> isTtsRole(event, "feedback")));
-        verify(feedbackUseCase, never()).bootstrapConversation(anyString(), any(FeedbackCommand.class), anyString());
-        verify(feedbackUseCase, never()).prefetchTurnPrompt(anyString(), anyString(), any(), anyString(), anyInt());
+        verify(sttUseCase, never()).transcribe(any(SttCommand.class));
+        verify(ttsGateway, never()).synthesize(any(), any(), any(), any());
+        verify(feedbackUseCase, never()).bootstrapConversation(any(), any(FeedbackCommand.class), any());
+        verify(feedbackUseCase, never()).prefetchTurnPrompt(any(), any(), any(), any(), anyInt());
         verify(feedbackUseCase, never())
-                .generateFeedbackForTurn(anyString(), any(FeedbackCommand.class), anyString(), any(), anyString(), anyInt());
+                .generateFeedbackForTurn(any(), any(FeedbackCommand.class), any(), any(), any(), anyInt());
     }
 
     @Test
-    void feedbackDisabled_stopsAutomaticallyWhenQuestionsAreExhausted() throws Exception {
+    void aiOff_ignoresUploadedAudioAndDuplicateAnswerSignals() throws Exception {
+        SessionState state = new SessionState(SessionId.of("s-off-dup"));
+        when(sessionUseCase.getOrCreate("s-off-dup")).thenReturn(state);
+        when(questionUseCase.nextQuestion("s-off-dup")).thenReturn(
+                question("q-1", "question-1", "g-1", "travel"),
+                question("q-2", "question-2", "g-2", "hobby"),
+                question("q-3", "question-3", "g-3", "music")
+        );
+
+        String voiceSessionId = useCase.open(aiOffCommand("s-off-dup"));
+        List<EventRecord> events = new ArrayList<>();
+        useCase.registerSink(voiceSessionId, capture(events));
+        events.clear();
+
+        useCase.appendAudio(audioChunk(voiceSessionId, 5L));
+        assertTrue(events.isEmpty());
+
+        useCase.completeAnswer(answer(voiceSessionId, 1L));
+        useCase.completeAnswer(answer(voiceSessionId, 1L));
+
+        long captured = events.stream().filter(event -> "answer.captured".equals(event.type())).count();
+        assertEquals(1L, captured);
+        verify(sttUseCase, never()).transcribe(any(SttCommand.class));
+    }
+
+    @Test
+    void aiOff_stopsAutomaticallyWhenQuestionsAreExhausted() throws Exception {
         SessionState state = new SessionState(SessionId.of("s-off-end"));
         state.applyModeUpdate(ModeType.CONTINUOUS, 3);
         when(sessionUseCase.getOrCreate("s-off-end")).thenReturn(state);
@@ -530,19 +558,31 @@ class VoiceSessionUseCaseTest {
                 question("q-1", "question-1", "g-1", "travel"),
                 skipped
         );
-        VoiceSessionOpenCommand command = openCommand("s-off-end");
-        command.setFeedbackEnabled(false);
 
-        String voiceSessionId = useCase.open(command);
+        String voiceSessionId = useCase.open(aiOffCommand("s-off-end"));
         List<EventRecord> events = new ArrayList<>();
         useCase.registerSink(voiceSessionId, capture(events));
         events.clear();
-        useCase.appendAudio(audioChunk(voiceSessionId));
+        useCase.completeAnswer(answer(voiceSessionId, 1L));
 
         int stoppedIndex = firstIndex(events, event -> "session.stopped".equals(event.type()));
         assertTrue(stoppedIndex >= 0);
         assertEquals("question_exhausted", String.valueOf(events.get(stoppedIndex).payload().get("reason")).toLowerCase());
         assertEquals(-1, firstIndex(events, event -> "feedback.final".equals(event.type())));
+    }
+
+    @Test
+    void completeAnswer_isRejectedWhileAiIsOn() {
+        SessionState state = new SessionState(SessionId.of("s-on"));
+        when(sessionUseCase.getOrCreate("s-on")).thenReturn(state);
+        String voiceSessionId = useCase.open(openCommand("s-on"));
+
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class,
+                () -> useCase.completeAnswer(answer(voiceSessionId, 1L))
+        );
+
+        assertEquals("Answer signals are only accepted while AI is off", error.getMessage());
     }
 
     @Test
@@ -591,15 +631,18 @@ class VoiceSessionUseCaseTest {
         assertEquals("Anthropic API key is required for Claude feedback models", error.getMessage());
     }
 
-    @Test
-    void open_allowsClaudeModelWithoutKey_whenFeedbackIsDisabled() {
-        SessionState state = new SessionState(SessionId.of("s-claude-off"));
-        when(sessionUseCase.getOrCreate("s-claude-off")).thenReturn(state);
-        VoiceSessionOpenCommand command = openCommand("s-claude-off");
-        command.setFeedbackModel("claude-sonnet-5-5");
-        command.setFeedbackEnabled(false);
+    private VoiceSessionOpenCommand aiOffCommand(String sessionId) {
+        VoiceSessionOpenCommand command = new VoiceSessionOpenCommand();
+        command.setSessionId(sessionId);
+        command.setAiEnabled(false);
+        return command;
+    }
 
-        assertNotNull(useCase.open(command));
+    private VoiceAnswerCommand answer(String voiceSessionId, Long sequence) {
+        VoiceAnswerCommand command = new VoiceAnswerCommand();
+        command.setVoiceSessionId(voiceSessionId);
+        command.setSequence(sequence);
+        return command;
     }
 
     private VoiceSessionOpenCommand openCommand(String sessionId) {

@@ -89,8 +89,9 @@ export async function importDataBundle(file) {
 
 export async function openVoiceSession(payload) {
     const headers = {'Content-Type': 'application/json'}
-    // STT/TTS always run on the OpenAI key (X-API-Key). A Claude feedback model needs its own key.
-    const needsFeedbackKey = payload?.feedbackEnabled !== false && payload?.feedbackProvider === ANTHROPIC_PROVIDER
+    // With AI on, STT/TTS run on the OpenAI key (X-API-Key) and a Claude feedback model needs its own key.
+    // With AI off no provider is called, so no key is required at all.
+    const needsFeedbackKey = payload?.aiEnabled !== false && payload?.feedbackProvider === ANTHROPIC_PROVIDER
     if (needsFeedbackKey) {
         const feedbackApiKey = await getApiKey(ANTHROPIC_PROVIDER)
         if (feedbackApiKey) {
@@ -107,6 +108,16 @@ export async function openVoiceSession(payload) {
 
 export async function sendVoiceAudioChunk(voiceSessionId, payload, requestOptions = {}) {
     await callApi(`/api/voice/sessions/${encodeURIComponent(voiceSessionId)}/audio-chunks`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+        ...requestOptions
+    })
+}
+
+// AI off: only the end of the answer is reported. The recording never leaves the device.
+export async function sendVoiceAnswer(voiceSessionId, payload, requestOptions = {}) {
+    await callApi(`/api/voice/sessions/${encodeURIComponent(voiceSessionId)}/answers`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(payload),

@@ -10,6 +10,7 @@ import me.go_gradually.omypic.application.shared.port.AsyncExecutor;
 import me.go_gradually.omypic.application.shared.port.MetricsPort;
 import me.go_gradually.omypic.application.stt.model.SttCommand;
 import me.go_gradually.omypic.application.stt.usecase.SttUseCase;
+import me.go_gradually.omypic.application.voice.model.VoiceAnswerCommand;
 import me.go_gradually.omypic.application.voice.model.VoiceAudioChunkCommand;
 import me.go_gradually.omypic.application.voice.model.VoiceEventSink;
 import me.go_gradually.omypic.application.voice.model.VoiceSessionOpenCommand;
@@ -147,11 +148,15 @@ final class VoiceSessionFacade {
     }
 
     private void validateOpenCommand(VoiceSessionOpenCommand command) {
-        if (command == null || isBlank(command.getSessionId()) || isBlank(command.getApiKey())) {
-            throw new IllegalArgumentException("sessionId and apiKey are required");
+        if (command == null || isBlank(command.getSessionId())) {
+            throw new IllegalArgumentException("sessionId is required");
         }
-        if (!isFeedbackEnabled(command)) {
+        if (!isAiEnabled(command)) {
+            // AI off: no provider is called, so neither an API key nor a model is needed.
             return;
+        }
+        if (isBlank(command.getApiKey())) {
+            throw new IllegalArgumentException("sessionId and apiKey are required");
         }
         FeedbackModelPolicy.validateOrThrow(blankToNull(command.getFeedbackProvider()), command.getFeedbackModel());
         if (usesSeparateFeedbackKey(command) && isBlank(command.getFeedbackApiKey())) {
@@ -159,8 +164,8 @@ final class VoiceSessionFacade {
         }
     }
 
-    private boolean isFeedbackEnabled(VoiceSessionOpenCommand command) {
-        return command.getFeedbackEnabled() == null || command.getFeedbackEnabled();
+    private boolean isAiEnabled(VoiceSessionOpenCommand command) {
+        return command.getAiEnabled() == null || command.getAiEnabled();
     }
 
     private boolean usesSeparateFeedbackKey(VoiceSessionOpenCommand command) {
@@ -225,7 +230,8 @@ final class VoiceSessionFacade {
         purgeStoppedContexts();
         validateAudioCommand(command);
         RuntimeContext context = requireContext(command.getVoiceSessionId());
-        if (context.isInactive()) {
+        if (context.isInactive() || !context.settings.aiEnabled()) {
+            // AI off sessions never transcribe; answers end with completeAnswer instead.
             return;
         }
         if (!context.acceptChunkSequence(command.getSequence())) {
@@ -238,6 +244,42 @@ final class VoiceSessionFacade {
         int sampleRate = command.getSampleRate() == null ? DEFAULT_SAMPLE_RATE : command.getSampleRate();
         context.appendAudio(pcm16Bytes, sampleRate);
         flushTurn(context);
+    }
+
+    /**
+     * AI off: the client reports that the learner finished answering. No audio is uploaded
+     * and nothing is transcribed; the session just moves to the next question.
+     */
+    public void completeAnswer(VoiceAnswerCommand command) {
+        purgeStoppedContexts();
+        if (command == null || isBlank(command.getVoiceSessionId())) {
+            throw new IllegalArgumentException("voiceSessionId is required");
+        }
+        RuntimeContext context = requireContext(command.getVoiceSessionId());
+        if (context.settings.aiEnabled()) {
+            throw new IllegalArgumentException("Answer signals are only accepted while AI is off");
+        }
+        if (context.isInactive() || !context.acceptChunkSequence(command.getSequence())) {
+            return;
+        }
+        advanceAfterAnswer(context);
+    }
+
+    private void advanceAfterAnswer(RuntimeContext context) {
+        if (!context.startTurnProcessing()) {
+            return;
+        }
+        try {
+            AudioSnapshot snapshot = context.consumeAudioSnapshot();
+            if (snapshot.question() == null) {
+                return;
+            }
+            context.emit("answer.captured", Map.of("sessionId", context.sessionId, "turnId", snapshot.turnId()));
+            ModeType mode = sessionUseCase.getOrCreate(context.sessionId).getMode();
+            advanceWithoutFeedback(context, mode, snapshot.turnId());
+        } finally {
+            context.finishTurnProcessing();
+        }
     }
 
     public void stop(VoiceSessionStopCommand command) {
@@ -282,7 +324,7 @@ final class VoiceSessionFacade {
             return;
         }
         try {
-            if (context.settings.feedbackEnabled()) {
+            if (context.settings.aiEnabled()) {
                 bootstrapFeedbackContext(context);
             }
             emitSessionReady(context);
@@ -297,7 +339,7 @@ final class VoiceSessionFacade {
         context.emit("session.ready", Map.of(
                 "sessionId", context.sessionId,
                 "voiceSessionId", context.voiceSessionId,
-                "feedbackEnabled", context.settings.feedbackEnabled(),
+                "aiEnabled", context.settings.aiEnabled(),
                 "feedbackProvider", context.settings.feedbackProvider()
         ));
     }
@@ -399,10 +441,6 @@ final class VoiceSessionFacade {
                                  long turnId) {
         SessionState sessionState = sessionUseCase.getOrCreate(context.sessionId);
         ModeType mode = sessionState.getMode();
-        if (!context.settings.feedbackEnabled()) {
-            advanceWithoutFeedback(context, mode, turnId);
-            return;
-        }
         sessionState.setFeedbackLanguage(FeedbackLanguage.of(context.settings.feedbackLanguage()));
         TurnInput turnInput = toTurnInput(currentQuestion, answerText);
 
@@ -443,16 +481,13 @@ final class VoiceSessionFacade {
     }
 
     /**
-     * AI feedback OFF: no LLM call is made. The answer was already transcribed (stt.final),
-     * so the session moves straight to the next question.
+     * AI off: no STT, TTS or LLM call is made. The next question is emitted as text only
+     * and the client presents it.
      */
     private void advanceWithoutFeedback(RuntimeContext context, ModeType mode, long turnId) {
         NextQuestion nextQuestion = questionUseCase.nextQuestion(context.sessionId);
         boolean exhausted = isQuestionExhausted(nextQuestion);
-        long nextQuestionTurnId = emitQuestionPromptAndTrack(context, mode, nextQuestion, exhausted, turnId);
-        if (nextQuestionTurnId > 0) {
-            emitSpeech(context, nextQuestionTurnId, "question", nextQuestion.getText());
-        }
+        emitQuestionPromptAndTrack(context, mode, nextQuestion, exhausted, turnId);
         SessionFlowPolicy.SessionAction nextAction = SessionFlowPolicy.decideAfterQuestionSelection(exhausted);
         if (nextAction.type() == SessionFlowPolicy.NextActionType.AUTO_STOP) {
             stopInternal(context, false, nextAction.reason().code());
@@ -622,7 +657,7 @@ final class VoiceSessionFacade {
     }
 
     private boolean canPrefetch(RuntimeContext context, NextQuestion question) {
-        if (!context.settings.feedbackEnabled() || context.isInactive()) {
+        if (!context.settings.aiEnabled() || context.isInactive()) {
             return false;
         }
         return question != null && !question.isSkipped() && !isBlank(question.getQuestionId());
@@ -879,7 +914,7 @@ final class VoiceSessionFacade {
     }
 
     private void emitSpeech(RuntimeContext context, long turnId, String role, String text) {
-        if (context.isInactive() || isBlank(text)) {
+        if (context.isInactive() || isBlank(text) || !context.settings.aiEnabled()) {
             return;
         }
         String phase = resolveSpeechPhase(role);
@@ -1069,7 +1104,7 @@ final class VoiceSessionFacade {
     private record RuntimeSettings(String sttModel,
                                    String feedbackModel,
                                    String feedbackProvider,
-                                   boolean feedbackEnabled,
+                                   boolean aiEnabled,
                                    String feedbackLanguage,
                                    String ttsModel,
                                    String ttsVoice) {
@@ -1084,7 +1119,7 @@ final class VoiceSessionFacade {
                     firstNonBlank(command.getSttModel(), policy.voiceSttModel()),
                     feedbackModel,
                     feedbackProvider,
-                    command.getFeedbackEnabled() == null || command.getFeedbackEnabled(),
+                    command.getAiEnabled() == null || command.getAiEnabled(),
                     firstNonBlank(command.getFeedbackLanguage(), policy.voiceFeedbackLanguage()),
                     firstNonBlank(command.getTtsModel(), policy.voiceTtsModel()),
                     firstNonBlank(command.getTtsVoice(), policy.voiceTtsVoice())

@@ -33,22 +33,23 @@ export function VoicePanel({
                                awaitingReview = false,
                                currentQuestionLabel = '',
                                hasQuestion = false,
-                               feedbackEnabled = true,
-                               aiFeedbackEnabled = true,
-                               onToggleAiFeedback,
+                               stageAiEnabled = true,
+                               aiEnabled = true,
+                               onToggleAi,
                                autoReplayEnabled = false,
                                onToggleAutoReplay,
                                feedbackSummary = '',
                                continuousMode = false
                            }) {
-    const stageOptions = {feedbackEnabled, autoReplayEnabled, continuousMode}
+    const stageOptions = {aiEnabled: stageAiEnabled, autoReplayEnabled, continuousMode}
     const steps = getPracticeSteps(stageOptions)
     const activeStep = getActiveStepIndex({
         sessionActive,
         speechState,
         replayPlaying,
         awaitingReview,
-        stepCount: steps.length
+        stepCount: steps.length,
+        aiEnabled: stageAiEnabled
     })
     const caption = getStageCaption({sessionActive, speechState, replayPlaying, awaitingReview, ...stageOptions})
     const recording = sessionActive && speechState === 'CAPTURING_ANSWER'
@@ -116,24 +117,24 @@ export function VoicePanel({
                     type="button"
                     role="switch"
                     className="switch"
-                    aria-checked={aiFeedbackEnabled}
-                    aria-label="AI 피드백"
-                    onClick={() => onToggleAiFeedback?.(!aiFeedbackEnabled)}
+                    aria-checked={aiEnabled}
+                    aria-label="AI 사용"
+                    onClick={() => onToggleAi?.(!aiEnabled)}
                     disabled={sessionActive}
                 >
                     <span className="switch__thumb"/>
                 </button>
                 <div className="ai-control__copy">
-                    <strong>AI 피드백 {aiFeedbackEnabled ? '켜짐' : '꺼짐'}</strong>
+                    <strong>AI {aiEnabled ? '켜짐' : '꺼짐'}</strong>
                     <span>
                         {sessionActive
                             ? '세션 중에는 바꿀 수 없습니다. 다음 세션부터 적용됩니다.'
-                            : aiFeedbackEnabled
-                                ? `${feedbackSummary || '선택한 모델'}로 첨삭합니다.`
-                                : '피드백 모델을 호출하지 않고 질문과 답변만 진행합니다.'}
+                            : aiEnabled
+                                ? `질문을 읽어 주고, 답변을 ${feedbackSummary || '선택한 모델'}로 첨삭합니다.`
+                                : '음성 인식, 음성 합성, 피드백을 모두 쓰지 않습니다. API Key 없이 진행합니다.'}
                     </span>
                 </div>
-                {!aiFeedbackEnabled && (
+                {!aiEnabled && (
                     <label className="check">
                         <input
                             type="checkbox"

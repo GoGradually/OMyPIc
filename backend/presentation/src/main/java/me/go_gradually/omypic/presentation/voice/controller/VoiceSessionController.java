@@ -1,11 +1,13 @@
 package me.go_gradually.omypic.presentation.voice.controller;
 
 import jakarta.validation.Valid;
+import me.go_gradually.omypic.application.voice.model.VoiceAnswerCommand;
 import me.go_gradually.omypic.application.voice.model.VoiceAudioChunkCommand;
 import me.go_gradually.omypic.application.voice.model.VoiceEventSink;
 import me.go_gradually.omypic.application.voice.model.VoiceSessionOpenCommand;
 import me.go_gradually.omypic.application.voice.model.VoiceSessionStopCommand;
 import me.go_gradually.omypic.application.voice.usecase.VoiceSessionUseCase;
+import me.go_gradually.omypic.presentation.voice.dto.VoiceAnswerRequest;
 import me.go_gradually.omypic.presentation.voice.dto.VoiceAudioChunkRequest;
 import me.go_gradually.omypic.presentation.voice.dto.VoiceSessionCreateRequest;
 import me.go_gradually.omypic.presentation.voice.dto.VoiceSessionCreateResponse;
@@ -31,7 +33,7 @@ public class VoiceSessionController {
     }
 
     @PostMapping
-    public VoiceSessionCreateResponse open(@RequestHeader("X-API-Key") String apiKey,
+    public VoiceSessionCreateResponse open(@RequestHeader(value = "X-API-Key", required = false) String apiKey,
                                            @RequestHeader(value = FEEDBACK_API_KEY_HEADER, required = false)
                                            String feedbackApiKey,
                                            @Valid @RequestBody VoiceSessionCreateRequest request) {
@@ -49,7 +51,7 @@ public class VoiceSessionController {
         command.setSessionId(request.getSessionId());
         command.setFeedbackModel(request.getFeedbackModel());
         command.setFeedbackProvider(request.getFeedbackProvider());
-        command.setFeedbackEnabled(request.getFeedbackEnabled());
+        command.setAiEnabled(request.getAiEnabled());
         command.setFeedbackLanguage(request.getFeedbackLanguage());
         command.setSttModel(request.getSttModel());
         command.setTtsModel(request.getTtsModel());
@@ -85,6 +87,16 @@ public class VoiceSessionController {
         command.setSampleRate(request.getSampleRate());
         command.setSequence(request.getSequence());
         voiceSessionUseCase.appendAudio(command);
+    }
+
+    @PostMapping("/{voiceSessionId}/answers")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void completeAnswer(@PathVariable("voiceSessionId") String voiceSessionId,
+                               @RequestBody(required = false) VoiceAnswerRequest request) {
+        VoiceAnswerCommand command = new VoiceAnswerCommand();
+        command.setVoiceSessionId(voiceSessionId);
+        command.setSequence(request == null ? null : request.getSequence());
+        voiceSessionUseCase.completeAnswer(command);
     }
 
     @PostMapping("/{voiceSessionId}/stop")

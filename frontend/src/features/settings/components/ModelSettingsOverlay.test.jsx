@@ -28,8 +28,8 @@ function buildProps(overrides = {}) {
         setApiKeyInput: vi.fn(),
         claudeKeyInput: '',
         setClaudeKeyInput: vi.fn(),
-        aiFeedbackEnabled: true,
-        setAiFeedbackEnabled: vi.fn(),
+        aiEnabled: true,
+        setAiEnabled: vi.fn(),
         voice: 'alloy',
         setVoice: vi.fn(),
         voiceOptions: ['alloy'],
@@ -68,15 +68,16 @@ describe('ModelSettingsOverlay', () => {
         expect(screen.getByLabelText('OpenAI API Key').getAttribute('type')).toBe('password')
     })
 
-    it('disables feedback model choices while AI feedback is off', () => {
-        const setAiFeedbackEnabled = vi.fn()
-        render(<ModelSettingsOverlay {...buildProps({aiFeedbackEnabled: false, setAiFeedbackEnabled})} />)
+    it('disables every model choice while AI is off', () => {
+        const setAiEnabled = vi.fn()
+        render(<ModelSettingsOverlay {...buildProps({aiEnabled: false, setAiEnabled})} />)
 
         expect(screen.getByLabelText('피드백 모델').disabled).toBe(true)
         expect(screen.getByLabelText('피드백 언어').disabled).toBe(true)
-        expect(screen.getByLabelText('STT 모델').disabled).toBe(false)
-        fireEvent.click(screen.getByRole('switch', {name: 'AI 피드백 사용'}))
-        expect(setAiFeedbackEnabled).toHaveBeenCalledWith(true)
+        expect(screen.getByLabelText('STT 모델').disabled).toBe(true)
+        expect(screen.getByLabelText('TTS 모델').disabled).toBe(true)
+        fireEvent.click(screen.getByRole('switch', {name: 'AI 사용'}))
+        expect(setAiEnabled).toHaveBeenCalledWith(true)
     })
 
     it('shows session cost guidance for default feedback model', () => {

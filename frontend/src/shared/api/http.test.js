@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
-import {getApiKey, openVoiceSession, setApiKey, verifyApiKey} from './http.js'
+import {getApiKey, openVoiceSession, sendVoiceAnswer, setApiKey, verifyApiKey} from './http.js'
 
 const KEYS = {openai: 'sk-openai', anthropic: 'sk-ant-claude'}
 
@@ -32,7 +32,7 @@ describe('http api', () => {
     })
 
     it('sends the Claude key only when a Claude model gives feedback', async () => {
-        await openVoiceSession({sessionId: 's1', feedbackProvider: 'anthropic', feedbackEnabled: true})
+        await openVoiceSession({sessionId: 's1', feedbackProvider: 'anthropic', aiEnabled: true})
 
         const [url, options] = global.fetch.mock.calls[0]
         expect(url).toBe('http://backend/api/voice/sessions')
@@ -41,11 +41,31 @@ describe('http api', () => {
     })
 
     it('keeps the Claude key out of OpenAI and AI-off sessions', async () => {
-        await openVoiceSession({sessionId: 's1', feedbackProvider: 'openai', feedbackEnabled: true})
-        await openVoiceSession({sessionId: 's1', feedbackProvider: 'anthropic', feedbackEnabled: false})
+        await openVoiceSession({sessionId: 's1', feedbackProvider: 'openai', aiEnabled: true})
+        await openVoiceSession({sessionId: 's1', feedbackProvider: 'anthropic', aiEnabled: false})
 
         expect(global.fetch.mock.calls[0][1].headers['X-Feedback-API-Key']).toBeUndefined()
         expect(global.fetch.mock.calls[1][1].headers['X-Feedback-API-Key']).toBeUndefined()
+    })
+
+    it('opens an AI-off session without any API key', async () => {
+        window.omypic.getApiKey = vi.fn(async () => '')
+
+        await openVoiceSession({sessionId: 's1', aiEnabled: false})
+
+        const headers = global.fetch.mock.calls[0][1].headers
+        expect(headers['X-API-Key']).toBeUndefined()
+        expect(headers['X-Feedback-API-Key']).toBeUndefined()
+    })
+
+    it('reports the end of an answer without sending audio', async () => {
+        global.fetch = vi.fn(async () => ({ok: true, json: async () => ({}), text: async () => ''}))
+
+        await sendVoiceAnswer('voice-1', {sequence: 3})
+
+        const [url, options] = global.fetch.mock.calls[0]
+        expect(url).toBe('http://backend/api/voice/sessions/voice-1/answers')
+        expect(JSON.parse(options.body)).toEqual({sequence: 3})
     })
 
     it('verifies a key against its own provider', async () => {

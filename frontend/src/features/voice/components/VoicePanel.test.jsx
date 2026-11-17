@@ -29,9 +29,9 @@ function buildProps(overrides = {}) {
         handleReplayAction: vi.fn(),
         currentQuestionLabel: 'Tell me about your hometown.',
         hasQuestion: true,
-        feedbackEnabled: true,
-        aiFeedbackEnabled: true,
-        onToggleAiFeedback: vi.fn(),
+        stageAiEnabled: true,
+        aiEnabled: true,
+        onToggleAi: vi.fn(),
         autoReplayEnabled: true,
         onToggleAutoReplay: vi.fn(),
         feedbackSummary: 'Claude Opus 5.5',
@@ -40,34 +40,36 @@ function buildProps(overrides = {}) {
 }
 
 describe('VoicePanel', () => {
-    it('shows the current question and the feedback step when AI feedback is on', () => {
+    it('shows the current question and the feedback step when AI is on', () => {
         render(<VoicePanel {...buildProps()} />)
 
         expect(screen.getByText('Tell me about your hometown.')).toBeTruthy()
         expect(screen.getByText('피드백')).toBeTruthy()
-        expect(screen.getByText('Claude Opus 5.5로 첨삭합니다.')).toBeTruthy()
-        expect(screen.getByRole('switch', {name: 'AI 피드백'}).getAttribute('aria-checked')).toBe('true')
+        expect(screen.getByText('질문을 읽어 주고, 답변을 Claude Opus 5.5로 첨삭합니다.')).toBeTruthy()
+        expect(screen.getByRole('switch', {name: 'AI 사용'}).getAttribute('aria-checked')).toBe('true')
     })
 
-    it('turns AI feedback off from the switch', () => {
-        const onToggleAiFeedback = vi.fn()
-        render(<VoicePanel {...buildProps({onToggleAiFeedback})} />)
+    it('turns AI off from the switch', () => {
+        const onToggleAi = vi.fn()
+        render(<VoicePanel {...buildProps({onToggleAi})} />)
 
-        fireEvent.click(screen.getByRole('switch', {name: 'AI 피드백'}))
+        fireEvent.click(screen.getByRole('switch', {name: 'AI 사용'}))
 
-        expect(onToggleAiFeedback).toHaveBeenCalledWith(false)
+        expect(onToggleAi).toHaveBeenCalledWith(false)
     })
 
-    it('replaces the feedback step with answer replay when AI feedback is off', () => {
+    it('shows reading and replay steps and needs no API key when AI is off', () => {
         const onToggleAutoReplay = vi.fn()
         render(<VoicePanel {...buildProps({
-            feedbackEnabled: false,
-            aiFeedbackEnabled: false,
+            stageAiEnabled: false,
+            aiEnabled: false,
             onToggleAutoReplay
         })} />)
 
         expect(screen.queryByText('피드백')).toBeNull()
+        expect(screen.getByText('질문 읽기')).toBeTruthy()
         expect(screen.getByText('내 응답 다시듣기')).toBeTruthy()
+        expect(screen.getByText(/API Key 없이 진행합니다/)).toBeTruthy()
         fireEvent.click(screen.getByRole('checkbox', {name: '답변 후 내 응답 자동 재생'}))
         expect(onToggleAutoReplay).toHaveBeenCalledWith(false)
     })
@@ -79,7 +81,7 @@ describe('VoicePanel', () => {
             speechState: 'CAPTURING_ANSWER'
         })} />)
 
-        expect(screen.getByRole('switch', {name: 'AI 피드백'}).disabled).toBe(true)
+        expect(screen.getByRole('switch', {name: 'AI 사용'}).disabled).toBe(true)
         expect(screen.getByText('답변').closest('li').getAttribute('aria-current')).toBe('step')
         expect(screen.getByText(/답변을 듣고 있습니다/)).toBeTruthy()
     })

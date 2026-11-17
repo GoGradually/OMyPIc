@@ -78,7 +78,7 @@ function FeedbackItem({item}) {
     )
 }
 
-export function RecentFeedbackPanel({feedback, aiFeedbackEnabled = true, onOpenWrongnotes}) {
+export function RecentFeedbackPanel({feedback, aiEnabled = true, onOpenWrongnotes}) {
     const items = feedback?.items && feedback.items.length > 0 ? feedback.items : (feedback ? [feedback] : [])
 
     return (
@@ -92,9 +92,9 @@ export function RecentFeedbackPanel({feedback, aiFeedbackEnabled = true, onOpenW
 
             {items.length === 0 && (
                 <p className="empty-text">
-                    {aiFeedbackEnabled
+                    {aiEnabled
                         ? '답변을 마치면 AI 첨삭이 여기에 표시됩니다.'
-                        : 'AI 피드백이 꺼져 있습니다. 켜면 답변마다 첨삭을 받을 수 있습니다.'}
+                        : 'AI가 꺼져 있습니다. 켜면 답변마다 첨삭을 받을 수 있습니다.'}
                 </p>
             )}
             {items.length > 1 && <p className="tiny-meta">문답별 피드백 {items.length}건</p>}

@@ -29,14 +29,14 @@ describe('SummaryPanel', () => {
         expect(screen.getByText('gpt-4o-mini-tts')).toBeTruthy()
     })
 
-    it('shows that AI feedback is off', () => {
+    it('shows that AI is off', () => {
         render(
             <SummaryPanel
                 feedbackLang="ko"
                 voice="alloy"
                 voiceSttModel="gpt-4o-mini-transcribe"
                 feedbackModel="claude-opus-5-5"
-                aiFeedbackEnabled={false}
+                aiEnabled={false}
                 ttsModel="gpt-4o-mini-tts"
                 enabledRulebookCount={0}
                 questionGroupCount={1}
@@ -44,7 +44,7 @@ describe('SummaryPanel', () => {
             />
         )
 
-        expect(screen.getByText('AI 피드백').nextElementSibling.textContent).toBe('꺼짐')
+        expect(screen.getByText('AI 사용').nextElementSibling.textContent).toBe('꺼짐')
         expect(screen.getByText('claude-opus-5-5')).toBeTruthy()
     })
 })

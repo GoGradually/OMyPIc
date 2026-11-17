@@ -7,7 +7,7 @@ public class VoiceSessionCreateRequest {
     private String sessionId;
     private String feedbackModel;
     private String feedbackProvider;
-    private Boolean feedbackEnabled;
+    private Boolean aiEnabled;
     private String feedbackLanguage;
     private String sttModel;
     private String ttsModel;
@@ -37,12 +37,12 @@ public class VoiceSessionCreateRequest {
         this.feedbackProvider = feedbackProvider;
     }
 
-    public Boolean getFeedbackEnabled() {
-        return feedbackEnabled;
+    public Boolean getAiEnabled() {
+        return aiEnabled;
     }
 
-    public void setFeedbackEnabled(Boolean feedbackEnabled) {
-        this.feedbackEnabled = feedbackEnabled;
+    public void setAiEnabled(Boolean aiEnabled) {
+        this.aiEnabled = aiEnabled;
     }
 
     public String getFeedbackLanguage() {

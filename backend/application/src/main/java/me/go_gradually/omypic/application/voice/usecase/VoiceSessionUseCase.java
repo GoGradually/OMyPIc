@@ -6,6 +6,7 @@ import me.go_gradually.omypic.application.session.usecase.SessionUseCase;
 import me.go_gradually.omypic.application.shared.port.AsyncExecutor;
 import me.go_gradually.omypic.application.shared.port.MetricsPort;
 import me.go_gradually.omypic.application.stt.usecase.SttUseCase;
+import me.go_gradually.omypic.application.voice.model.VoiceAnswerCommand;
 import me.go_gradually.omypic.application.voice.model.VoiceAudioChunkCommand;
 import me.go_gradually.omypic.application.voice.model.VoiceEventSink;
 import me.go_gradually.omypic.application.voice.model.VoiceSessionOpenCommand;
@@ -106,6 +107,10 @@ public class VoiceSessionUseCase {
 
     public void appendAudio(VoiceAudioChunkCommand command) {
         facade.appendAudio(command);
+    }
+
+    public void completeAnswer(VoiceAnswerCommand command) {
+        facade.completeAnswer(command);
     }
 
     public void stop(VoiceSessionStopCommand command) {
