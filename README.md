@@ -130,10 +130,11 @@ Windows 설치형은 Windows 환경에서, macOS DMG는 macOS 환경에서 빌�
 
 - API Key는 Electron에서 OS Keychain(`keytar`)에 공급자별 항목(`openai`, `anthropic`)으로 저장됩니다.
 - Backend에는 저장하지 않고 요청 시 헤더로 전달됩니다.
-  - `X-API-Key`: OpenAI API Key. AI가 켜져 있을 때 질문 음성(TTS)과 답변 인식(STT)에 사용하고, GPT 피드백 모델도 이 키로 호출합니다.
+  - `X-API-Key`: OpenAI API Key. OpenAI의 STT, TTS, GPT 피드백 모델 중 하나라도 쓸 때만 필요합니다.
   - `X-Feedback-API-Key`: Claude API Key. Claude 피드백 모델을 선택하고 AI가 켜져 있을 때만 전송합니다.
-  - AI를 끈 세션은 두 키 모두 필요하지 않습니다.
-- Claude API에는 음성 인식/합성 기능이 없어, Claude 모델을 골라도 STT/TTS는 OpenAI로 처리합니다.
+- 키가 필요 없는 조합:
+  - AI를 끈 세션: 키가 전혀 필요 없습니다.
+  - Claude 피드백 + 로컬 Whisper(STT) + 기기 내장 음성(TTS): Claude 키만 필요합니다.
 - 설정 화면의 `저장 + 검증`은 두 키를 각각 해당 공급자에 확인합니다. Claude 키는 모델 조회(`GET /v1/models/{id}`)로 확인하므로 토큰을 쓰지 않습니다.
 
 ## 8) 피드백 모델 지원 범위
@@ -166,20 +167,47 @@ Windows 설치형은 Windows 환경에서, macOS DMG는 macOS 환경에서 빌�
   - `OMYPIC_ANTHROPIC_TIMEOUT_SECONDS` (기본값: `120`)
   - `OMYPIC_ANTHROPIC_MAX_RETRIES` (기본값: `2`)
 
+### 음성 인식(STT)과 음성 합성(TTS)
+
+Claude API에는 음성 인식/합성 기능이 없습니다. 그래서 STT/TTS는 피드백 모델과 따로 고르며, 무료 로컬 옵션을 함께 제공합니다.
+
+| 설정 값 | 종류 | 실행 위치 | 비용 |
+| --- | --- | --- | --- |
+| `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`, `whisper-1` | STT | OpenAI API | 유료 |
+| `local-whisper` | STT | 기기(앱 안에서 Whisper 실행) | 무료 |
+| `gpt-4o-mini-tts`, `tts-1-hd`, `tts-1` | TTS | OpenAI API | 유료 |
+| `device-voice` | TTS | 기기(운영체제 내장 음성) | 무료 |
+
+- `local-whisper`
+  - 렌더러의 Web Worker에서 `@huggingface/transformers`(ONNX Runtime WebAssembly)로 Whisper를 실행합니다.
+  - 답변 오디오는 기기를 떠나지 않습니다. 인식된 텍스트만 `POST /api/voice/sessions/{id}/answers`로 보냅니다.
+  - 인식 모델은 처음 사용할 때 한 번 내려받고 이후에는 브라우저 캐시에서 읽습니다. 세션 시작 시 모델을 먼저 준비합니다.
+  - ONNX Runtime 바이너리(`.wasm`)는 앱 번들에 포함되므로 CDN을 호출하지 않습니다.
+  - 빌드 시 환경 변수로 모델을 바꿀 수 있습니다.
+    - `VITE_OMYPIC_LOCAL_STT_MODEL` (기본값: `Xenova/whisper-base.en`)
+    - `VITE_OMYPIC_LOCAL_STT_HOST` (기본값: Hugging Face. 사내 미러나 앱에 동봉한 모델 경로를 지정할 때 사용)
+    - `VITE_OMYPIC_LOCAL_STT_PATH_TEMPLATE` (기본값: `{model}/`, `VITE_OMYPIC_LOCAL_STT_HOST`를 지정했을 때만 적용)
+- `device-voice`
+  - 서버는 오디오 대신 읽을 문장을 `tts.text` 이벤트로 보내고, 앱이 Web Speech(`speechSynthesis`)로 읽습니다.
+  - 문장 단위로 나눠 읽고, 문장 언어(영어/한국어)에 맞는 음성을 고릅니다.
+  - 기기에 쓸 수 있는 음성이 없으면 세션을 끊지 않고 질문을 화면으로만 보여 준 뒤 답변을 받습니다.
+
 ### AI ON/OFF
 
 - 실전 연습 화면과 설정 화면의 `AI` 스위치로 전환하며, 다음 세션 시작부터 적용됩니다.
-- OFF로 시작한 세션은 AI를 전혀 호출하지 않습니다.
-  - 음성 인식(STT), 음성 합성(TTS), 피드백 생성(부트스트랩/룰북 프리페치/오답노트 기록 포함)을 모두 건너뜁니다.
+- OFF로 시작한 세션은 어떤 API도 호출하지 않습니다.
+  - 음성 인식(STT)과 피드백 생성(부트스트랩/룰북 프리페치/오답노트 기록 포함)을 하지 않습니다.
+  - 질문은 기기 내장 음성(`device-voice`)으로 읽어 줍니다. 선택한 TTS 모델과 무관합니다.
   - API Key 없이 시작할 수 있습니다(`X-API-Key` 헤더 불필요).
-  - 질문은 화면에 글로 표시되고, 표시 직후 답변 대기 상태가 됩니다.
   - 답변 녹음은 기기에만 남습니다. 서버에는 오디오를 올리지 않고 답변 종료 신호만 보냅니다.
-  - 흐름: `질문 표시 -> 답변 녹음 -> (내 응답 자동 재생) -> 다음 질문`.
-- `답변 후 내 응답 자동 재생`을 켜 두면 답변이 끝난 직후 방금 녹음한 응답을 재생하고, 재생이 끝난 뒤 다음 답변을 받습니다.
+  - 흐름: `질문 읽어 주기 -> 답변 녹음 -> (내 응답 자동 재생) -> 다음 질문`.
+- `답변 후 내 응답 자동 재생`을 켜 두면 답변이 끝난 직후 방금 녹음한 응답을 재생하고, 재생이 끝난 뒤 다음 질문을 읽습니다.
 - API:
   - `POST /api/voice/sessions` 본문의 `aiEnabled`(기본 `true`). `false`면 키와 모델 검증을 생략합니다.
-  - `POST /api/voice/sessions/{voiceSessionId}/answers` 본문 `{"sequence": n}`: AI OFF 세션에서 답변 종료를 알립니다.
-    서버는 `answer.captured` 이벤트를 보낸 뒤 다음 `question.prompt`를 보냅니다. 같은 `sequence`는 한 번만 처리합니다.
+  - `POST /api/voice/sessions/{voiceSessionId}/answers` 본문 `{"sequence": n, "text": "..."}`: 오디오 업로드 없이 답변 종료를 알립니다.
+    - AI OFF 세션: `text`는 쓰지 않습니다. 서버는 `answer.captured` 이벤트를 보낸 뒤 다음 질문을 보냅니다.
+    - `local-whisper` 세션: `text`가 인식 결과입니다. 서버는 `stt.final` 이후 평소와 같은 피드백 흐름을 진행합니다.
+    - 서버 STT 세션에서는 거부합니다(400). 같은 `sequence`는 한 번만 처리합니다.
 
 ## 9) 음성 청크 전송 보장
 

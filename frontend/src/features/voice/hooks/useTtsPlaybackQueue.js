@@ -1,18 +1,26 @@
 import {useCallback, useRef} from 'react'
 import {fromBase64} from '../../../shared/utils/audioCodec.js'
+import {speakWithDeviceVoice} from '../local/deviceVoice.js'
 
 const QUESTION_REPEAT_DELAY_MS = 3000
 
+/**
+ * Plays session speech in order. An item is either audio synthesized by the server (tts.audio)
+ * or text the device voice reads aloud (tts.text). Questions play twice, 3 seconds apart, and the
+ * answer window opens after the second pass.
+ */
 export function useTtsPlaybackQueue({
                                         resetPendingAudio,
                                         updateSpeechState,
                                         onQuestionPlaybackCompleted,
                                         onTtsFailure,
+                                        onDeviceVoiceUnavailable,
                                         speechState
                                     }) {
     const ttsPlaybackQueueRef = useRef([])
     const ttsPlayingRef = useRef(false)
     const ttsActiveAudioRef = useRef(null)
+    const ttsCancelSpeechRef = useRef(null)
     const ttsDelayTimerRef = useRef(null)
     const ttsReceiveOrderRef = useRef(0)
 
@@ -23,6 +31,10 @@ export function useTtsPlaybackQueue({
         if (ttsDelayTimerRef.current !== null) {
             clearTimeout(ttsDelayTimerRef.current)
             ttsDelayTimerRef.current = null
+        }
+        if (ttsCancelSpeechRef.current) {
+            ttsCancelSpeechRef.current()
+            ttsCancelSpeechRef.current = null
         }
         const activeAudio = ttsActiveAudioRef.current
         if (!activeAudio) {
@@ -65,6 +77,35 @@ export function useTtsPlaybackQueue({
             updateSpeechState(speechState.PLAYING_QUESTION_TTS)
         }
 
+        const completeItem = () => {
+            ttsPlayingRef.current = false
+            if (nextItem.role === 'question') {
+                if (nextItem.isRepeat) {
+                    onQuestionPlaybackCompleted()
+                }
+            } else {
+                updateSpeechState(speechState.WAITING_TTS)
+            }
+            playNextTtsAudio()
+        }
+
+        if (nextItem.speechText) {
+            ttsPlayingRef.current = true
+            ttsCancelSpeechRef.current = speakWithDeviceVoice(nextItem.speechText, {
+                onEnd: () => {
+                    ttsCancelSpeechRef.current = null
+                    completeItem()
+                },
+                onUnavailable: () => {
+                    // The text is on screen, so the session goes on without the voice.
+                    ttsCancelSpeechRef.current = null
+                    onDeviceVoiceUnavailable?.()
+                    completeItem()
+                }
+            })
+            return
+        }
+
         const bytes = fromBase64(nextItem.audioBase64)
         if (!bytes.length) {
             onTtsFailure('TTS 출력 실패로 세션을 종료했습니다.')
@@ -81,20 +122,13 @@ export function useTtsPlaybackQueue({
             if (ttsActiveAudioRef.current === audio) {
                 ttsActiveAudioRef.current = null
             }
-            ttsPlayingRef.current = false
             URL.revokeObjectURL(url)
             if (failed) {
+                ttsPlayingRef.current = false
                 onTtsFailure('TTS 출력 실패로 세션을 종료했습니다.')
                 return
             }
-            if (nextItem.role === 'question') {
-                if (nextItem.isRepeat) {
-                    onQuestionPlaybackCompleted()
-                }
-            } else {
-                updateSpeechState(speechState.WAITING_TTS)
-            }
-            playNextTtsAudio()
+            completeItem()
         }
 
         audio.onended = () => finishPlayback()
@@ -102,11 +136,20 @@ export function useTtsPlaybackQueue({
         audio.play().catch(() => {
             finishPlayback({failed: true})
         })
-    }, [onQuestionPlaybackCompleted, onTtsFailure, resetPendingAudio, speechState, updateSpeechState])
+    }, [
+        onDeviceVoiceUnavailable,
+        onQuestionPlaybackCompleted,
+        onTtsFailure,
+        resetPendingAudio,
+        speechState,
+        updateSpeechState
+    ])
 
     const enqueueTtsAudio = useCallback((data) => {
         const audioBase64 = data?.audio || ''
-        if (!audioBase64) {
+        // tts.text events carry text for the device voice; tts.audio events also carry text, as a caption.
+        const speechText = data?.deviceVoice ? (data?.text || '').trim() : ''
+        if (!audioBase64 && !speechText) {
             return
         }
         const parsedSequence = Number(data?.sequence)
@@ -118,6 +161,7 @@ export function useTtsPlaybackQueue({
             sequence,
             order: ++ttsReceiveOrderRef.current,
             audioBase64,
+            speechText,
             mimeType: data?.mimeType || 'audio/wav',
             isRepeat: false,
             delayMs: 0

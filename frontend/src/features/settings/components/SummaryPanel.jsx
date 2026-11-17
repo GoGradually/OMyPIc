@@ -1,5 +1,5 @@
 import React from 'react'
-import {getModelLabel} from '../../../shared/constants/models.js'
+import {DEVICE_TTS_MODEL, getModelLabel} from '../../../shared/constants/models.js'
 
 export function SummaryPanel({
                                  feedbackLang,
@@ -17,8 +17,9 @@ export function SummaryPanel({
         {label: '피드백 모델', value: feedbackModel, title: getModelLabel(feedbackModel), muted: !aiEnabled},
         {label: '피드백 언어', value: feedbackLang === 'ko' ? '한국어' : 'English', muted: !aiEnabled},
         {label: 'STT 모델', value: voiceSttModel, muted: !aiEnabled},
-        {label: 'TTS 모델', value: ttsModel, muted: !aiEnabled},
-        {label: '음성 스타일', value: voice, muted: !aiEnabled},
+        // AI off still reads questions aloud, with the device voice.
+        {label: 'TTS 모델', value: aiEnabled ? ttsModel : DEVICE_TTS_MODEL},
+        {label: '음성 스타일', value: voice, muted: !aiEnabled || ttsModel === DEVICE_TTS_MODEL},
         {label: '활성 룰북', value: `${enabledRulebookCount}개`},
         {label: '질문 그룹', value: `${questionGroupCount}개`}
     ]

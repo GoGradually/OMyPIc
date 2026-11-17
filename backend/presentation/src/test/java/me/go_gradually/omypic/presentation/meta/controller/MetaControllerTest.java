@@ -43,6 +43,8 @@ class MetaControllerTest {
                 .andExpect(jsonPath("$.feedbackProviders[1].defaultModel").value("claude-opus-5-5"))
                 .andExpect(jsonPath("$.voiceSttModels[0]").value("gpt-4o-transcribe"))
                 .andExpect(jsonPath("$.defaultVoiceSttModel").value("gpt-4o-mini-transcribe"))
+                .andExpect(jsonPath("$.voiceSttModels[3]").value("local-whisper"))
+                .andExpect(jsonPath("$.ttsModels[3]").value("device-voice"))
                 .andExpect(jsonPath("$.ttsModels[0]").value("gpt-4o-mini-tts"))
                 .andExpect(jsonPath("$.defaultTtsModel").value("gpt-4o-mini-tts"))
                 .andExpect(jsonPath("$.voices[0]").value("alloy"))

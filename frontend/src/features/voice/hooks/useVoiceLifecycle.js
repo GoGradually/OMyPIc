@@ -28,11 +28,19 @@ import {
     VOICE_RECONNECT_MAX_DELAY_MS
 } from './voiceSessionConstants.js'
 import {computeRms, joinByteChunks} from './voiceSessionAudio.js'
+import {loadLocalStt, transcribePcm16} from '../local/localStt.js'
+import {LOCAL_STT_MODEL} from '../../../shared/constants/models.js'
 
 const VOICE_CHUNK_UPLOAD_TIMEOUT_MS = 3000
 const REPLAY_STATE = {
     IDLE: 'IDLE',
     PLAYING: 'PLAYING'
+}
+// Where the answer is transcribed in the running session.
+const STT_MODE = {
+    SERVER: 'server', // audio is uploaded and the server calls the STT API
+    LOCAL: 'local', // Whisper runs on this device and only the text is sent
+    NONE: 'none' // AI off: nothing is transcribed
 }
 
 export function useVoiceLifecycle({
@@ -127,7 +135,9 @@ export function useVoiceLifecycle({
     const replayAudioRef = useRef(null)
     const replayAudioUrlRef = useRef('')
     const deferredTtsQueueRef = useRef([])
-    const pendingAnswerWindowRef = useRef(false)
+    const sessionSttModeRef = useRef(STT_MODE.SERVER)
+    const transcribingRef = useRef(false)
+    const deviceVoiceNoticeShownRef = useRef(false)
     const onConnectionErrorRef = useRef(() => {
     })
 
@@ -278,16 +288,13 @@ export function useVoiceLifecycle({
         updateSpeechState(SPEECH_STATE.READY_FOR_ANSWER)
     }, [updateSpeechState])
 
-    // AI off: no question audio arrives. The question is on screen, so the answer window opens
-    // right away, or as soon as the learner's own answer has finished replaying.
-    const openAnswerWindowWithoutAudio = useCallback(() => {
-        if (replayStateRef.current === REPLAY_STATE.PLAYING) {
-            pendingAnswerWindowRef.current = true
+    const handleDeviceVoiceUnavailable = useCallback(() => {
+        if (deviceVoiceNoticeShownRef.current) {
             return
         }
-        pendingAnswerWindowRef.current = false
-        onQuestionPlaybackCompleted()
-    }, [onQuestionPlaybackCompleted])
+        deviceVoiceNoticeShownRef.current = true
+        setStatus('이 기기에서 쓸 수 있는 내장 음성이 없어 질문을 화면으로만 보여 드립니다.')
+    }, [setStatus])
 
     const {
         clearTtsPlayback,
@@ -297,6 +304,7 @@ export function useVoiceLifecycle({
         updateSpeechState,
         onQuestionPlaybackCompleted,
         onTtsFailure: handleTtsFailure,
+        onDeviceVoiceUnavailable: handleDeviceVoiceUnavailable,
         speechState: SPEECH_STATE
     })
 
@@ -352,19 +360,14 @@ export function useVoiceLifecycle({
 
         if (clearDeferred) {
             deferredTtsQueueRef.current = []
-            pendingAnswerWindowRef.current = false
         } else if (flushDeferred) {
             flushDeferredTtsQueue()
-            if (pendingAnswerWindowRef.current && sessionActiveRef.current) {
-                pendingAnswerWindowRef.current = false
-                onQuestionPlaybackCompleted()
-            }
         }
 
         if (statusMessage) {
             setStatus(statusMessage)
         }
-    }, [flushDeferredTtsQueue, onQuestionPlaybackCompleted, setStatus, updateReplayState])
+    }, [flushDeferredTtsQueue, setStatus, updateReplayState])
 
     const startReplayPlayback = useCallback(() => {
         const confirmed = replayConfirmedRef.current
@@ -493,7 +496,6 @@ export function useVoiceLifecycle({
             // The session ended on its own while the learner's answer is still playing back
             // (last question with AI feedback off). Let it finish; only drop what was queued behind it.
             deferredTtsQueueRef.current = []
-            pendingAnswerWindowRef.current = false
             captureBlockRef.current = false
         } else {
             stopReplayPlayback({flushDeferred: false, clearDeferred: true})
@@ -595,7 +597,7 @@ export function useVoiceLifecycle({
         replayCandidateRef.current = null
 
         // AI off: there is no feedback to read back, so the learner hears their own answer instead.
-        // The next question's answer window waits for this playback (pendingAnswerWindowRef).
+        // The next question is read aloud after this playback (it waits in deferredTtsQueue).
         const shouldAutoReplay = sessionActiveRef.current
             && !sessionAiEnabledRef.current
             && settingsRef.current.autoReplay
@@ -654,7 +656,8 @@ export function useVoiceLifecycle({
         }, VOICE_CHUNK_UPLOAD_TIMEOUT_MS)
         try {
             if (turn.kind === 'answer') {
-                await sendVoiceAnswer(turn.voiceSessionId, {sequence: turn.sequence}, {
+                const answer = turn.text ? {sequence: turn.sequence, text: turn.text} : {sequence: turn.sequence}
+                await sendVoiceAnswer(turn.voiceSessionId, answer, {
                     signal: abortController.signal
                 })
             } else {
@@ -791,7 +794,7 @@ export function useVoiceLifecycle({
     }, [clearInFlightTurn, resetPendingAudio, scheduleChunkRetry, uploadInFlightTurn])
 
     const flushPendingAudio = useCallback(async ({force = false, expectedWindowId = null} = {}) => {
-        if (inFlightTurnRef.current) {
+        if (inFlightTurnRef.current || transcribingRef.current) {
             return
         }
         const voiceSessionId = voiceSessionIdRef.current
@@ -866,13 +869,41 @@ export function useVoiceLifecycle({
 
         updateSpeechState(SPEECH_STATE.WAITING_TTS)
         setAwaitingReview(true)
-        // AI on uploads the recording for transcription. AI off keeps it on the device (it is only
-        // used for replay) and reports just the end of the answer.
-        const aiOn = sessionAiEnabledRef.current
+        // Server STT uploads the recording. Local STT transcribes it here and sends only the text.
+        // AI off keeps it on the device (it is only used for replay) and reports the end of the answer.
+        const sttMode = sessionSttModeRef.current
+        let answerText = ''
+        if (sttMode === STT_MODE.LOCAL) {
+            let failure = ''
+            transcribingRef.current = true
+            try {
+                answerText = (await transcribePcm16(merged, sampleRate)).trim()
+            } catch (error) {
+                failure = error?.message || '알 수 없는 오류'
+            } finally {
+                transcribingRef.current = false
+            }
+            if (!sessionActiveRef.current || voiceSessionIdRef.current !== voiceSessionId) {
+                return
+            }
+            if (!answerText) {
+                // Same outcome as the server reporting stt.skipped: answer the question again.
+                if (capturedTurnId !== null) {
+                    clearReplayCandidateForTurn(capturedTurnId)
+                }
+                setStatus(failure
+                    ? `로컬 음성 인식에 실패했습니다. 다시 답변해 주세요. (${failure})`
+                    : '음성이 인식되지 않아 다시 답변해 주세요.')
+                updateSpeechState(SPEECH_STATE.READY_FOR_ANSWER)
+                return
+            }
+        }
+        const uploadsAudio = sttMode === STT_MODE.SERVER
         inFlightTurnRef.current = {
-            kind: aiOn ? 'audio' : 'answer',
+            kind: uploadsAudio ? 'audio' : 'answer',
             voiceSessionId,
-            pcm16Base64: aiOn ? toBase64(merged) : '',
+            pcm16Base64: uploadsAudio ? toBase64(merged) : '',
+            text: answerText,
             sampleRate,
             sequence: nextSequence,
             capturedWindowId,
@@ -994,18 +1025,12 @@ export function useVoiceLifecycle({
                 currentQuestionIdRef.current = question?.questionId || ''
                 currentQuestionTurnIdRef.current = parseTurnId(question?.turnId) || 0
                 questionPromptRef.current?.(question)
-                if (!sessionAiEnabledRef.current && question && !question.exhausted) {
-                    openAnswerWindowWithoutAudio()
-                }
             },
-            getQuestionPromptStatus: () => {
-                if (sessionAiEnabledRef.current) {
-                    return ''
-                }
-                return replayStateRef.current === REPLAY_STATE.PLAYING
-                    ? '내 응답을 다시 듣는 중입니다. 재생이 끝나면 다음 질문에 답변해 주세요.'
-                    : '다음 질문입니다. 질문을 읽고 답변해 주세요.'
-            },
+            getQuestionPromptStatus: () => (
+                replayStateRef.current === REPLAY_STATE.PLAYING
+                    ? '내 응답을 다시 듣는 중입니다. 재생이 끝나면 다음 질문을 읽어 드립니다.'
+                    : ''
+            ),
             onFeedback: (feedback) => {
                 feedbackRef.current?.(feedback)
             },
@@ -1028,7 +1053,6 @@ export function useVoiceLifecycle({
         handleSttFinal,
         handleSttSkipped,
         handleTtsFailure,
-        openAnswerWindowWithoutAudio,
         parseTurnId,
         resetPendingAudio,
         resetReconnectState,
@@ -1163,6 +1187,25 @@ export function useVoiceLifecycle({
         onConnectionErrorRef.current = handleConnectionError
     }, [handleConnectionError])
 
+    // The model is downloaded once (first use) and then served from the browser cache.
+    const prepareLocalStt = useCallback(async () => {
+        setStatus('기기에서 실행할 음성 인식 모델을 준비하고 있습니다.')
+        let lastReported = -1
+        try {
+            await loadLocalStt(({progress}) => {
+                const percent = Math.floor(progress / 10) * 10
+                if (percent > lastReported) {
+                    lastReported = percent
+                    setStatus(`음성 인식 모델을 내려받는 중입니다. (${percent}%)`)
+                }
+            })
+        } catch (error) {
+            throw new Error(
+                `로컬 음성 인식 모델을 불러오지 못했습니다. 네트워크를 확인하거나 설정에서 STT 모델을 바꿔 주세요. (${error?.message || '알 수 없는 오류'})`
+            )
+        }
+    }, [setStatus])
+
     const startSession = useCallback(async () => {
         if (sessionActiveRef.current) {
             return
@@ -1198,6 +1241,14 @@ export function useVoiceLifecycle({
             sessionAiEnabledRef.current = aiOn
             setSessionAiEnabled(aiOn)
             setAwaitingReview(false)
+            deviceVoiceNoticeShownRef.current = false
+            transcribingRef.current = false
+            sessionSttModeRef.current = !aiOn
+                ? STT_MODE.NONE
+                : (settingsRef.current.voiceSttModel === LOCAL_STT_MODEL ? STT_MODE.LOCAL : STT_MODE.SERVER)
+            if (sessionSttModeRef.current === STT_MODE.LOCAL) {
+                await prepareLocalStt()
+            }
 
             const created = await openVoiceSession({
                 sessionId,
@@ -1324,7 +1375,7 @@ export function useVoiceLifecycle({
             setAudioPermission('granted')
             setStatus(aiOn
                 ? '세션을 시작했습니다. 질문을 듣고 답변해 주세요.'
-                : '세션을 시작했습니다. AI 없이 진행합니다. 질문을 읽고 답변해 주세요.')
+                : '세션을 시작했습니다. AI 없이 진행합니다. 질문을 듣고 답변해 주세요.')
             refreshAudioDeviceStatus().catch(() => {
             })
         } catch (error) {
@@ -1367,6 +1418,7 @@ export function useVoiceLifecycle({
         closeEventSource,
         flushPendingAudio,
         parseTurnId,
+        prepareLocalStt,
         refreshAudioDeviceStatus,
         resetPendingAudio,
         resetReconnectState,

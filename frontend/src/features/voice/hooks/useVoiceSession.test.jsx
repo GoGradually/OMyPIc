@@ -10,6 +10,8 @@ import {
     sendVoiceAudioChunk,
     stopVoiceSession
 } from '../../../shared/api/http.js'
+import {speakWithDeviceVoice} from '../local/deviceVoice.js'
+import {loadLocalStt, transcribePcm16} from '../local/localStt.js'
 
 vi.mock('../../../shared/api/http.js', () => ({
     openVoiceSession: vi.fn(),
@@ -20,7 +22,18 @@ vi.mock('../../../shared/api/http.js', () => ({
     stopVoiceSession: vi.fn()
 }))
 
+vi.mock('../local/deviceVoice.js', () => ({
+    speakWithDeviceVoice: vi.fn()
+}))
+
+vi.mock('../local/localStt.js', () => ({
+    loadLocalStt: vi.fn(),
+    transcribePcm16: vi.fn()
+}))
+
 let activeEventSource = null
+let spokenTexts = []
+let speechCallbacks = []
 let eventSourceInstances = []
 let lastProcessor = null
 let audioInstances = []
@@ -226,23 +239,51 @@ async function prepareConfirmedReplay({
     })
 }
 
-// AI off: no question audio and no transcription. The question arrives as text, the learner
-// answers, and the server only acknowledges the end of the answer.
-async function answerWithoutAi({turnId = 1, questionId = 'q-1'} = {}) {
+// The device voice reads a question twice, 3 seconds apart; the answer window opens after the second pass.
+async function finishDeviceVoiceQuestion() {
+    vi.useFakeTimers()
+    try {
+        await act(async () => {
+            speechCallbacks[speechCallbacks.length - 1].onEnd()
+        })
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(3000)
+        })
+        await act(async () => {
+            speechCallbacks[speechCallbacks.length - 1].onEnd()
+        })
+    } finally {
+        vi.useRealTimers()
+    }
+}
+
+async function hearQuestionFromDeviceVoice({turnId = 1, questionId = 'q-1', sequence = turnId} = {}) {
     await act(async () => {
         activeEventSource.emit('question.prompt', {
             turnId,
             question: {id: questionId, text: `question-${turnId}`, group: 'travel'},
             selection: {exhausted: false}
         })
+        activeEventSource.emit('tts.text', {role: 'question', text: `question-${turnId}`, sequence})
     })
-    const answersBefore = sendVoiceAnswer.mock.calls.length
+    await finishDeviceVoiceQuestion()
+}
+
+function speakAnAnswer() {
     act(() => {
         emitAudioFrame(0.1)
         emitAudioFrame(0)
         emitAudioFrame(0)
         emitAudioFrame(0)
     })
+}
+
+// AI off: the question is read by the device voice, nothing is transcribed, and the server only
+// acknowledges the end of the answer.
+async function answerWithoutAi({turnId = 1, questionId = 'q-1'} = {}) {
+    await hearQuestionFromDeviceVoice({turnId, questionId})
+    const answersBefore = sendVoiceAnswer.mock.calls.length
+    speakAnAnswer()
     await waitFor(() => {
         expect(sendVoiceAnswer.mock.calls.length).toBeGreaterThan(answersBefore)
     })
@@ -294,6 +335,16 @@ describe('useVoiceSession', () => {
         sendVoiceAudioChunk.mockResolvedValue(undefined)
         sendVoiceAnswer.mockResolvedValue(undefined)
         stopVoiceSession.mockResolvedValue(undefined)
+
+        spokenTexts = []
+        speechCallbacks = []
+        speakWithDeviceVoice.mockImplementation((text, callbacks) => {
+            spokenTexts.push(text)
+            speechCallbacks.push(callbacks)
+            return vi.fn()
+        })
+        loadLocalStt.mockResolvedValue(undefined)
+        transcribePcm16.mockResolvedValue('local transcript')
     })
 
     it('sends selected models when opening voice session', async () => {
@@ -1603,11 +1654,11 @@ describe('useVoiceSession', () => {
 
         expect(openVoiceSession).toHaveBeenCalledWith(expect.objectContaining({aiEnabled: false}))
         expect(result.current.sessionAiEnabled).toBe(false)
-        expect(onStatus).toHaveBeenCalledWith('세션을 시작했습니다. AI 없이 진행합니다. 질문을 읽고 답변해 주세요.')
+        expect(onStatus).toHaveBeenCalledWith('세션을 시작했습니다. AI 없이 진행합니다. 질문을 듣고 답변해 주세요.')
         unmount()
     })
 
-    it('opens the answer window as soon as the question is shown when AI is off', async () => {
+    it('reads the question with the device voice when AI is off, then opens the answer window', async () => {
         const {result, unmount} = renderHook(() => useVoiceSession({
             sessionId: 's1',
             feedbackModel: 'gpt-4o-mini',
@@ -1633,11 +1684,160 @@ describe('useVoiceSession', () => {
                 question: {id: 'q-1', text: 'question-1', group: 'travel'},
                 selection: {exhausted: false}
             })
+            activeEventSource.emit('tts.text', {role: 'question', text: 'question-1', sequence: 1})
         })
 
-        // No question audio is played: the learner reads the question and answers.
+        expect(spokenTexts).toEqual(['question-1'])
+        expect(result.current.speechState).toBe('PLAYING_QUESTION_TTS')
+
+        await finishDeviceVoiceQuestion()
+
+        expect(spokenTexts).toEqual(['question-1', 'question-1'])
         expect(result.current.speechState).toBe('READY_FOR_ANSWER')
+        // No synthesized audio was played: only the device voice spoke.
         expect(audioInstances.length).toBe(audioCount)
+        unmount()
+    })
+
+    it('keeps going with the question on screen when the device has no voice', async () => {
+        const onStatus = vi.fn()
+        const {result, unmount} = renderHook(() => useVoiceSession({
+            sessionId: 's1',
+            feedbackModel: 'gpt-4o-mini',
+            aiEnabled: false,
+            autoReplay: false,
+            voiceSttModel: 'gpt-4o-mini-transcribe',
+            feedbackLang: 'ko',
+            voice: 'alloy',
+            onStatus,
+            onFeedback: vi.fn(),
+            refreshWrongNotes: vi.fn(async () => {
+            }),
+            onQuestionPrompt: vi.fn()
+        }))
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+        await act(async () => {
+            activeEventSource.emit('question.prompt', {
+                turnId: 1,
+                question: {id: 'q-1', text: 'question-1', group: 'travel'},
+                selection: {exhausted: false}
+            })
+            activeEventSource.emit('tts.text', {role: 'question', text: 'question-1', sequence: 1})
+        })
+        vi.useFakeTimers()
+        try {
+            await act(async () => {
+                speechCallbacks[speechCallbacks.length - 1].onUnavailable()
+            })
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(3000)
+            })
+            await act(async () => {
+                speechCallbacks[speechCallbacks.length - 1].onUnavailable()
+            })
+        } finally {
+            vi.useRealTimers()
+        }
+
+        expect(result.current.sessionActive).toBe(true)
+        expect(result.current.speechState).toBe('READY_FOR_ANSWER')
+        expect(onStatus).toHaveBeenCalledWith('이 기기에서 쓸 수 있는 내장 음성이 없어 질문을 화면으로만 보여 드립니다.')
+        unmount()
+    })
+
+    it('transcribes on the device and sends only the text when local STT is selected', async () => {
+        const {result, unmount} = renderHook(() => useVoiceSession({
+            sessionId: 's1',
+            feedbackModel: 'gpt-4o-mini',
+            aiEnabled: true,
+            autoReplay: false,
+            voiceSttModel: 'local-whisper',
+            feedbackLang: 'ko',
+            voice: 'alloy',
+            onStatus: vi.fn(),
+            onFeedback: vi.fn(),
+            refreshWrongNotes: vi.fn(async () => {
+            }),
+            onQuestionPrompt: vi.fn()
+        }))
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+        expect(loadLocalStt).toHaveBeenCalledTimes(1)
+        expect(openVoiceSession).toHaveBeenCalledWith(expect.objectContaining({sttModel: 'local-whisper'}))
+
+        await hearQuestionFromDeviceVoice({turnId: 1, questionId: 'q-1'})
+        speakAnAnswer()
+        await waitFor(() => {
+            expect(sendVoiceAnswer).toHaveBeenCalledWith('voice-1', {sequence: 1, text: 'local transcript'}, expect.anything())
+        })
+
+        expect(transcribePcm16).toHaveBeenCalledTimes(1)
+        expect(sendVoiceAudioChunk).not.toHaveBeenCalled()
+        unmount()
+    })
+
+    it('asks for the answer again when local STT hears nothing', async () => {
+        transcribePcm16.mockResolvedValue('   ')
+        const onStatus = vi.fn()
+        const {result, unmount} = renderHook(() => useVoiceSession({
+            sessionId: 's1',
+            feedbackModel: 'gpt-4o-mini',
+            aiEnabled: true,
+            autoReplay: false,
+            voiceSttModel: 'local-whisper',
+            feedbackLang: 'ko',
+            voice: 'alloy',
+            onStatus,
+            onFeedback: vi.fn(),
+            refreshWrongNotes: vi.fn(async () => {
+            }),
+            onQuestionPrompt: vi.fn()
+        }))
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+        await hearQuestionFromDeviceVoice({turnId: 1, questionId: 'q-1'})
+        speakAnAnswer()
+        await waitFor(() => {
+            expect(onStatus).toHaveBeenCalledWith('음성이 인식되지 않아 다시 답변해 주세요.')
+        })
+
+        expect(sendVoiceAnswer).not.toHaveBeenCalled()
+        expect(result.current.speechState).toBe('READY_FOR_ANSWER')
+        unmount()
+    })
+
+    it('does not start the session when the local STT model cannot be loaded', async () => {
+        loadLocalStt.mockRejectedValue(new Error('offline'))
+        const onStatus = vi.fn()
+        const {result, unmount} = renderHook(() => useVoiceSession({
+            sessionId: 's1',
+            feedbackModel: 'gpt-4o-mini',
+            aiEnabled: true,
+            autoReplay: false,
+            voiceSttModel: 'local-whisper',
+            feedbackLang: 'ko',
+            voice: 'alloy',
+            onStatus,
+            onFeedback: vi.fn(),
+            refreshWrongNotes: vi.fn(async () => {
+            }),
+            onQuestionPrompt: vi.fn()
+        }))
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+
+        expect(openVoiceSession).not.toHaveBeenCalled()
+        expect(result.current.sessionActive).toBe(false)
+        expect(onStatus).toHaveBeenLastCalledWith(expect.stringContaining('로컬 음성 인식 모델을 불러오지 못했습니다.'))
         unmount()
     })
 
@@ -1669,7 +1869,7 @@ describe('useVoiceSession', () => {
         unmount()
     })
 
-    it('replays the answer automatically when AI is off, then opens the next answer window', async () => {
+    it('replays the answer automatically when AI is off, then reads the next question', async () => {
         const {result, unmount} = renderHook(() => useVoiceSession({
             sessionId: 's1',
             feedbackModel: 'gpt-4o-mini',
@@ -1695,21 +1895,25 @@ describe('useVoiceSession', () => {
         expect(result.current.replayButtonLabel).toBe('중지')
         const replayAudio = audioInstances[audioInstances.length - 1]
 
+        const spokenBeforeNextQuestion = spokenTexts.length
         await act(async () => {
             activeEventSource.emit('question.prompt', {
                 turnId: 2,
                 question: {id: 'q-2', text: 'question-2', group: 'travel'},
                 selection: {exhausted: false}
             })
+            activeEventSource.emit('tts.text', {role: 'question', text: 'question-2', sequence: 2})
         })
-        // The next question is on screen, but the microphone stays closed while the replay plays.
+        // The next question waits: the device voice must not talk over the replay.
+        expect(spokenTexts.length).toBe(spokenBeforeNextQuestion)
         expect(result.current.speechState).toBe('WAITING_TTS')
 
         await act(async () => {
             replayAudio.onended()
         })
         expect(result.current.replayPlaying).toBe(false)
-        expect(result.current.speechState).toBe('READY_FOR_ANSWER')
+        expect(spokenTexts[spokenTexts.length - 1]).toBe('question-2')
+        expect(result.current.speechState).toBe('PLAYING_QUESTION_TTS')
         unmount()
     })
 

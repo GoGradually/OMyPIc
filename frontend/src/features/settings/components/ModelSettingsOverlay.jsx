@@ -1,8 +1,10 @@
 import React, {useState} from 'react'
 import {
+    DEVICE_TTS_MODEL,
     FEEDBACK_LANGUAGE_LABELS,
     getModelLabel,
-    getProviderLabel
+    getProviderLabel,
+    LOCAL_STT_MODEL
 } from '../../../shared/constants/models.js'
 
 function ModelOptions({models}) {
@@ -63,6 +65,7 @@ export function ModelSettingsOverlay({
                                          autoReplayEnabled = false,
                                          setAutoReplayEnabled = () => {
                                          },
+                                         needsOpenAiKey = true,
                                          sessionActive = false,
                                          voice,
                                          setVoice,
@@ -78,6 +81,9 @@ export function ModelSettingsOverlay({
         ? feedbackLanguageOptions
         : ['ko', 'en']
     const usesClaude = feedbackProvider === 'anthropic'
+    const usesLocalStt = aiEnabled && voiceSttModel === LOCAL_STT_MODEL
+    // AI off always reads questions with the device voice, whatever TTS model is selected.
+    const usesDeviceVoice = !aiEnabled || ttsModel === DEVICE_TTS_MODEL
 
     return (
         <div className="overlay-content settings">
@@ -100,7 +106,7 @@ export function ModelSettingsOverlay({
                         <span>
                             {aiEnabled
                                 ? '질문을 읽어 주고, 답변을 인식해 선택한 모델로 첨삭합니다.'
-                                : '음성 인식(STT), 음성 합성(TTS), 피드백을 모두 쓰지 않습니다. API Key가 필요 없습니다.'}
+                                : 'API를 호출하지 않습니다. 질문은 기기 내장 음성으로 읽어 드리고, 답변은 녹음만 합니다. API Key가 필요 없습니다.'}
                         </span>
                     </div>
                     {!aiEnabled && (
@@ -165,6 +171,11 @@ export function ModelSettingsOverlay({
                         >
                             <ModelOptions models={voiceSttModelOptions}/>
                         </select>
+                        {usesLocalStt && (
+                            <p className="tiny-meta">
+                                이 기기에서 인식합니다. 처음 한 번 인식 모델(수십 MB)을 내려받고, 긴 답변은 인식에 시간이 더 걸립니다.
+                            </p>
+                        )}
                     </div>
                     <div className="field-block">
                         <label htmlFor="tts-model">TTS 모델</label>
@@ -176,6 +187,13 @@ export function ModelSettingsOverlay({
                         >
                             <ModelOptions models={ttsModelOptions}/>
                         </select>
+                        {usesDeviceVoice && (
+                            <p className="tiny-meta">
+                                {aiEnabled
+                                    ? '운영체제에 설치된 음성으로 읽습니다. 음질은 기기마다 다릅니다.'
+                                    : 'AI를 끄면 질문을 기기 내장 음성으로 읽어 드립니다.'}
+                            </p>
+                        )}
                     </div>
                     <div className="field-block">
                         <label htmlFor="tts-voice">음성 스타일</label>
@@ -183,7 +201,7 @@ export function ModelSettingsOverlay({
                             id="tts-voice"
                             value={voice}
                             onChange={(event) => setVoice(event.target.value)}
-                            disabled={!aiEnabled}
+                            disabled={usesDeviceVoice}
                         >
                             {voiceOptions.map((item) => (
                                 <option key={item} value={item}>{item}</option>
@@ -198,7 +216,9 @@ export function ModelSettingsOverlay({
                 <ApiKeyField
                     id="openai-key"
                     label="OpenAI API Key"
-                    hint="AI를 켰을 때 질문 음성(TTS)과 답변 인식(STT)에 사용합니다. GPT 피드백 모델도 이 키로 호출합니다."
+                    hint={needsOpenAiKey
+                        ? 'OpenAI의 STT, TTS, GPT 피드백 모델 중 선택한 것에 사용합니다.'
+                        : '지금 설정은 OpenAI를 쓰지 않아 이 키가 없어도 됩니다.'}
                     value={apiKeyInput}
                     onChange={setApiKeyInput}
                     placeholder="sk-..."
@@ -221,7 +241,7 @@ export function ModelSettingsOverlay({
                 <h3 id="settings-cost">비용 안내</h3>
                 <p className="tiny-meta">기본 설정(gpt-5-nano) 기준으로 세션 1회당 약 50원이 사용됩니다.</p>
                 <p className="tiny-meta">실제 비용은 발화 길이와 선택 모델에 따라 달라질 수 있습니다.</p>
-                <p className="tiny-meta">AI를 끄면 어떤 API도 호출하지 않으므로 비용이 들지 않습니다.</p>
+                <p className="tiny-meta">로컬 Whisper와 기기 내장 음성은 무료입니다. AI를 끄면 어떤 API도 호출하지 않습니다.</p>
             </section>
 
             <section className="settings__group" aria-labelledby="settings-data">

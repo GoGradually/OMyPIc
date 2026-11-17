@@ -68,6 +68,25 @@ describe('ModelSettingsOverlay', () => {
         expect(screen.getByLabelText('OpenAI API Key').getAttribute('type')).toBe('password')
     })
 
+    it('explains the free local speech options and frees the OpenAI key when they are selected', () => {
+        render(<ModelSettingsOverlay {...buildProps({
+            feedbackModel: 'claude-opus-5-5',
+            feedbackProvider: 'anthropic',
+            voiceSttModel: 'local-whisper',
+            voiceSttModelOptions: ['gpt-4o-mini-transcribe', 'local-whisper'],
+            ttsModel: 'device-voice',
+            ttsModelOptions: ['gpt-4o-mini-tts', 'device-voice'],
+            needsOpenAiKey: false
+        })} />)
+
+        expect(screen.getByRole('option', {name: '로컬 Whisper (무료, 기기에서 실행)'})).toBeTruthy()
+        expect(screen.getByRole('option', {name: '기기 내장 음성 (무료)'})).toBeTruthy()
+        expect(screen.getByText(/처음 한 번 인식 모델/)).toBeTruthy()
+        expect(screen.getByText('지금 설정은 OpenAI를 쓰지 않아 이 키가 없어도 됩니다.')).toBeTruthy()
+        // The OpenAI voice style does not apply to the device voice.
+        expect(screen.getByLabelText('음성 스타일').disabled).toBe(true)
+    })
+
     it('disables every model choice while AI is off', () => {
         const setAiEnabled = vi.fn()
         render(<ModelSettingsOverlay {...buildProps({aiEnabled: false, setAiEnabled})} />)
@@ -76,6 +95,7 @@ describe('ModelSettingsOverlay', () => {
         expect(screen.getByLabelText('피드백 언어').disabled).toBe(true)
         expect(screen.getByLabelText('STT 모델').disabled).toBe(true)
         expect(screen.getByLabelText('TTS 모델').disabled).toBe(true)
+        expect(screen.getByText('AI를 끄면 질문을 기기 내장 음성으로 읽어 드립니다.')).toBeTruthy()
         fireEvent.click(screen.getByRole('switch', {name: 'AI 사용'}))
         expect(setAiEnabled).toHaveBeenCalledWith(true)
     })

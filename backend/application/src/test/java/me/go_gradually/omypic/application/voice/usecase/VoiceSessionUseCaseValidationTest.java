@@ -77,4 +77,28 @@ class VoiceSessionUseCaseValidationTest {
 
         assertEquals("sessionId and apiKey are required", error.getMessage());
     }
+
+    @Test
+    void open_requiresOpenAiKey_whenOnlyOneSpeechSideIsLocal() {
+        VoiceSessionUseCase useCase = new VoiceSessionUseCase(
+                sttUseCase,
+                feedbackUseCase,
+                sessionUseCase,
+                questionUseCase,
+                ttsGateway,
+                asyncExecutor,
+                voicePolicy,
+                metrics
+        );
+        VoiceSessionOpenCommand command = new VoiceSessionOpenCommand();
+        command.setSessionId("s1");
+        command.setFeedbackModel("claude-opus-5-5");
+        command.setFeedbackApiKey("sk-ant-key");
+        command.setSttModel("local-whisper");
+        command.setTtsModel("gpt-4o-mini-tts");
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () -> useCase.open(command));
+
+        assertEquals("sessionId and apiKey are required", error.getMessage());
+    }
 }

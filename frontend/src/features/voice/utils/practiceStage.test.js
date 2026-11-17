@@ -12,18 +12,11 @@ describe('practice stage', () => {
             .toEqual(['질문 듣기', '답변'])
     })
 
-    it('shows the question as text and ends with answer replay when AI is off', () => {
+    it('ends the turn with answer replay when AI is off', () => {
         expect(getPracticeSteps({aiEnabled: false, autoReplayEnabled: true, continuousMode: false}))
-            .toEqual(['질문 읽기', '답변', '내 응답 다시듣기'])
+            .toEqual(['질문 듣기', '답변', '내 응답 다시듣기'])
         expect(getPracticeSteps({aiEnabled: false, autoReplayEnabled: false, continuousMode: true}))
-            .toEqual(['질문 읽기', '답변'])
-    })
-
-    it('keeps the reading step until the learner starts speaking when AI is off', () => {
-        const base = {sessionActive: true, replayPlaying: false, awaitingReview: false, stepCount: 3, aiEnabled: false}
-        expect(getActiveStepIndex({...base, speechState: 'READY_FOR_ANSWER'})).toBe(0)
-        expect(getActiveStepIndex({...base, speechState: 'CAPTURING_ANSWER'})).toBe(1)
-        expect(getActiveStepIndex({...base, speechState: 'WAITING_TTS', replayPlaying: true})).toBe(2)
+            .toEqual(['질문 듣기', '답변'])
     })
 
     it('marks no step while the session is idle', () => {
@@ -67,9 +60,9 @@ describe('practice stage', () => {
             .toContain('질문 그룹')
     })
 
-    it('describes the answer step without speech recognition when AI is off', () => {
+    it('says the answer is only recorded when AI is off', () => {
         const active = {sessionActive: true, aiEnabled: false}
-        expect(getStageCaption({...active, speechState: 'READY_FOR_ANSWER'})).toBe('질문을 읽고 답변을 시작해 주세요.')
+        expect(getStageCaption({...active, speechState: 'READY_FOR_ANSWER'})).toBe('지금 답변해 주세요.')
         expect(getStageCaption({...active, speechState: 'CAPTURING_ANSWER'})).toContain('녹음하고 있습니다')
     })
 

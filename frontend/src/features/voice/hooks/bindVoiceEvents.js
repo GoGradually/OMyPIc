@@ -154,6 +154,19 @@ export function bindVoiceEvents({
         enqueueTtsAudio(data)
     })
 
+    // Speech the device voice reads aloud (device-voice TTS, and every AI-off session).
+    eventSource.addEventListener('tts.text', (event) => {
+        const data = processData(event)
+        if (!data) {
+            return
+        }
+        const speech = {...data, deviceVoice: true}
+        if (shouldSkipReplayTts?.(speech)) {
+            return
+        }
+        enqueueTtsAudio(speech)
+    })
+
     eventSource.addEventListener('tts.error', (event) => {
         const data = processData(event)
         if (!data) {

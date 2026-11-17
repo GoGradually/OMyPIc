@@ -10,10 +10,12 @@ import {
     verifyApiKey
 } from '../../shared/api/http.js'
 import {
+    DEVICE_TTS_MODEL,
     getFeedbackProvider,
     getModelLabel,
     getModeSummary,
     getProviderLabel,
+    LOCAL_STT_MODEL,
     PANEL_TITLES
 } from '../../shared/constants/models.js'
 import {readPreference, writePreference} from '../../shared/utils/preferences.js'
@@ -132,8 +134,8 @@ export function useAppViewModel() {
     const [feedbackModel, setFeedbackModel] = useState(() => readPreference('feedback_model', ''))
     const [aiEnabled, setAiEnabled] = useState(() => readPreference('ai_enabled', true) !== false)
     const [autoReplayEnabled, setAutoReplayEnabled] = useState(() => readPreference('auto_replay', true) !== false)
-    const [voiceSttModel, setVoiceSttModel] = useState('')
-    const [ttsModel, setTtsModel] = useState('')
+    const [voiceSttModel, setVoiceSttModel] = useState(() => readPreference('stt_model', ''))
+    const [ttsModel, setTtsModel] = useState(() => readPreference('tts_model', ''))
     const [modelMeta, setModelMeta] = useState(EMPTY_MODEL_META)
 
     const [apiKeyInput, setApiKeyInput] = useState('')
@@ -219,6 +221,18 @@ export function useAppViewModel() {
             writePreference('feedback_model', feedbackModel)
         }
     }, [feedbackModel])
+
+    useEffect(() => {
+        if (voiceSttModel) {
+            writePreference('stt_model', voiceSttModel)
+        }
+    }, [voiceSttModel])
+
+    useEffect(() => {
+        if (ttsModel) {
+            writePreference('tts_model', ttsModel)
+        }
+    }, [ttsModel])
 
     useEffect(() => {
         writePreference('ai_enabled', aiEnabled)
@@ -421,11 +435,17 @@ export function useAppViewModel() {
         setActivePanel((prev) => (prev === panelName ? '' : panelName))
     }, [])
 
+    const usesLocalStt = voiceSttModel === LOCAL_STT_MODEL
+    const usesDeviceVoice = !aiEnabled || ttsModel === DEVICE_TTS_MODEL
+    const needsOpenAiKey = aiEnabled
+        && (!usesLocalStt || !usesDeviceVoice || feedbackProvider === OPENAI_PROVIDER)
+
     const handleStartSession = useCallback(async () => {
         try {
-            // AI off calls no provider, so the session starts without any API key.
-            if (aiEnabled && !(await getApiKey(OPENAI_PROVIDER))) {
-                setStatusMessage('질문 음성과 답변 인식에 OpenAI API Key가 필요합니다. 설정에서 저장하거나 AI를 꺼 주세요.')
+            // AI off calls no provider. With AI on, the OpenAI key is only needed for what actually
+            // runs on OpenAI: hosted STT, hosted TTS, or a GPT feedback model.
+            if (needsOpenAiKey && !(await getApiKey(OPENAI_PROVIDER))) {
+                setStatusMessage('선택한 설정에는 OpenAI API Key가 필요합니다. 키를 저장하거나, STT/TTS를 무료 로컬 모델로 바꾸고 Claude 피드백 모델을 선택해 주세요.')
                 setActivePanel('model')
                 return
             }
@@ -440,7 +460,7 @@ export function useAppViewModel() {
         } catch (error) {
             setStatusMessage(error?.message || '세션 시작에 실패했습니다.')
         }
-    }, [aiEnabled, feedbackProvider, updateMode, startSession])
+    }, [aiEnabled, feedbackProvider, needsOpenAiKey, updateMode, startSession])
 
     const handleStopSession = useCallback(async () => {
         await stopSession({forced: true, reason: 'user_stop', statusMessage: '세션을 종료했습니다.'})
@@ -472,7 +492,7 @@ export function useAppViewModel() {
         audioInputCount: audioDeviceStatus.inputCount,
         voiceSttModel: aiEnabled ? voiceSttModel : '꺼짐',
         feedbackModel: aiEnabled ? feedbackModel : '꺼짐',
-        ttsModel: aiEnabled ? ttsModel : '꺼짐'
+        ttsModel: aiEnabled ? ttsModel : DEVICE_TTS_MODEL
     }
 
     const rulebookProps = {
@@ -560,6 +580,7 @@ export function useAppViewModel() {
         setAiEnabled,
         autoReplayEnabled,
         setAutoReplayEnabled,
+        needsOpenAiKey,
         sessionActive,
         voiceSttModelOptions: modelMeta.voiceSttModels.length > 0
             ? modelMeta.voiceSttModels

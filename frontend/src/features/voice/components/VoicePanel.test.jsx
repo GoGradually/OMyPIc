@@ -58,7 +58,7 @@ describe('VoicePanel', () => {
         expect(onToggleAi).toHaveBeenCalledWith(false)
     })
 
-    it('shows reading and replay steps and needs no API key when AI is off', () => {
+    it('ends with answer replay and needs no API key when AI is off', () => {
         const onToggleAutoReplay = vi.fn()
         render(<VoicePanel {...buildProps({
             stageAiEnabled: false,
@@ -67,7 +67,7 @@ describe('VoicePanel', () => {
         })} />)
 
         expect(screen.queryByText('피드백')).toBeNull()
-        expect(screen.getByText('질문 읽기')).toBeTruthy()
+        expect(screen.getByText('질문 듣기')).toBeTruthy()
         expect(screen.getByText('내 응답 다시듣기')).toBeTruthy()
         expect(screen.getByText(/API Key 없이 진행합니다/)).toBeTruthy()
         fireEvent.click(screen.getByRole('checkbox', {name: '답변 후 내 응답 자동 재생'}))

@@ -114,7 +114,7 @@ class VoiceSessionControllerTest {
         mockMvc.perform(post("/api/voice/sessions/voice-off/answers")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"sequence":4}
+                                {"sequence":4,"text":"my answer"}
                                 """))
                 .andExpect(status().isNoContent());
 
@@ -122,6 +122,7 @@ class VoiceSessionControllerTest {
         verify(voiceSessionUseCase).completeAnswer(captor.capture());
         assertEquals("voice-off", captor.getValue().getVoiceSessionId());
         assertEquals(4L, captor.getValue().getSequence());
+        assertEquals("my answer", captor.getValue().getText());
     }
 
     @Test

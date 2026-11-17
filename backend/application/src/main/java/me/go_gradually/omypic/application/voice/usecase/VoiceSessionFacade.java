@@ -15,6 +15,7 @@ import me.go_gradually.omypic.application.voice.model.VoiceAudioChunkCommand;
 import me.go_gradually.omypic.application.voice.model.VoiceEventSink;
 import me.go_gradually.omypic.application.voice.model.VoiceSessionOpenCommand;
 import me.go_gradually.omypic.application.voice.model.VoiceSessionStopCommand;
+import me.go_gradually.omypic.application.voice.policy.VoiceModelCatalog;
 import me.go_gradually.omypic.application.voice.policy.VoicePolicy;
 import me.go_gradually.omypic.application.voice.port.TtsGateway;
 import me.go_gradually.omypic.domain.feedback.CorrectionDetail;
@@ -155,22 +156,18 @@ final class VoiceSessionFacade {
             // AI off: no provider is called, so neither an API key nor a model is needed.
             return;
         }
-        if (isBlank(command.getApiKey())) {
+        FeedbackModelPolicy.validateOrThrow(blankToNull(command.getFeedbackProvider()), command.getFeedbackModel());
+        RuntimeSettings settings = RuntimeSettings.resolve(command, voicePolicy);
+        if (settings.needsOpenAiKey() && isBlank(command.getApiKey())) {
             throw new IllegalArgumentException("sessionId and apiKey are required");
         }
-        FeedbackModelPolicy.validateOrThrow(blankToNull(command.getFeedbackProvider()), command.getFeedbackModel());
-        if (usesSeparateFeedbackKey(command) && isBlank(command.getFeedbackApiKey())) {
+        if (settings.usesAnthropicFeedback() && isBlank(command.getFeedbackApiKey())) {
             throw new IllegalArgumentException("Anthropic API key is required for Claude feedback models");
         }
     }
 
     private boolean isAiEnabled(VoiceSessionOpenCommand command) {
         return command.getAiEnabled() == null || command.getAiEnabled();
-    }
-
-    private boolean usesSeparateFeedbackKey(VoiceSessionOpenCommand command) {
-        RuntimeSettings settings = RuntimeSettings.resolve(command, voicePolicy);
-        return FeedbackModelPolicy.ANTHROPIC_PROVIDER.equals(settings.feedbackProvider());
     }
 
     private RuntimeContext createRuntimeContext(VoiceSessionOpenCommand command) {
@@ -186,10 +183,7 @@ final class VoiceSessionFacade {
     }
 
     private String resolveFeedbackApiKey(VoiceSessionOpenCommand command, RuntimeSettings settings) {
-        if (FeedbackModelPolicy.ANTHROPIC_PROVIDER.equals(settings.feedbackProvider())) {
-            return command.getFeedbackApiKey();
-        }
-        return command.getApiKey();
+        return settings.usesAnthropicFeedback() ? command.getFeedbackApiKey() : command.getApiKey();
     }
 
     private String blankToNull(String value) {
@@ -230,8 +224,9 @@ final class VoiceSessionFacade {
         purgeStoppedContexts();
         validateAudioCommand(command);
         RuntimeContext context = requireContext(command.getVoiceSessionId());
-        if (context.isInactive() || !context.settings.aiEnabled()) {
-            // AI off sessions never transcribe; answers end with completeAnswer instead.
+        if (context.isInactive() || !context.settings.serverStt()) {
+            // Only sessions that transcribe on the server take audio; the others end answers
+            // with completeAnswer.
             return;
         }
         if (!context.acceptChunkSequence(command.getSequence())) {
@@ -247,8 +242,9 @@ final class VoiceSessionFacade {
     }
 
     /**
-     * AI off: the client reports that the learner finished answering. No audio is uploaded
-     * and nothing is transcribed; the session just moves to the next question.
+     * The client reports that the learner finished answering, without uploading audio.
+     * AI off: nothing is transcribed and the session just moves to the next question.
+     * On-device speech recognition: the transcript in the command goes through the normal turn.
      */
     public void completeAnswer(VoiceAnswerCommand command) {
         purgeStoppedContexts();
@@ -256,13 +252,41 @@ final class VoiceSessionFacade {
             throw new IllegalArgumentException("voiceSessionId is required");
         }
         RuntimeContext context = requireContext(command.getVoiceSessionId());
-        if (context.settings.aiEnabled()) {
-            throw new IllegalArgumentException("Answer signals are only accepted while AI is off");
+        if (context.settings.serverStt()) {
+            throw new IllegalArgumentException("This session transcribes uploaded audio; answer signals are not accepted");
         }
         if (context.isInactive() || !context.acceptChunkSequence(command.getSequence())) {
             return;
         }
-        advanceAfterAnswer(context);
+        if (!context.settings.aiEnabled()) {
+            advanceAfterAnswer(context);
+            return;
+        }
+        context.offerTranscript(command.getText());
+        flushTranscriptTurn(context);
+    }
+
+    private void flushTranscriptTurn(RuntimeContext context) {
+        if (context.isInactive() || !context.startTurnProcessing()) {
+            return;
+        }
+        TranscriptTurn turn = context.pollTranscript();
+        if (turn == null || turn.question() == null) {
+            completeTurnProcessing(context);
+            return;
+        }
+        asyncExecutor.execute(() -> processTranscriptTurn(context, turn));
+    }
+
+    private void processTranscriptTurn(RuntimeContext context, TranscriptTurn turn) {
+        Instant startedAt = Instant.now();
+        try {
+            processTranscript(context, turn.question(), turn.text(), turn.turnId(), startedAt);
+        } catch (Exception e) {
+            context.emit("session.error", errorPayload(context.sessionId, turn.turnId(), defaultMessage(e.getMessage())));
+        } finally {
+            completeTurnProcessing(context);
+        }
     }
 
     private void advanceAfterAnswer(RuntimeContext context) {
@@ -406,11 +430,19 @@ final class VoiceSessionFacade {
 
     private void processTurnPipeline(RuntimeContext context, AudioSnapshot snapshot, long turnId, Instant startedAt) {
         String transcript = transcribe(snapshot, context);
+        processTranscript(context, snapshot.question(), transcript, turnId, startedAt);
+    }
+
+    private void processTranscript(RuntimeContext context,
+                                   QuestionSnapshot question,
+                                   String transcript,
+                                   long turnId,
+                                   Instant startedAt) {
         if (emitEmptyTranscriptIfNeeded(context, turnId, transcript)) {
             return;
         }
         emitFinalTranscript(context, turnId, transcript);
-        processTurnFlow(context, snapshot.question(), transcript, turnId);
+        processTurnFlow(context, question, transcript, turnId);
         metrics.recordVoiceTurnLatency(Duration.between(startedAt, Instant.now()));
     }
 
@@ -481,13 +513,16 @@ final class VoiceSessionFacade {
     }
 
     /**
-     * AI off: no STT, TTS or LLM call is made. The next question is emitted as text only
-     * and the client presents it.
+     * AI off: no STT, synthesis API or LLM call is made. The next question goes out as text
+     * and the client reads it aloud with the device voice.
      */
     private void advanceWithoutFeedback(RuntimeContext context, ModeType mode, long turnId) {
         NextQuestion nextQuestion = questionUseCase.nextQuestion(context.sessionId);
         boolean exhausted = isQuestionExhausted(nextQuestion);
-        emitQuestionPromptAndTrack(context, mode, nextQuestion, exhausted, turnId);
+        long nextQuestionTurnId = emitQuestionPromptAndTrack(context, mode, nextQuestion, exhausted, turnId);
+        if (nextQuestionTurnId > 0) {
+            emitSpeech(context, nextQuestionTurnId, "question", nextQuestion.getText());
+        }
         SessionFlowPolicy.SessionAction nextAction = SessionFlowPolicy.decideAfterQuestionSelection(exhausted);
         if (nextAction.type() == SessionFlowPolicy.NextActionType.AUTO_STOP) {
             stopInternal(context, false, nextAction.reason().code());
@@ -914,15 +949,34 @@ final class VoiceSessionFacade {
     }
 
     private void emitSpeech(RuntimeContext context, long turnId, String role, String text) {
-        if (context.isInactive() || isBlank(text) || !context.settings.aiEnabled()) {
+        if (context.isInactive() || isBlank(text)) {
             return;
         }
         String phase = resolveSpeechPhase(role);
+        if (!context.settings.serverTts()) {
+            emitSpeechText(context, turnId, phase, text);
+            return;
+        }
         try {
             emitSpeechAudio(context, turnId, phase, text);
         } catch (Exception e) {
             emitSpeechError(context, turnId, e);
         }
+    }
+
+    /**
+     * Device voice (and every AI-off session): the client speaks this text with the built-in
+     * voice of the device, so no synthesis API is called.
+     */
+    private void emitSpeechText(RuntimeContext context, long turnId, String phase, String text) {
+        context.emit("tts.text", Map.of(
+                "sessionId", context.sessionId,
+                "turnId", turnId,
+                "role", phase,
+                "phase", phase,
+                "sequence", context.nextTtsSequence(),
+                "text", text
+        ));
     }
 
     private String resolveSpeechPhase(String role) {
@@ -1082,6 +1136,8 @@ final class VoiceSessionFacade {
         context.finishTurnProcessing();
         if (context.hasBufferedAudio()) {
             flushTurn(context);
+        } else if (context.hasPendingTranscript()) {
+            flushTranscriptTurn(context);
         }
     }
 
@@ -1124,6 +1180,24 @@ final class VoiceSessionFacade {
                     firstNonBlank(command.getTtsModel(), policy.voiceTtsModel()),
                     firstNonBlank(command.getTtsVoice(), policy.voiceTtsVoice())
             );
+        }
+
+        /** The server calls the speech-to-text API only for AI-on sessions with a hosted STT model. */
+        private boolean serverStt() {
+            return aiEnabled && !VoiceModelCatalog.isLocalStt(sttModel);
+        }
+
+        /** The server calls the speech synthesis API only for AI-on sessions with a hosted TTS model. */
+        private boolean serverTts() {
+            return aiEnabled && !VoiceModelCatalog.isDeviceTts(ttsModel);
+        }
+
+        private boolean usesAnthropicFeedback() {
+            return aiEnabled && FeedbackModelPolicy.ANTHROPIC_PROVIDER.equals(feedbackProvider);
+        }
+
+        private boolean needsOpenAiKey() {
+            return serverStt() || serverTts() || (aiEnabled && !usesAnthropicFeedback());
         }
 
         private static String defaultFeedbackModel(String provider, String configuredModel) {
@@ -1177,6 +1251,9 @@ final class VoiceSessionFacade {
                                   String feedbackLanguage) {
     }
 
+    private record TranscriptTurn(String text, long turnId, QuestionSnapshot question) {
+    }
+
     private record VoiceEventRecord(long eventId, String event, Object payload) {
     }
 
@@ -1213,6 +1290,7 @@ final class VoiceSessionFacade {
         private final Set<VoiceEventSink> sinks = ConcurrentHashMap.newKeySet();
         private final Deque<TurnInput> continuousTurns = new ConcurrentLinkedDeque<>();
         private final Deque<VoiceEventRecord> replayEvents = new ConcurrentLinkedDeque<>();
+        private final Deque<TranscriptTurn> pendingTranscripts = new ConcurrentLinkedDeque<>();
         private final LinkedHashMap<String, FeedbackUseCase.PrefetchedTurnPrompt> prefetchByQuestionId = new LinkedHashMap<>();
         private final Object eventLock = new Object();
         private final AtomicBoolean initialized = new AtomicBoolean(false);
@@ -1394,6 +1472,24 @@ final class VoiceSessionFacade {
             synchronized (audioLock) {
                 return pcmBuffer.size() > 0;
             }
+        }
+
+        /**
+         * Pins the transcript to the question that was current when it arrived, because the next
+         * question may already be set by the time the turn is processed.
+         */
+        private void offerTranscript(String text) {
+            synchronized (audioLock) {
+                pendingTranscripts.add(new TranscriptTurn(text == null ? "" : text.trim(), currentTurnId, snapshotQuestion()));
+            }
+        }
+
+        private TranscriptTurn pollTranscript() {
+            return pendingTranscripts.pollFirst();
+        }
+
+        private boolean hasPendingTranscript() {
+            return !pendingTranscripts.isEmpty();
         }
 
         private long nextTurnId() {

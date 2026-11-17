@@ -500,7 +500,13 @@ class VoiceSessionUseCaseTest {
 
         int readyIndex = firstIndex(events, event -> "session.ready".equals(event.type()));
         assertEquals(false, events.get(readyIndex).payload().get("aiEnabled"));
-        assertTrue(firstIndex(events, event -> "question.prompt".equals(event.type())) > readyIndex);
+        int firstPromptIndex = firstIndex(events, event -> "question.prompt".equals(event.type()));
+        int firstSpeechIndex = firstIndex(events, event -> "tts.text".equals(event.type()));
+        assertTrue(firstPromptIndex > readyIndex);
+        // The question is read aloud by the device voice: the server sends text, not audio.
+        assertTrue(firstSpeechIndex > firstPromptIndex);
+        assertEquals("question", events.get(firstSpeechIndex).payload().get("role"));
+        assertEquals("question-1", events.get(firstSpeechIndex).payload().get("text"));
 
         events.clear();
         useCase.completeAnswer(answer(voiceSessionId, 1L));
@@ -510,6 +516,9 @@ class VoiceSessionUseCaseTest {
         assertTrue(capturedIndex >= 0);
         assertEquals(1L, ((Number) events.get(capturedIndex).payload().get("turnId")).longValue());
         assertTrue(questionPromptIndex > capturedIndex);
+        int nextSpeechIndex = firstIndex(events, event -> "tts.text".equals(event.type()));
+        assertTrue(nextSpeechIndex > questionPromptIndex);
+        assertEquals("question-2", events.get(nextSpeechIndex).payload().get("text"));
         assertEquals(-1, firstIndex(events, event -> "stt.final".equals(event.type())));
         assertEquals(-1, firstIndex(events, event -> "tts.audio".equals(event.type())));
         assertEquals(-1, firstIndex(events, event -> "feedback.final".equals(event.type())));
@@ -582,7 +591,129 @@ class VoiceSessionUseCaseTest {
                 () -> useCase.completeAnswer(answer(voiceSessionId, 1L))
         );
 
-        assertEquals("Answer signals are only accepted while AI is off", error.getMessage());
+        assertEquals(
+                "This session transcribes uploaded audio; answer signals are not accepted",
+                error.getMessage()
+        );
+    }
+
+    @Test
+    void deviceVoice_sendsSpeechAsTextAndNeverCallsTheSynthesisApi() throws Exception {
+        SessionState state = new SessionState(SessionId.of("s-device"));
+        state.applyModeUpdate(ModeType.IMMEDIATE, null);
+        when(sessionUseCase.getOrCreate("s-device")).thenReturn(state);
+        when(questionUseCase.nextQuestion("s-device")).thenReturn(
+                question("q-1", "question-1", "g-1", "travel"),
+                question("q-2", "question-2", "g-2", "hobby")
+        );
+        VoiceSessionOpenCommand command = openCommand("s-device");
+        command.setTtsModel("device-voice");
+
+        String voiceSessionId = useCase.open(command);
+        List<EventRecord> events = new ArrayList<>();
+        useCase.registerSink(voiceSessionId, capture(events));
+        useCase.appendAudio(audioChunk(voiceSessionId));
+
+        List<String> spokenRoles = events.stream()
+                .filter(event -> "tts.text".equals(event.type()))
+                .map(event -> String.valueOf(event.payload().get("role")))
+                .toList();
+        assertEquals(List.of("question", "feedback", "question"), spokenRoles);
+        assertEquals(-1, firstIndex(events, event -> "tts.audio".equals(event.type())));
+        verify(ttsGateway, never()).synthesize(any(), any(), any(), any());
+        verify(sttUseCase).transcribe(any(SttCommand.class));
+    }
+
+    @Test
+    void localStt_takesTheTranscriptFromTheClientAndNeverCallsTheSttApi() throws Exception {
+        SessionState state = new SessionState(SessionId.of("s-local"));
+        state.applyModeUpdate(ModeType.IMMEDIATE, null);
+        when(sessionUseCase.getOrCreate("s-local")).thenReturn(state);
+        when(questionUseCase.nextQuestion("s-local")).thenReturn(
+                question("q-1", "question-1", "g-1", "travel"),
+                question("q-2", "question-2", "g-2", "hobby")
+        );
+        VoiceSessionOpenCommand command = openCommand("s-local");
+        command.setSttModel("local-whisper");
+
+        String voiceSessionId = useCase.open(command);
+        List<EventRecord> events = new ArrayList<>();
+        useCase.registerSink(voiceSessionId, capture(events));
+        events.clear();
+
+        useCase.appendAudio(audioChunk(voiceSessionId, 9L));
+        assertTrue(events.isEmpty());
+
+        VoiceAnswerCommand answer = answer(voiceSessionId, 1L);
+        answer.setText("  I went to the park yesterday.  ");
+        useCase.completeAnswer(answer);
+
+        int sttIndex = firstIndex(events, event -> "stt.final".equals(event.type()));
+        int feedbackIndex = firstIndex(events, event -> "feedback.final".equals(event.type()));
+        assertEquals("I went to the park yesterday.", events.get(sttIndex).payload().get("text"));
+        assertTrue(feedbackIndex > sttIndex);
+        verify(sttUseCase, never()).transcribe(any(SttCommand.class));
+        verify(feedbackUseCase).generateFeedbackForTurn(
+                anyString(),
+                any(FeedbackCommand.class),
+                org.mockito.ArgumentMatchers.eq("question-1"),
+                any(),
+                org.mockito.ArgumentMatchers.eq("I went to the park yesterday."),
+                anyInt()
+        );
+    }
+
+    @Test
+    void localStt_reportsAnEmptyTranscriptAsSkipped() throws Exception {
+        SessionState state = new SessionState(SessionId.of("s-local-empty"));
+        when(sessionUseCase.getOrCreate("s-local-empty")).thenReturn(state);
+        when(questionUseCase.nextQuestion("s-local-empty"))
+                .thenReturn(question("q-1", "question-1", "g-1", "travel"));
+        VoiceSessionOpenCommand command = openCommand("s-local-empty");
+        command.setSttModel("local-whisper");
+
+        String voiceSessionId = useCase.open(command);
+        List<EventRecord> events = new ArrayList<>();
+        useCase.registerSink(voiceSessionId, capture(events));
+        events.clear();
+        useCase.completeAnswer(answer(voiceSessionId, 1L));
+
+        assertTrue(firstIndex(events, event -> "stt.skipped".equals(event.type())) >= 0);
+        assertEquals(-1, firstIndex(events, event -> "feedback.final".equals(event.type())));
+    }
+
+    @Test
+    void claudeWithLocalSpeech_opensWithoutAnOpenAiKey() throws Exception {
+        SessionState state = new SessionState(SessionId.of("s-claude-only"));
+        state.applyModeUpdate(ModeType.IMMEDIATE, null);
+        when(sessionUseCase.getOrCreate("s-claude-only")).thenReturn(state);
+        when(questionUseCase.nextQuestion("s-claude-only")).thenReturn(
+                question("q-1", "question-1", "g-1", "travel"),
+                question("q-2", "question-2", "g-2", "hobby")
+        );
+        VoiceSessionOpenCommand command = new VoiceSessionOpenCommand();
+        command.setSessionId("s-claude-only");
+        command.setFeedbackModel("claude-opus-5-5");
+        command.setFeedbackApiKey("sk-ant-key");
+        command.setSttModel("local-whisper");
+        command.setTtsModel("device-voice");
+
+        String voiceSessionId = useCase.open(command);
+        useCase.registerSink(voiceSessionId, capture(new ArrayList<>()));
+        VoiceAnswerCommand answer = answer(voiceSessionId, 1L);
+        answer.setText("answer text");
+        useCase.completeAnswer(answer);
+
+        verify(feedbackUseCase).generateFeedbackForTurn(
+                org.mockito.ArgumentMatchers.eq("sk-ant-key"),
+                any(FeedbackCommand.class),
+                anyString(),
+                any(),
+                org.mockito.ArgumentMatchers.eq("answer text"),
+                anyInt()
+        );
+        verify(sttUseCase, never()).transcribe(any(SttCommand.class));
+        verify(ttsGateway, never()).synthesize(any(), any(), any(), any());
     }
 
     @Test

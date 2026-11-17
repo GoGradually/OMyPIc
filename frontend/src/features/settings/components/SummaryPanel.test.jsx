@@ -46,5 +46,6 @@ describe('SummaryPanel', () => {
 
         expect(screen.getByText('AI 사용').nextElementSibling.textContent).toBe('꺼짐')
         expect(screen.getByText('claude-opus-5-5')).toBeTruthy()
+        expect(screen.getByText('TTS 모델').nextElementSibling.textContent).toBe('device-voice')
     })
 })

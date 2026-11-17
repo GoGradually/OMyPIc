@@ -96,6 +96,7 @@ public class VoiceSessionController {
         VoiceAnswerCommand command = new VoiceAnswerCommand();
         command.setVoiceSessionId(voiceSessionId);
         command.setSequence(request == null ? null : request.getSequence());
+        command.setText(request == null ? null : request.getText());
         voiceSessionUseCase.completeAnswer(command);
     }
 

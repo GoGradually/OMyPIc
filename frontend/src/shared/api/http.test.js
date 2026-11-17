@@ -62,10 +62,12 @@ describe('http api', () => {
         global.fetch = vi.fn(async () => ({ok: true, json: async () => ({}), text: async () => ''}))
 
         await sendVoiceAnswer('voice-1', {sequence: 3})
+        await sendVoiceAnswer('voice-1', {sequence: 4, text: 'transcribed on this device'})
 
         const [url, options] = global.fetch.mock.calls[0]
         expect(url).toBe('http://backend/api/voice/sessions/voice-1/answers')
         expect(JSON.parse(options.body)).toEqual({sequence: 3})
+        expect(JSON.parse(global.fetch.mock.calls[1][1].body)).toEqual({sequence: 4, text: 'transcribed on this device'})
     })
 
     it('verifies a key against its own provider', async () => {
