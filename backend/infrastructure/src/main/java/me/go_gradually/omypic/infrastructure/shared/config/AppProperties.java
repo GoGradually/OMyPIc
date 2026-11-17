@@ -434,6 +434,15 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
 
     public static class Integrations {
         private OpenAi openai = new OpenAi();
+        private Anthropic anthropic = new Anthropic();
+
+        public Anthropic getAnthropic() {
+            return anthropic;
+        }
+
+        public void setAnthropic(Anthropic anthropic) {
+            this.anthropic = anthropic;
+        }
 
         public OpenAi getOpenai() {
             return openai;
@@ -441,6 +450,54 @@ public class AppProperties implements DataDirProvider, SttPolicy, RagPolicy, Fee
 
         public void setOpenai(OpenAi openai) {
             this.openai = openai;
+        }
+    }
+
+    public static class Anthropic {
+        private String baseUrl = "https://api.anthropic.com";
+        private long maxTokens = 16000L;
+        private String effort = "low";
+        private int timeoutSeconds = 120;
+        private int maxRetries = 2;
+
+        public String getBaseUrl() {
+            return baseUrl;
+        }
+
+        public void setBaseUrl(String baseUrl) {
+            this.baseUrl = baseUrl;
+        }
+
+        public long getMaxTokens() {
+            return maxTokens;
+        }
+
+        public void setMaxTokens(long maxTokens) {
+            this.maxTokens = maxTokens;
+        }
+
+        public String getEffort() {
+            return effort;
+        }
+
+        public void setEffort(String effort) {
+            this.effort = effort;
+        }
+
+        public int getTimeoutSeconds() {
+            return timeoutSeconds;
+        }
+
+        public void setTimeoutSeconds(int timeoutSeconds) {
+            this.timeoutSeconds = timeoutSeconds;
+        }
+
+        public int getMaxRetries() {
+            return maxRetries;
+        }
+
+        public void setMaxRetries(int maxRetries) {
+            this.maxRetries = maxRetries;
         }
     }
 

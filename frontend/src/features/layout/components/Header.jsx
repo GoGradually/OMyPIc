@@ -11,24 +11,24 @@ const QUICK_PANELS = [
 
 export function Header({activePanel, onTogglePanel}) {
     return (
-        <header className="app-header app__header">
-            <div className="brand-block app__brand">
-                <p className="eyebrow app__eyebrow">AI Speaking Coach</p>
+        <header className="app-header">
+            <div className="brand">
                 <h1>OMyPIc</h1>
-                <p className="header-subtitle app__subtitle">말하기 연습, 질문 관리, 피드백 확인을 한 화면에서 진행하세요.</p>
+                <p>오픽 말하기 연습</p>
             </div>
 
-            <div className="quick-actions app__quick-actions">
+            <nav className="app-nav" aria-label="관리 메뉴">
                 {QUICK_PANELS.map((panel) => (
                     <button
                         key={panel.key}
-                        className={`quick-button app__quick-button ${activePanel === panel.key ? 'is-active' : ''}`}
+                        className={`app-nav__item ${activePanel === panel.key ? 'is-active' : ''}`}
+                        aria-pressed={activePanel === panel.key}
                         onClick={() => onTogglePanel(panel.key)}
                     >
                         {panel.label}
                     </button>
                 ))}
-            </div>
+            </nav>
         </header>
     )
 }

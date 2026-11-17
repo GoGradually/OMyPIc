@@ -40,9 +40,9 @@ export function RulebookOverlay({rulebooks, uploadRulebook, toggleRulebook, dele
             <ul className="item-list">
                 {rulebooks.map((book) => (
                     <li key={book.id}>
-                        <span>
+                        <span className="item-title">
                             {book.filename}
-                            <small> · {book.scope === 'QUESTION' ? `질문별(${book.questionGroup || '-'})` : '메인'}</small>
+                            <small>{book.scope === 'QUESTION' ? `질문별(${book.questionGroup || '-'})` : '메인'}</small>
                         </span>
                         <div className="item-actions">
                             <button

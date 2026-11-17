@@ -53,7 +53,6 @@ import java.util.logging.Logger;
 
 final class VoiceSessionFacade {
     private static final Logger log = Logger.getLogger(VoiceSessionFacade.class.getName());
-    private static final String FEEDBACK_PROVIDER = "openai";
     private static final int DEFAULT_SAMPLE_RATE = 16000;
     private static final int MAX_RULEBOOK_DOCUMENTS_PER_TURN = 2;
     private static final int DEFAULT_EVENT_REPLAY_BUFFER_LIMIT = 256;
@@ -151,17 +150,45 @@ final class VoiceSessionFacade {
         if (command == null || isBlank(command.getSessionId()) || isBlank(command.getApiKey())) {
             throw new IllegalArgumentException("sessionId and apiKey are required");
         }
-        FeedbackModelPolicy.validateOrThrow(command.getFeedbackModel());
+        if (!isFeedbackEnabled(command)) {
+            return;
+        }
+        FeedbackModelPolicy.validateOrThrow(blankToNull(command.getFeedbackProvider()), command.getFeedbackModel());
+        if (usesSeparateFeedbackKey(command) && isBlank(command.getFeedbackApiKey())) {
+            throw new IllegalArgumentException("Anthropic API key is required for Claude feedback models");
+        }
+    }
+
+    private boolean isFeedbackEnabled(VoiceSessionOpenCommand command) {
+        return command.getFeedbackEnabled() == null || command.getFeedbackEnabled();
+    }
+
+    private boolean usesSeparateFeedbackKey(VoiceSessionOpenCommand command) {
+        RuntimeSettings settings = RuntimeSettings.resolve(command, voicePolicy);
+        return FeedbackModelPolicy.ANTHROPIC_PROVIDER.equals(settings.feedbackProvider());
     }
 
     private RuntimeContext createRuntimeContext(VoiceSessionOpenCommand command) {
+        RuntimeSettings settings = RuntimeSettings.resolve(command, voicePolicy);
         return new RuntimeContext(
                 UUID.randomUUID().toString(),
                 command.getSessionId(),
                 command.getApiKey(),
-                RuntimeSettings.resolve(command, voicePolicy),
+                resolveFeedbackApiKey(command, settings),
+                settings,
                 eventReplayBufferLimit
         );
+    }
+
+    private String resolveFeedbackApiKey(VoiceSessionOpenCommand command, RuntimeSettings settings) {
+        if (FeedbackModelPolicy.ANTHROPIC_PROVIDER.equals(settings.feedbackProvider())) {
+            return command.getFeedbackApiKey();
+        }
+        return command.getApiKey();
+    }
+
+    private String blankToNull(String value) {
+        return isBlank(value) ? null : value;
     }
 
     public void registerSink(String voiceSessionId, VoiceEventSink sink) {
@@ -255,7 +282,9 @@ final class VoiceSessionFacade {
             return;
         }
         try {
-            bootstrapFeedbackContext(context);
+            if (context.settings.feedbackEnabled()) {
+                bootstrapFeedbackContext(context);
+            }
             emitSessionReady(context);
             sendQuestionPrompt(context);
         } catch (Exception e) {
@@ -267,14 +296,16 @@ final class VoiceSessionFacade {
     private void emitSessionReady(RuntimeContext context) {
         context.emit("session.ready", Map.of(
                 "sessionId", context.sessionId,
-                "voiceSessionId", context.voiceSessionId
+                "voiceSessionId", context.voiceSessionId,
+                "feedbackEnabled", context.settings.feedbackEnabled(),
+                "feedbackProvider", context.settings.feedbackProvider()
         ));
     }
 
     private void bootstrapFeedbackContext(RuntimeContext context) throws Exception {
         FeedbackCommand command = feedbackCommand(context, "");
         feedbackUseCase.bootstrapConversation(
-                context.apiKey,
+                context.feedbackApiKey,
                 command,
                 context.settings.feedbackLanguage()
         );
@@ -368,6 +399,10 @@ final class VoiceSessionFacade {
                                  long turnId) {
         SessionState sessionState = sessionUseCase.getOrCreate(context.sessionId);
         ModeType mode = sessionState.getMode();
+        if (!context.settings.feedbackEnabled()) {
+            advanceWithoutFeedback(context, mode, turnId);
+            return;
+        }
         sessionState.setFeedbackLanguage(FeedbackLanguage.of(context.settings.feedbackLanguage()));
         TurnInput turnInput = toTurnInput(currentQuestion, answerText);
 
@@ -402,6 +437,23 @@ final class VoiceSessionFacade {
             }
         }
 
+        if (nextAction.type() == SessionFlowPolicy.NextActionType.AUTO_STOP) {
+            stopInternal(context, false, nextAction.reason().code());
+        }
+    }
+
+    /**
+     * AI feedback OFF: no LLM call is made. The answer was already transcribed (stt.final),
+     * so the session moves straight to the next question.
+     */
+    private void advanceWithoutFeedback(RuntimeContext context, ModeType mode, long turnId) {
+        NextQuestion nextQuestion = questionUseCase.nextQuestion(context.sessionId);
+        boolean exhausted = isQuestionExhausted(nextQuestion);
+        long nextQuestionTurnId = emitQuestionPromptAndTrack(context, mode, nextQuestion, exhausted, turnId);
+        if (nextQuestionTurnId > 0) {
+            emitSpeech(context, nextQuestionTurnId, "question", nextQuestion.getText());
+        }
+        SessionFlowPolicy.SessionAction nextAction = SessionFlowPolicy.decideAfterQuestionSelection(exhausted);
         if (nextAction.type() == SessionFlowPolicy.NextActionType.AUTO_STOP) {
             stopInternal(context, false, nextAction.reason().code());
         }
@@ -540,14 +592,14 @@ final class VoiceSessionFacade {
         FeedbackUseCase.PrefetchedTurnPrompt prefetch = context.consumePrefetchedTurnPrompt(input.questionId());
         if (prefetch != null) {
             return feedbackUseCase.generateFeedbackForTurnWithPrefetch(
-                    context.apiKey,
+                    context.feedbackApiKey,
                     command,
                     input.answerText(),
                     prefetch
             );
         }
         return feedbackUseCase.generateFeedbackForTurn(
-                context.apiKey,
+                context.feedbackApiKey,
                 command,
                 input.questionText(),
                 input.questionGroup(),
@@ -557,7 +609,7 @@ final class VoiceSessionFacade {
     }
 
     private void scheduleTurnPrefetch(RuntimeContext context, NextQuestion question) {
-        if (context.isInactive() || question == null || question.isSkipped() || isBlank(question.getQuestionId())) {
+        if (!canPrefetch(context, question)) {
             return;
         }
         PrefetchTarget target = new PrefetchTarget(
@@ -567,6 +619,13 @@ final class VoiceSessionFacade {
                 context.settings.feedbackLanguage()
         );
         asyncExecutor.execute(() -> prefetchTurnPrompt(context, target));
+    }
+
+    private boolean canPrefetch(RuntimeContext context, NextQuestion question) {
+        if (!context.settings.feedbackEnabled() || context.isInactive()) {
+            return false;
+        }
+        return question != null && !question.isSkipped() && !isBlank(question.getQuestionId());
     }
 
     private void prefetchTurnPrompt(RuntimeContext context, PrefetchTarget target) {
@@ -596,7 +655,7 @@ final class VoiceSessionFacade {
         FeedbackCommand command = new FeedbackCommand();
         command.setSessionId(context.sessionId);
         command.setText(text);
-        command.setProvider(FEEDBACK_PROVIDER);
+        command.setProvider(context.settings.feedbackProvider());
         command.setModel(context.settings.feedbackModel());
         command.setFeedbackLanguage(context.settings.feedbackLanguage());
         return command;
@@ -1009,17 +1068,41 @@ final class VoiceSessionFacade {
 
     private record RuntimeSettings(String sttModel,
                                    String feedbackModel,
+                                   String feedbackProvider,
+                                   boolean feedbackEnabled,
                                    String feedbackLanguage,
                                    String ttsModel,
                                    String ttsVoice) {
         private static RuntimeSettings resolve(VoiceSessionOpenCommand command, VoicePolicy policy) {
+            String configuredModel = policy.voiceFeedbackModel();
+            String requestedModel = command.getFeedbackModel();
+            String feedbackProvider = resolveFeedbackProvider(
+                    command.getFeedbackProvider(), firstNonBlank(requestedModel, configuredModel));
+            String feedbackModel = firstNonBlank(
+                    requestedModel, defaultFeedbackModel(feedbackProvider, configuredModel));
             return new RuntimeSettings(
                     firstNonBlank(command.getSttModel(), policy.voiceSttModel()),
-                    firstNonBlank(command.getFeedbackModel(), policy.voiceFeedbackModel()),
+                    feedbackModel,
+                    feedbackProvider,
+                    command.getFeedbackEnabled() == null || command.getFeedbackEnabled(),
                     firstNonBlank(command.getFeedbackLanguage(), policy.voiceFeedbackLanguage()),
                     firstNonBlank(command.getTtsModel(), policy.voiceTtsModel()),
                     firstNonBlank(command.getTtsVoice(), policy.voiceTtsVoice())
             );
+        }
+
+        private static String defaultFeedbackModel(String provider, String configuredModel) {
+            if (provider.equals(FeedbackModelPolicy.providerOf(configuredModel))) {
+                return configuredModel;
+            }
+            return FeedbackModelPolicy.defaultModel(provider);
+        }
+
+        private static String resolveFeedbackProvider(String requestedProvider, String feedbackModel) {
+            if (requestedProvider == null || requestedProvider.isBlank()) {
+                return FeedbackModelPolicy.providerOf(feedbackModel);
+            }
+            return FeedbackModelPolicy.normalizeProvider(requestedProvider);
         }
     }
 
@@ -1089,6 +1172,7 @@ final class VoiceSessionFacade {
         private final String voiceSessionId;
         private final String sessionId;
         private final String apiKey;
+        private final String feedbackApiKey;
         private final RuntimeSettings settings;
         private final int eventReplayBufferLimit;
         private final Set<VoiceEventSink> sinks = ConcurrentHashMap.newKeySet();
@@ -1114,11 +1198,13 @@ final class VoiceSessionFacade {
         private RuntimeContext(String voiceSessionId,
                                String sessionId,
                                String apiKey,
+                               String feedbackApiKey,
                                RuntimeSettings settings,
                                int eventReplayBufferLimit) {
             this.voiceSessionId = voiceSessionId;
             this.sessionId = sessionId;
             this.apiKey = apiKey;
+            this.feedbackApiKey = feedbackApiKey;
             this.settings = settings;
             this.eventReplayBufferLimit = Math.max(1, eventReplayBufferLimit);
         }

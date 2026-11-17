@@ -1,4 +1,6 @@
-const OPENAI_PROVIDER = 'openai'
+export const OPENAI_PROVIDER = 'openai'
+export const ANTHROPIC_PROVIDER = 'anthropic'
+const FEEDBACK_API_KEY_HEADER = 'X-Feedback-API-Key'
 
 export async function getBackendUrl() {
     if (window.omypic && window.omypic.getBackendUrl) {
@@ -7,32 +9,45 @@ export async function getBackendUrl() {
     return 'http://localhost:4317'
 }
 
-export async function getApiKey() {
+export async function getApiKey(provider = OPENAI_PROVIDER) {
     if (window.omypic && window.omypic.getApiKey) {
-        return await window.omypic.getApiKey()
+        return await window.omypic.getApiKey(provider)
     }
     return ''
 }
 
-export async function setApiKey(key) {
+export async function setApiKey(key, provider = OPENAI_PROVIDER) {
     if (window.omypic && window.omypic.setApiKey) {
-        return await window.omypic.setApiKey(key)
+        return await window.omypic.setApiKey(key, provider)
     }
     return null
 }
 
-export async function verifyApiKey(apiKey, model) {
+export async function verifyApiKey(apiKey, model, provider = OPENAI_PROVIDER) {
     const baseUrl = await getBackendUrl()
     const response = await fetch(`${baseUrl}/api/keys/verify`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({provider: OPENAI_PROVIDER, apiKey, model})
+        body: JSON.stringify({provider, apiKey, model})
     })
     if (!response.ok) {
-        const text = await response.text()
-        throw new Error(text || 'API key verification failed')
+        throw new Error(await readErrorMessage(response, 'API key verification failed'))
     }
     return response.json()
+}
+
+// The backend answers errors as {"message": "..."}; show that sentence rather than raw JSON.
+async function readErrorMessage(response, fallback) {
+    const text = await response.text()
+    if (!text) {
+        return fallback
+    }
+    try {
+        const parsed = JSON.parse(text)
+        return typeof parsed?.message === 'string' && parsed.message ? parsed.message : text
+    } catch (_error) {
+        return text
+    }
 }
 
 export async function callApi(path, options = {}) {
@@ -47,8 +62,7 @@ export async function callApi(path, options = {}) {
         headers
     })
     if (!response.ok) {
-        const text = await response.text()
-        throw new Error(text || 'Request failed')
+        throw new Error(await readErrorMessage(response, 'Request failed'))
     }
     return response
 }
@@ -74,9 +88,18 @@ export async function importDataBundle(file) {
 }
 
 export async function openVoiceSession(payload) {
+    const headers = {'Content-Type': 'application/json'}
+    // STT/TTS always run on the OpenAI key (X-API-Key). A Claude feedback model needs its own key.
+    const needsFeedbackKey = payload?.feedbackEnabled !== false && payload?.feedbackProvider === ANTHROPIC_PROVIDER
+    if (needsFeedbackKey) {
+        const feedbackApiKey = await getApiKey(ANTHROPIC_PROVIDER)
+        if (feedbackApiKey) {
+            headers[FEEDBACK_API_KEY_HEADER] = feedbackApiKey
+        }
+    }
     const response = await callApi('/api/voice/sessions', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers,
         body: JSON.stringify(payload)
     })
     return response.json()

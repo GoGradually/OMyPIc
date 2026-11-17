@@ -69,3 +69,10 @@ omypic:
         response-preview-chars: ${OMYPIC_OPENAI_LOG_RESPONSE_PREVIEW_CHARS:1024}
         full-body: ${OMYPIC_OPENAI_LOG_FULL_BODY:false}
         log-success-at-fine: ${OMYPIC_OPENAI_LOG_SUCCESS_AT_FINE:true}
+    anthropic:
+      base-url: ${OMYPIC_ANTHROPIC_BASE_URL:https://api.anthropic.com}
+      max-tokens: ${OMYPIC_ANTHROPIC_MAX_TOKENS:16000}
+      # Voice turns wait on this call, so the default favors latency. Raise to medium/high for deeper feedback.
+      effort: ${OMYPIC_ANTHROPIC_EFFORT:low}
+      timeout-seconds: ${OMYPIC_ANTHROPIC_TIMEOUT_SECONDS:120}
+      max-retries: ${OMYPIC_ANTHROPIC_MAX_RETRIES:2}

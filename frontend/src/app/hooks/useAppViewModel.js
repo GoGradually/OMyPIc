@@ -1,13 +1,22 @@
 import {useCallback, useEffect, useState} from 'react'
 import {
+    ANTHROPIC_PROVIDER,
     exportDataBundle,
     getApiKey,
     getModelMeta,
     importDataBundle,
+    OPENAI_PROVIDER,
     setApiKey,
     verifyApiKey
 } from '../../shared/api/http.js'
-import {getModeSummary, PANEL_TITLES} from '../../shared/constants/models.js'
+import {
+    getFeedbackProvider,
+    getModelLabel,
+    getModeSummary,
+    getProviderLabel,
+    PANEL_TITLES
+} from '../../shared/constants/models.js'
+import {readPreference, writePreference} from '../../shared/utils/preferences.js'
 import {copyText} from '../../shared/utils/clipboard.js'
 import {getCurrentQuestionLabel} from '../../shared/utils/mode.js'
 import {useSessionId} from '../providers/session.js'
@@ -20,6 +29,7 @@ import {getAudioUiState} from '../../features/voice/utils/audioStatus.js'
 const EMPTY_MODEL_META = {
     feedbackModels: [],
     defaultFeedbackModel: '',
+    feedbackProviders: [],
     voiceSttModels: [],
     defaultVoiceSttModel: '',
     ttsModels: [],
@@ -42,6 +52,7 @@ function normalizeModelMeta(meta = {}) {
     return {
         feedbackModels,
         defaultFeedbackModel: typeof meta.defaultFeedbackModel === 'string' ? meta.defaultFeedbackModel : '',
+        feedbackProviders: normalizeFeedbackProviders(meta.feedbackProviders, feedbackModels),
         voiceSttModels,
         defaultVoiceSttModel: typeof meta.defaultVoiceSttModel === 'string' ? meta.defaultVoiceSttModel : '',
         ttsModels,
@@ -53,6 +64,24 @@ function normalizeModelMeta(meta = {}) {
             ? meta.defaultFeedbackLanguage
             : 'ko'
     }
+}
+
+// Older backends only send the flat feedbackModels list; treat it as a single OpenAI group.
+function normalizeFeedbackProviders(groups, feedbackModels) {
+    const normalized = (Array.isArray(groups) ? groups : [])
+        .filter((group) => group && typeof group.provider === 'string' && Array.isArray(group.models))
+        .map((group) => ({
+            provider: group.provider,
+            models: group.models.filter(Boolean),
+            defaultModel: typeof group.defaultModel === 'string' ? group.defaultModel : ''
+        }))
+        .filter((group) => group.models.length > 0)
+    if (normalized.length > 0) {
+        return normalized
+    }
+    return feedbackModels.length > 0
+        ? [{provider: OPENAI_PROVIDER, models: feedbackModels, defaultModel: feedbackModels[0]}]
+        : []
 }
 
 function resolveSelectedValue(currentValue, options, preferredDefault) {
@@ -100,12 +129,15 @@ function pickFileFromInput() {
 export function useAppViewModel() {
     const sessionId = useSessionId()
 
-    const [feedbackModel, setFeedbackModel] = useState('')
+    const [feedbackModel, setFeedbackModel] = useState(() => readPreference('feedback_model', ''))
+    const [aiFeedbackEnabled, setAiFeedbackEnabled] = useState(() => readPreference('ai_feedback', true) !== false)
+    const [autoReplayEnabled, setAutoReplayEnabled] = useState(() => readPreference('auto_replay', true) !== false)
     const [voiceSttModel, setVoiceSttModel] = useState('')
     const [ttsModel, setTtsModel] = useState('')
     const [modelMeta, setModelMeta] = useState(EMPTY_MODEL_META)
 
     const [apiKeyInput, setApiKeyInput] = useState('')
+    const [claudeKeyInput, setClaudeKeyInput] = useState('')
     const [statusMessage, setStatusMessage] = useState('')
     const [feedbackLang, setFeedbackLang] = useState('ko')
     const [voice, setVoice] = useState('')
@@ -180,6 +212,22 @@ export function useAppViewModel() {
         onStatus: setStatusMessage
     })
 
+    const feedbackProvider = getFeedbackProvider(feedbackModel, modelMeta.feedbackProviders)
+
+    useEffect(() => {
+        if (feedbackModel) {
+            writePreference('feedback_model', feedbackModel)
+        }
+    }, [feedbackModel])
+
+    useEffect(() => {
+        writePreference('ai_feedback', aiFeedbackEnabled)
+    }, [aiFeedbackEnabled])
+
+    useEffect(() => {
+        writePreference('auto_replay', autoReplayEnabled)
+    }, [autoReplayEnabled])
+
     const {
         sessionActive,
         voiceConnected,
@@ -195,10 +243,16 @@ export function useAppViewModel() {
         replayButtonLabel,
         replayButtonDisabled,
         replayButtonDisabledReason,
-        handleReplayAction
+        handleReplayAction,
+        replayPlaying,
+        sessionFeedbackEnabled,
+        awaitingReview
     } = useVoiceSession({
         sessionId,
         feedbackModel,
+        feedbackProvider,
+        feedbackEnabled: aiFeedbackEnabled,
+        autoReplay: autoReplayEnabled,
         voiceSttModel,
         ttsModel,
         feedbackLang,
@@ -219,7 +273,8 @@ export function useAppViewModel() {
     }, [refreshRulebooks, refreshQuestionGroups, refreshWrongNotes])
 
     useEffect(() => {
-        getApiKey().then((key) => setApiKeyInput(key || ''))
+        getApiKey(OPENAI_PROVIDER).then((key) => setApiKeyInput(key || ''))
+        getApiKey(ANTHROPIC_PROVIDER).then((key) => setClaudeKeyInput(key || ''))
         getModelMeta()
             .then((meta) => {
                 const normalized = normalizeModelMeta(meta)
@@ -256,19 +311,40 @@ export function useAppViewModel() {
         setStatusMessage('')
     }, [])
 
-    const handleSaveApiKey = useCallback(async () => {
-        await setApiKey(apiKeyInput)
-        try {
-            const result = await verifyApiKey(apiKeyInput, feedbackModel || modelMeta.defaultFeedbackModel)
-            if (result.valid) {
-                setStatusMessage('API Key 검증이 완료되었습니다.')
-            } else {
-                setStatusMessage(`API Key 검증 실패: ${result.message}`)
-            }
-        } catch (error) {
-            setStatusMessage(`API Key 검증 실패: ${error.message}`)
+    const defaultModelOf = useCallback((provider) => {
+        const group = modelMeta.feedbackProviders.find((item) => item.provider === provider)
+        return group?.defaultModel || group?.models?.[0] || ''
+    }, [modelMeta.feedbackProviders])
+
+    const saveAndVerifyKey = useCallback(async (provider, key) => {
+        const label = getProviderLabel(provider)
+        const trimmedKey = (key || '').trim()
+        await setApiKey(trimmedKey, provider)
+        if (!trimmedKey) {
+            return `${label} API Key를 비웠습니다.`
         }
-    }, [apiKeyInput, feedbackModel, modelMeta.defaultFeedbackModel])
+        // Verify against a model of the same provider: the selected one if it matches, else that provider's default.
+        const model = provider === feedbackProvider ? feedbackModel : defaultModelOf(provider)
+        try {
+            const result = await verifyApiKey(trimmedKey, model, provider)
+            return result.valid
+                ? `${label} API Key 검증 완료.`
+                : `${label} API Key 검증 실패: ${result.message}`
+        } catch (error) {
+            return `${label} API Key 검증 실패: ${error.message}`
+        }
+    }, [defaultModelOf, feedbackModel, feedbackProvider])
+
+    const handleSaveApiKey = useCallback(async () => {
+        const messages = [await saveAndVerifyKey(OPENAI_PROVIDER, apiKeyInput)]
+        const claudeKeyNeeded = feedbackProvider === ANTHROPIC_PROVIDER
+        if (claudeKeyInput.trim() || claudeKeyNeeded) {
+            messages.push(await saveAndVerifyKey(ANTHROPIC_PROVIDER, claudeKeyInput))
+        } else {
+            await setApiKey('', ANTHROPIC_PROVIDER)
+        }
+        setStatusMessage(messages.join(' '))
+    }, [apiKeyInput, claudeKeyInput, feedbackProvider, saveAndVerifyKey])
 
     const handleExportData = useCallback(async () => {
         try {
@@ -347,19 +423,33 @@ export function useAppViewModel() {
 
     const handleStartSession = useCallback(async () => {
         try {
+            if (!(await getApiKey(OPENAI_PROVIDER))) {
+                setStatusMessage('질문 음성과 답변 인식에 OpenAI API Key가 필요합니다. 설정에서 저장해 주세요.')
+                setActivePanel('model')
+                return
+            }
+            const needsClaudeKey = aiFeedbackEnabled && feedbackProvider === ANTHROPIC_PROVIDER
+            if (needsClaudeKey && !(await getApiKey(ANTHROPIC_PROVIDER))) {
+                setStatusMessage('Claude 모델로 피드백을 받으려면 설정에서 Claude API Key를 저장해 주세요.')
+                setActivePanel('model')
+                return
+            }
             await updateMode()
             await startSession()
         } catch (error) {
             setStatusMessage(error?.message || '세션 시작에 실패했습니다.')
         }
-    }, [updateMode, startSession])
+    }, [aiFeedbackEnabled, feedbackProvider, updateMode, startSession])
 
     const handleStopSession = useCallback(async () => {
         await stopSession({forced: true, reason: 'user_stop', statusMessage: '세션을 종료했습니다.'})
     }, [stopSession])
 
     const currentQuestionLabel = getCurrentQuestionLabel(currentQuestion)
-    const modeSummary = getModeSummary(mode, batchSize)
+    // With AI feedback off the learning mode's feedback timing does not apply.
+    const modeSummary = aiFeedbackEnabled
+        ? getModeSummary(mode, batchSize)
+        : '질문과 답변만 진행 (AI 피드백 꺼짐)'
     const {
         audioConnectionLabel,
         audioConnectionReady,
@@ -371,12 +461,16 @@ export function useAppViewModel() {
         recording: sessionActive
     })
 
+    // During a session the stage follows what that session was opened with, not the toggle.
+    const stageFeedbackEnabled = sessionActive ? sessionFeedbackEnabled : aiFeedbackEnabled
+    const feedbackSummary = aiFeedbackEnabled ? getModelLabel(feedbackModel) : '꺼짐'
+
     const statusDetails = {
         sessionIdPrefix: sessionId.slice(0, 8),
         audioPermissionLabel,
         audioInputCount: audioDeviceStatus.inputCount,
         voiceSttModel,
-        feedbackModel,
+        feedbackModel: aiFeedbackEnabled ? feedbackModel : '꺼짐',
         ttsModel
     }
 
@@ -457,6 +551,15 @@ export function useAppViewModel() {
         feedbackModelOptions: modelMeta.feedbackModels.length > 0
             ? modelMeta.feedbackModels
             : (feedbackModel ? [feedbackModel] : []),
+        feedbackProviderGroups: modelMeta.feedbackProviders,
+        feedbackProvider,
+        claudeKeyInput,
+        setClaudeKeyInput,
+        aiFeedbackEnabled,
+        setAiFeedbackEnabled,
+        autoReplayEnabled,
+        setAutoReplayEnabled,
+        sessionActive,
         voiceSttModelOptions: modelMeta.voiceSttModels.length > 0
             ? modelMeta.voiceSttModels
             : (voiceSttModel ? [voiceSttModel] : []),
@@ -511,7 +614,18 @@ export function useAppViewModel() {
             replayButtonLabel,
             replayButtonDisabled,
             replayButtonDisabledReason,
-            handleReplayAction
+            handleReplayAction,
+            replayPlaying,
+            awaitingReview,
+            currentQuestionLabel,
+            hasQuestion: Boolean(currentQuestion?.text),
+            feedbackEnabled: stageFeedbackEnabled,
+            aiFeedbackEnabled,
+            onToggleAiFeedback: setAiFeedbackEnabled,
+            autoReplayEnabled,
+            onToggleAutoReplay: setAutoReplayEnabled,
+            feedbackSummary,
+            continuousMode: mode === 'CONTINUOUS'
         },
         questionPanelProps: {
             currentQuestionLabel,
@@ -530,6 +644,7 @@ export function useAppViewModel() {
             voice,
             voiceSttModel,
             feedbackModel,
+            aiFeedbackEnabled,
             ttsModel,
             enabledRulebookCount,
             questionGroupCount: questionGroups.length,
@@ -537,6 +652,7 @@ export function useAppViewModel() {
         },
         recentFeedbackPanelProps: {
             feedback,
+            aiFeedbackEnabled,
             onOpenWrongnotes: () => setActivePanel('wrongnotes')
         },
         statusBarProps: {

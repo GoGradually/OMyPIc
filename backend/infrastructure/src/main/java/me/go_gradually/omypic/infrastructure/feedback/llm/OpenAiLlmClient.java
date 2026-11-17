@@ -153,8 +153,8 @@ public class OpenAiLlmClient implements LlmClient {
     private LlmGenerateResult fallbackFromStructuredFailure(StructuredOutputException failure) {
         List<String> reasons = List.of("structured_output_conversion_failed");
         try {
-            JsonNode root = objectMapper.readTree(extractJson(failure.raw()));
-            Feedback feedback = parseFallbackFeedback(root);
+            JsonNode root = objectMapper.readTree(FeedbackJsonParser.extractJson(failure.raw()));
+            Feedback feedback = FeedbackJsonParser.parse(root);
             return new LlmGenerateResult(feedback, reasons, failure.conversationState(), feedback.getSummary());
         } catch (Exception parseFailure) {
             log.warning(() -> "openai.llm.fallback_parse failure reason=" + defaultMessage(parseFailure.getMessage()));
@@ -166,47 +166,6 @@ public class OpenAiLlmClient implements LlmClient {
                     ""
             );
         }
-    }
-
-    private Feedback parseFallbackFeedback(JsonNode root) {
-        String summary = root.path("summary").asText("");
-        String exampleAnswer = root.path("exampleAnswer").asText("");
-        List<String> evidence = toStringList(root.path("rulebookEvidence"));
-
-        JsonNode correctionsNode = root.path("corrections");
-        JsonNode recommendationsNode = root.path("recommendations");
-
-        if (correctionsNode.isObject() || recommendationsNode.isObject()) {
-            Corrections corrections = new Corrections(
-                    parseCorrectionDetail(correctionsNode.path("grammar")),
-                    parseCorrectionDetail(correctionsNode.path("expression")),
-                    parseCorrectionDetail(correctionsNode.path("logic"))
-            );
-            Recommendations recommendations = new Recommendations(
-                    parseRecommendationDetail(recommendationsNode.path("filler")),
-                    parseRecommendationDetail(recommendationsNode.path("adjective")),
-                    parseRecommendationDetail(recommendationsNode.path("adverb"))
-            );
-            return Feedback.of(summary, corrections, recommendations, exampleAnswer, evidence);
-        }
-
-        List<String> correctionPoints = toStringList(root.path("correctionPoints"));
-        List<String> recommendation = toStringList(root.path("recommendation"));
-        return Feedback.of(summary, correctionPoints, recommendation, exampleAnswer, evidence);
-    }
-
-    private CorrectionDetail parseCorrectionDetail(JsonNode node) {
-        if (node == null || !node.isObject()) {
-            return new CorrectionDetail("", "");
-        }
-        return new CorrectionDetail(node.path("issue").asText(""), node.path("fix").asText(""));
-    }
-
-    private RecommendationDetail parseRecommendationDetail(JsonNode node) {
-        if (node == null || !node.isObject()) {
-            return new RecommendationDetail("", "");
-        }
-        return new RecommendationDetail(node.path("term").asText(""), node.path("usage").asText(""));
     }
 
     private ResponseEnvelope requestContent(String apiKey,
@@ -403,58 +362,7 @@ public class OpenAiLlmClient implements LlmClient {
     }
 
     private String mergePromptContext(String userPrompt, LlmPromptContext promptContext) {
-        String prompt = safe(userPrompt);
-        if (promptContext == null) {
-            return prompt;
-        }
-        String summary = safe(promptContext.summary());
-        List<LlmPromptContext.TurnRecord> turns = promptContext.recentTurns();
-        boolean hasTurns = turns != null && !turns.isEmpty();
-        List<LlmPromptContext.RecommendationRecord> recommendationHistory = promptContext.recentRecommendations();
-        boolean hasRecommendations = recommendationHistory != null && !recommendationHistory.isEmpty();
-        if (summary.isBlank() && !hasTurns && !hasRecommendations) {
-            return prompt;
-        }
-
-        StringBuilder builder = new StringBuilder();
-        builder.append("# Previous context\n");
-        if (!summary.isBlank()) {
-            builder.append("Summary:\n").append(summary).append("\n\n");
-        }
-        if (hasTurns) {
-            builder.append("Recent turns:\n");
-            int index = 1;
-            for (LlmPromptContext.TurnRecord turn : turns) {
-                builder.append(index++)
-                        .append(") Q: ")
-                        .append(safe(turn.question()))
-                        .append("\n")
-                        .append("A: ")
-                        .append(safe(turn.answer()))
-                        .append("\n")
-                        .append("Feedback summary: ")
-                        .append(safe(turn.feedbackSummary()))
-                        .append("\n");
-            }
-            builder.append("\n");
-        }
-        if (hasRecommendations) {
-            builder.append("Recent recommendation terms:\n");
-            int index = 1;
-            for (LlmPromptContext.RecommendationRecord record : recommendationHistory) {
-                builder.append(index++)
-                        .append(") Filler: ")
-                        .append(safe(record.fillerTerm()))
-                        .append(", Adjective: ")
-                        .append(safe(record.adjectiveTerm()))
-                        .append(", Adverb: ")
-                        .append(safe(record.adverbTerm()))
-                        .append("\n");
-            }
-            builder.append("\n");
-        }
-        builder.append("# Current input\n").append(prompt);
-        return builder.toString();
+        return LlmPromptContextRenderer.merge(userPrompt, promptContext);
     }
 
     private String extractResponsesOutputText(JsonNode root) {
@@ -614,29 +522,6 @@ public class OpenAiLlmClient implements LlmClient {
                 .filter(value -> value != null && !value.isBlank())
                 .map(String::trim)
                 .toList();
-    }
-
-    private List<String> toStringList(JsonNode arrayNode) {
-        List<String> values = new ArrayList<>();
-        if (arrayNode == null || !arrayNode.isArray()) {
-            return values;
-        }
-        for (JsonNode node : arrayNode) {
-            values.add(node.asText(""));
-        }
-        return values;
-    }
-
-    private String extractJson(String raw) {
-        if (raw == null || raw.isBlank()) {
-            return "{}";
-        }
-        int start = raw.indexOf('{');
-        int end = raw.lastIndexOf('}');
-        if (start >= 0 && end > start) {
-            return raw.substring(start, end + 1);
-        }
-        return raw;
     }
 
     private String resolveChatModel(String model) {

@@ -1,4 +1,15 @@
 import React from 'react'
+import {getActiveStepIndex, getPracticeSteps, getStageCaption} from '../utils/practiceStage.js'
+
+function stepState(index, activeIndex) {
+    if (activeIndex < 0) {
+        return 'idle'
+    }
+    if (index === activeIndex) {
+        return 'current'
+    }
+    return index < activeIndex ? 'done' : 'next'
+}
 
 export function VoicePanel({
                                voiceConnected,
@@ -17,64 +28,77 @@ export function VoicePanel({
                                replayButtonLabel,
                                replayButtonDisabled,
                                replayButtonDisabledReason,
-                               handleReplayAction
+                               handleReplayAction,
+                               replayPlaying = false,
+                               awaitingReview = false,
+                               currentQuestionLabel = '',
+                               hasQuestion = false,
+                               feedbackEnabled = true,
+                               aiFeedbackEnabled = true,
+                               onToggleAiFeedback,
+                               autoReplayEnabled = false,
+                               onToggleAutoReplay,
+                               feedbackSummary = '',
+                               continuousMode = false
                            }) {
-    let stageCaption = '세션 시작을 누르면 첫 질문이 자동으로 제시됩니다.'
-    if (sessionActive) {
-        if (speechState === 'READY_FOR_ANSWER') {
-            stageCaption = '지금 답변해 주세요.'
-        } else if (speechState === 'CAPTURING_ANSWER') {
-            stageCaption = '답변을 듣고 있습니다.'
-        } else if (speechState === 'PLAYING_FEEDBACK_TTS' || speechState === 'PLAYING_QUESTION_TTS') {
-            stageCaption = '음성 출력 중입니다. 잠시만 기다려 주세요.'
-        } else if (speechState === 'RECOVERING') {
-            stageCaption = '연결을 복구하고 있습니다. 잠시만 기다려 주세요.'
-        } else if (speechState === 'WAITING_TTS') {
-            stageCaption = '다음 음성을 준비 중입니다.'
-        } else if (speechState === 'STOPPING') {
-            stageCaption = '세션을 정리하고 있습니다.'
-        } else {
-            stageCaption = '세션 진행 중입니다. 질문을 준비하고 있습니다.'
-        }
-    }
+    const stageOptions = {feedbackEnabled, autoReplayEnabled, continuousMode}
+    const steps = getPracticeSteps(stageOptions)
+    const activeStep = getActiveStepIndex({
+        sessionActive,
+        speechState,
+        replayPlaying,
+        awaitingReview,
+        stepCount: steps.length
+    })
+    const caption = getStageCaption({sessionActive, speechState, replayPlaying, awaitingReview, ...stageOptions})
+    const recording = sessionActive && speechState === 'CAPTURING_ANSWER'
 
     return (
-        <section className="panel voice-panel">
-            <div className="panel-head voice-panel__head">
+        <section className="sheet-section voice-panel" aria-label="실전 연습">
+            <div className="voice-panel__head">
                 <h2>실전 연습</h2>
-                <span className={`state-chip ${voiceConnected ? 'is-on' : ''}`}>
-                    {voiceConnected ? '음성 세션 연결됨' : '음성 세션 미연결'}
+                <span className={`connection ${voiceConnected ? 'is-on' : ''}`}>
+                    {voiceConnected ? '음성 세션 연결됨' : '음성 세션 대기'}
                 </span>
             </div>
 
-            <div className={`voice-stage voice-panel__stage ${voiceConnected ? 'is-connected' : ''}`}>
-                <div className="voice-orb voice-panel__orb"/>
-                <p className="stage-caption voice-panel__caption">
-                    {stageCaption}
-                </p>
-                {partialTranscript &&
-                    <div className="partial-transcript voice-panel__partial">{partialTranscript}</div>}
-            </div>
+            <ol className="steps" aria-label="연습 순서">
+                {steps.map((label, index) => {
+                    const state = stepState(index, activeStep)
+                    return (
+                        <li
+                            key={label}
+                            className={`step is-${state}`}
+                            aria-current={state === 'current' ? 'step' : undefined}
+                        >
+                            <span className="step__number">{index + 1}</span>
+                            <span className="step__label">{label}</span>
+                        </li>
+                    )
+                })}
+            </ol>
 
-            <div className="player-row voice-panel__actions">
-                <div className="player-row__main">
-                    <button
-                        className="action-button primary"
-                        onClick={startSession}
-                        disabled={sessionActive}
-                    >
+            <p className={`question ${hasQuestion ? '' : 'is-placeholder'}`} lang={hasQuestion ? 'en' : undefined}>
+                {currentQuestionLabel}
+            </p>
+
+            <p className="caption" role="status">
+                {recording && <span className="rec-dot" aria-hidden="true"/>}
+                {caption}
+            </p>
+            {partialTranscript && <p className="partial-transcript">{partialTranscript}</p>}
+
+            <div className="voice-panel__actions">
+                <div className="button-group">
+                    <button className="action-button primary" onClick={startSession} disabled={sessionActive}>
                         세션 시작
                     </button>
-                    <button
-                        className="action-button danger"
-                        onClick={stopSession}
-                        disabled={!sessionActive}
-                    >
+                    <button className="action-button danger" onClick={stopSession} disabled={!sessionActive}>
                         세션 종료
                     </button>
                 </div>
                 <span
-                    className="player-row__replay"
+                    className="voice-panel__replay"
                     title={replayButtonDisabled && replayButtonDisabledReason ? replayButtonDisabledReason : undefined}
                 >
                     <button
@@ -87,15 +111,49 @@ export function VoicePanel({
                 </span>
             </div>
 
-            <div className={`audio-quick-strip voice-panel__audio-strip ${audioConnectionReady ? 'is-ready' : ''}`}>
-                <div className="audio-quick-copy voice-panel__audio-copy">
+            <div className="ai-control">
+                <button
+                    type="button"
+                    role="switch"
+                    className="switch"
+                    aria-checked={aiFeedbackEnabled}
+                    aria-label="AI 피드백"
+                    onClick={() => onToggleAiFeedback?.(!aiFeedbackEnabled)}
+                    disabled={sessionActive}
+                >
+                    <span className="switch__thumb"/>
+                </button>
+                <div className="ai-control__copy">
+                    <strong>AI 피드백 {aiFeedbackEnabled ? '켜짐' : '꺼짐'}</strong>
+                    <span>
+                        {sessionActive
+                            ? '세션 중에는 바꿀 수 없습니다. 다음 세션부터 적용됩니다.'
+                            : aiFeedbackEnabled
+                                ? `${feedbackSummary || '선택한 모델'}로 첨삭합니다.`
+                                : '피드백 모델을 호출하지 않고 질문과 답변만 진행합니다.'}
+                    </span>
+                </div>
+                {!aiFeedbackEnabled && (
+                    <label className="check">
+                        <input
+                            type="checkbox"
+                            checked={autoReplayEnabled}
+                            onChange={(event) => onToggleAutoReplay?.(event.target.checked)}
+                        />
+                        답변 후 내 응답 자동 재생
+                    </label>
+                )}
+            </div>
+
+            <div className={`mic-strip ${audioConnectionReady ? 'is-ready' : ''}`}>
+                <div className="mic-strip__copy">
                     <strong>{audioConnectionLabel}</strong>
                     <span>권한 {audioPermissionLabel}</span>
                     <span>{audioQuickHint}</span>
                     {audioDeviceStatus.lastCheckedAt && <span>확인 {audioDeviceStatus.lastCheckedAt}</span>}
                 </div>
                 <button
-                    className="audio-quick-button"
+                    className="control-button secondary"
                     onClick={handleAudioQuickAction}
                     disabled={sessionActive || audioPermission === 'unsupported'}
                 >

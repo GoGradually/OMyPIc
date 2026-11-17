@@ -6,12 +6,21 @@ export const MODEL_LABELS = {
     'gpt-4.1-nano': 'gpt-4.1-nano (비추론 초저비용)',
     'gpt-4o': 'gpt-4o (레거시 상위)',
     'gpt-4o-mini': 'gpt-4o-mini (레거시 기본)',
+    'claude-opus-5-5': 'Claude Opus 5.5 (정밀 피드백)',
+    'claude-sonnet-5-5': 'Claude Sonnet 5.5 (균형형)',
+    'claude-haiku-5-5': 'Claude Haiku 5.5 (빠른 응답)',
+    'claude-fable-5-2': 'Claude Fable 5.2 (최상위, 응답 느림)',
     'gpt-4o-transcribe': 'gpt-4o-transcribe (정확도 우선)',
     'gpt-4o-mini-transcribe': 'gpt-4o-mini-transcribe (기본)',
     'whisper-1': 'whisper-1 (호환)',
     'gpt-4o-mini-tts': 'gpt-4o-mini-tts (기본)',
     'tts-1-hd': 'tts-1-hd (품질 우선)',
     'tts-1': 'tts-1 (속도 우선)'
+}
+
+export const FEEDBACK_PROVIDER_LABELS = {
+    openai: 'OpenAI',
+    anthropic: 'Claude'
 }
 
 export const FEEDBACK_LANGUAGE_LABELS = {
@@ -46,6 +55,22 @@ export function getModelLabel(modelId) {
         return ''
     }
     return MODEL_LABELS[modelId] || modelId
+}
+
+export function getProviderLabel(provider) {
+    return FEEDBACK_PROVIDER_LABELS[provider] || provider || ''
+}
+
+/**
+ * Finds which provider serves a feedback model, using the groups from /api/meta/models.
+ * Falls back to the model id prefix so the UI still works when the meta request failed.
+ */
+export function getFeedbackProvider(modelId, providerGroups = []) {
+    const group = providerGroups.find((item) => Array.isArray(item?.models) && item.models.includes(modelId))
+    if (group?.provider) {
+        return group.provider
+    }
+    return typeof modelId === 'string' && modelId.startsWith('claude-') ? 'anthropic' : 'openai'
 }
 
 export function getModeSummary(mode, batchSize) {

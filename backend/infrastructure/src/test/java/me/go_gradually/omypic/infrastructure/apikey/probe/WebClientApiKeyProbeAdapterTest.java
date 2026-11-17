@@ -1,5 +1,6 @@
 package me.go_gradually.omypic.infrastructure.apikey.probe;
 
+import me.go_gradually.omypic.infrastructure.shared.anthropic.AnthropicClientFactory;
 import me.go_gradually.omypic.infrastructure.shared.config.AppProperties;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -70,9 +71,50 @@ class WebClientApiKeyProbeAdapterTest {
         assertThrows(IllegalArgumentException.class, () -> adapter.probe("gemini", "AIza-test", null));
     }
 
+    @Test
+    void probe_anthropic_looksUpModelWithApiKey() throws Exception {
+        server.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("""
+                        {
+                          "id":"claude-opus-5-5",
+                          "type":"model",
+                          "display_name":"Claude Opus 5.5",
+                          "created_at":"2026-01-01T00:00:00Z"
+                        }
+                        """));
+        WebClientApiKeyProbeAdapter adapter = adapterWithSingleServer();
+
+        adapter.probe("anthropic", "sk-ant-test", null);
+
+        RecordedRequest request = server.takeRequest();
+        assertEquals("GET", request.getMethod());
+        assertEquals("/v1/models/claude-opus-5-5", request.getPath());
+        assertEquals("Bearer sk-ant-test", request.getHeader("Authorization"));
+    }
+
+    @Test
+    void probe_anthropic_throwsOnRejectedKey() {
+        server.enqueue(new MockResponse()
+                .setResponseCode(401)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"invalid x-api-key\"}}"));
+        WebClientApiKeyProbeAdapter adapter = adapterWithSingleServer();
+
+        IllegalStateException error = assertThrows(
+                IllegalStateException.class,
+                () -> adapter.probe("anthropic", "sk-ant-bad", "claude-haiku-5-5")
+        );
+
+        assertEquals("Verification failed: the Anthropic API key was rejected", error.getMessage());
+    }
+
     private WebClientApiKeyProbeAdapter adapterWithSingleServer() {
         AppProperties properties = new AppProperties();
         properties.getIntegrations().getOpenai().setBaseUrl(server.url("/").toString());
-        return new WebClientApiKeyProbeAdapter(properties);
+        properties.getIntegrations().getAnthropic().setBaseUrl(server.url("/").toString());
+        properties.getIntegrations().getAnthropic().setMaxRetries(0);
+        return new WebClientApiKeyProbeAdapter(properties, new AnthropicClientFactory(properties));
     }
 }

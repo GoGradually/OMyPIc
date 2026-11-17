@@ -9,6 +9,7 @@ const keytar = require('keytar')
 
 const SERVICE = 'OMyPIc'
 const OPENAI_PROVIDER = 'openai'
+const API_KEY_PROVIDERS = [OPENAI_PROVIDER, 'anthropic']
 let backendProcess = null
 let mongoProcess = null
 const BACKEND_URL = process.env.OMYPIC_BACKEND_URL || 'http://localhost:4317'
@@ -283,12 +284,23 @@ ipcMain.handle('get-backend-url', () => {
     return BACKEND_URL
 })
 
-ipcMain.handle('get-api-key', async () => {
-    return keytar.getPassword(SERVICE, OPENAI_PROVIDER)
+// Each provider's key is stored as its own keychain entry (account = provider id).
+function resolveKeyProvider(provider) {
+    return API_KEY_PROVIDERS.includes(provider) ? provider : OPENAI_PROVIDER
+}
+
+ipcMain.handle('get-api-key', async (event, provider) => {
+    return keytar.getPassword(SERVICE, resolveKeyProvider(provider))
 })
 
-ipcMain.handle('set-api-key', async (event, key) => {
-    await keytar.setPassword(SERVICE, OPENAI_PROVIDER, key)
+ipcMain.handle('set-api-key', async (event, key, provider) => {
+    const account = resolveKeyProvider(provider)
+    const value = typeof key === 'string' ? key.trim() : ''
+    if (!value) {
+        await keytar.deletePassword(SERVICE, account)
+        return true
+    }
+    await keytar.setPassword(SERVICE, account, value)
     return true
 })
 

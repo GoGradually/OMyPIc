@@ -3,6 +3,7 @@ package me.go_gradually.omypic.application.feedback.usecase;
 import me.go_gradually.omypic.application.feedback.model.FeedbackCommand;
 import me.go_gradually.omypic.application.feedback.model.FeedbackResult;
 import me.go_gradually.omypic.application.feedback.policy.FeedbackPolicy;
+import me.go_gradually.omypic.application.feedback.policy.FeedbackModelPolicy;
 import me.go_gradually.omypic.application.feedback.port.LlmClient;
 import me.go_gradually.omypic.domain.session.LlmConversationState;
 import me.go_gradually.omypic.application.feedback.port.LlmGenerateResult;
@@ -27,14 +28,12 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 public class FeedbackUseCase {
     private static final Logger log = Logger.getLogger(FeedbackUseCase.class.getName());
-    private static final String OPENAI_PROVIDER = "openai";
     private static final String NO_STRATEGY = "(등록된 전략/룰북 문서가 없습니다)";
     private static final String NO_RULEBOOK_DOC = "(문서 없음)";
     private static final int DEFAULT_CONVERSATION_REBASE_TURNS = 6;
@@ -326,10 +325,13 @@ summary/corrections/exampleAnswer/rulebookEvidence는 간결하게 작성해도 
         if (state.isLlmBootstrapped()) {
             return;
         }
+        LlmClient client = resolveClient(normalizeProvider(command.getProvider()));
+        if (client.isStateless()) {
+            // Stateless providers receive the full system prompt on every turn.
+            return;
+        }
         FeedbackLanguage language = FeedbackLanguage.of(feedbackLanguage);
         String systemPrompt = buildSystemPrompt(language.value(), List.of());
-        LlmClient client = Optional.ofNullable(clients.get(OPENAI_PROVIDER))
-                .orElseThrow(() -> new IllegalStateException("OpenAI client is not configured"));
         LlmConversationState next = client.bootstrap(
                 apiKey,
                 command.getModel(),
@@ -374,12 +376,12 @@ summary/corrections/exampleAnswer/rulebookEvidence는 간결하게 작성해도 
                                                  String userPrompt,
                                                  String questionText) {
         String provider = normalizeProvider(command.getProvider());
-        LlmClient client = Optional.ofNullable(clients.get(OPENAI_PROVIDER))
-                .orElseThrow(() -> new IllegalStateException("OpenAI client is not configured"));
+        LlmClient client = resolveClient(provider);
+        boolean serverConversation = !client.isStateless();
         SessionState safeState = state == null
                 ? sessionStore.getOrCreate(SessionId.of(command.getSessionId()))
                 : state;
-        if (safeState.shouldRebaseConversation(conversationRebaseTurns)) {
+        if (serverConversation && safeState.shouldRebaseConversation(conversationRebaseTurns)) {
             if (safeState.isLlmBootstrapped()) {
                 // Rebase starts a fresh conversation, but keeps bootstrap already applied.
                 safeState.resetConversationState(false);
@@ -416,7 +418,9 @@ summary/corrections/exampleAnswer/rulebookEvidence는 간결하게 작성해도 
                     text,
                     promptContext
             );
-            safeState.updateConversationState(generated.conversationState());
+            if (serverConversation) {
+                safeState.updateConversationState(generated.conversationState());
+            }
             safeState.setLlmSummary(resolveSummaryForNextTurn(generated, feedback));
             safeState.appendLlmTurn(questionText, text, feedback.getSummary(), RECENT_TURNS_LIMIT);
             safeState.appendLlmRecommendationTerms(
@@ -441,6 +445,16 @@ summary/corrections/exampleAnswer/rulebookEvidence는 간결하게 작성해도 
                                                                String systemPrompt,
                                                                SessionState state,
                                                                LlmPromptContext promptContext) throws Exception {
+        if (client.isStateless()) {
+            return client.generate(
+                    apiKey,
+                    command.getModel(),
+                    systemPrompt,
+                    userPrompt,
+                    LlmConversationState.empty(),
+                    promptContext
+            );
+        }
         LlmConversationState conversationState = state.conversationState();
         boolean bootstrappedBeforeRequest = state.isLlmBootstrapped();
         String requestSystemPrompt = bootstrappedBeforeRequest ? EMPTY_SYSTEM_PROMPT : systemPrompt;
@@ -823,14 +837,15 @@ summary/corrections/exampleAnswer/rulebookEvidence는 간결하게 작성해도 
     }
 
     private String normalizeProvider(String provider) {
-        if (provider == null || provider.isBlank()) {
-            throw new IllegalArgumentException("Provider is required");
+        return FeedbackModelPolicy.normalizeProvider(provider);
+    }
+
+    private LlmClient resolveClient(String provider) {
+        LlmClient client = clients.get(provider);
+        if (client == null) {
+            throw new IllegalStateException("LLM client is not configured for provider: " + provider);
         }
-        String normalized = provider.trim().toLowerCase(Locale.ROOT);
-        if (!OPENAI_PROVIDER.equals(normalized)) {
-            throw new IllegalArgumentException("Unsupported provider: only openai is allowed");
-        }
-        return normalized;
+        return client;
     }
 
     private String buildSystemPrompt(String language, List<RulebookContext> contexts) {

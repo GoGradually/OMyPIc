@@ -6,6 +6,8 @@ public class VoiceSessionCreateRequest {
     @NotBlank
     private String sessionId;
     private String feedbackModel;
+    private String feedbackProvider;
+    private Boolean feedbackEnabled;
     private String feedbackLanguage;
     private String sttModel;
     private String ttsModel;
@@ -25,6 +27,22 @@ public class VoiceSessionCreateRequest {
 
     public void setFeedbackModel(String feedbackModel) {
         this.feedbackModel = feedbackModel;
+    }
+
+    public String getFeedbackProvider() {
+        return feedbackProvider;
+    }
+
+    public void setFeedbackProvider(String feedbackProvider) {
+        this.feedbackProvider = feedbackProvider;
+    }
+
+    public Boolean getFeedbackEnabled() {
+        return feedbackEnabled;
+    }
+
+    public void setFeedbackEnabled(Boolean feedbackEnabled) {
+        this.feedbackEnabled = feedbackEnabled;
     }
 
     public String getFeedbackLanguage() {

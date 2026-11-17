@@ -43,6 +43,6 @@ describe('audioStatus', () => {
             recording: false
         })
 
-        expect(ui.audioQuickHint).toBe('입력 2개 · 출력 1개')
+        expect(ui.audioQuickHint).toBe('입력 2개, 출력 1개')
     })
 })

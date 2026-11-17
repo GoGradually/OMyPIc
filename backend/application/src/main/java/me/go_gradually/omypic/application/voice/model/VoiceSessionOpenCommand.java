@@ -3,6 +3,9 @@ package me.go_gradually.omypic.application.voice.model;
 public class VoiceSessionOpenCommand {
     private String sessionId;
     private String apiKey;
+    private String feedbackApiKey;
+    private String feedbackProvider;
+    private Boolean feedbackEnabled;
     private String feedbackModel;
     private String feedbackLanguage;
     private String sttModel;
@@ -23,6 +26,37 @@ public class VoiceSessionOpenCommand {
 
     public void setApiKey(String apiKey) {
         this.apiKey = apiKey;
+    }
+
+    /**
+     * API key for the feedback LLM provider. Only needed when it differs from the voice (STT/TTS) key,
+     * i.e. when a Claude model is selected.
+     */
+    public String getFeedbackApiKey() {
+        return feedbackApiKey;
+    }
+
+    public void setFeedbackApiKey(String feedbackApiKey) {
+        this.feedbackApiKey = feedbackApiKey;
+    }
+
+    public String getFeedbackProvider() {
+        return feedbackProvider;
+    }
+
+    public void setFeedbackProvider(String feedbackProvider) {
+        this.feedbackProvider = feedbackProvider;
+    }
+
+    /**
+     * null is treated as enabled so existing clients keep getting AI feedback.
+     */
+    public Boolean getFeedbackEnabled() {
+        return feedbackEnabled;
+    }
+
+    public void setFeedbackEnabled(Boolean feedbackEnabled) {
+        this.feedbackEnabled = feedbackEnabled;
     }
 
     public String getFeedbackModel() {

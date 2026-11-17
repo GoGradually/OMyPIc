@@ -11,7 +11,10 @@ export function WrongNotesOverlay({wrongNotes, feedback}) {
                 {wrongNotes.map((note) => (
                     <li key={note.id}>
                         <div className="summary-line">{note.shortSummary}</div>
-                        <div className="count-line">{note.pattern} · {note.count}회</div>
+                        <div className="count-line">
+                            <span>{note.pattern}</span>
+                            <span>{note.count}회 반복</span>
+                        </div>
                     </li>
                 ))}
             </ul>

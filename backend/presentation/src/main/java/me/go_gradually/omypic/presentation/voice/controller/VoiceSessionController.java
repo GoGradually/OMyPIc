@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @RestController
 @RequestMapping("/api/voice/sessions")
 public class VoiceSessionController {
+    static final String FEEDBACK_API_KEY_HEADER = "X-Feedback-API-Key";
     private final VoiceSessionUseCase voiceSessionUseCase;
 
     public VoiceSessionController(VoiceSessionUseCase voiceSessionUseCase) {
@@ -31,19 +32,29 @@ public class VoiceSessionController {
 
     @PostMapping
     public VoiceSessionCreateResponse open(@RequestHeader("X-API-Key") String apiKey,
+                                           @RequestHeader(value = FEEDBACK_API_KEY_HEADER, required = false)
+                                           String feedbackApiKey,
                                            @Valid @RequestBody VoiceSessionCreateRequest request) {
-        VoiceSessionOpenCommand command = new VoiceSessionOpenCommand();
-        command.setSessionId(request.getSessionId());
+        VoiceSessionOpenCommand command = toOpenCommand(request);
         command.setApiKey(apiKey);
-        command.setFeedbackModel(request.getFeedbackModel());
-        command.setFeedbackLanguage(request.getFeedbackLanguage());
-        command.setSttModel(request.getSttModel());
-        command.setTtsModel(request.getTtsModel());
-        command.setTtsVoice(request.getTtsVoice());
+        command.setFeedbackApiKey(feedbackApiKey);
 
         VoiceSessionCreateResponse response = new VoiceSessionCreateResponse();
         response.setVoiceSessionId(voiceSessionUseCase.open(command));
         return response;
+    }
+
+    private VoiceSessionOpenCommand toOpenCommand(VoiceSessionCreateRequest request) {
+        VoiceSessionOpenCommand command = new VoiceSessionOpenCommand();
+        command.setSessionId(request.getSessionId());
+        command.setFeedbackModel(request.getFeedbackModel());
+        command.setFeedbackProvider(request.getFeedbackProvider());
+        command.setFeedbackEnabled(request.getFeedbackEnabled());
+        command.setFeedbackLanguage(request.getFeedbackLanguage());
+        command.setSttModel(request.getSttModel());
+        command.setTtsModel(request.getTtsModel());
+        command.setTtsVoice(request.getTtsVoice());
+        return command;
     }
 
     @GetMapping(value = "/{voiceSessionId}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)

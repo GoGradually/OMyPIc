@@ -35,6 +35,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -442,6 +443,77 @@ class FeedbackUseCaseTest {
         verify(openAiClient, times(3)).generate(anyString(), anyString(), anyString(), anyString(), any(), any());
         verify(metrics).incrementRecommendationRepairAttempt();
         verify(metrics).incrementRecommendationMinimalFallback();
+    }
+
+    @Test
+    void bootstrapConversation_skipsStatelessProvider() throws Exception {
+        LlmClient claudeClient = statelessClient();
+        FeedbackUseCase multiProvider = useCaseWith(claudeClient);
+        SessionState state = new SessionState(SessionId.of("s-claude-boot"));
+        when(sessionStore.getOrCreate(SessionId.of("s-claude-boot"))).thenReturn(state);
+
+        multiProvider.bootstrapConversation("sk-ant-key", command("s-claude-boot", "anthropic", "en", ""), "en");
+
+        assertFalse(state.isLlmBootstrapped());
+        verify(claudeClient, never()).bootstrap(anyString(), anyString(), anyString(), any());
+        verify(openAiClient, never()).bootstrap(anyString(), anyString(), anyString(), any());
+    }
+
+    @Test
+    void generateFeedback_statelessProvider_alwaysSendsSystemPromptAndKeepsStoredConversation() throws Exception {
+        stubDefaultFeedbackPolicy();
+        LlmClient claudeClient = statelessClient();
+        FeedbackUseCase multiProvider = useCaseWith(claudeClient);
+        SessionState state = new SessionState(SessionId.of("s-claude"));
+        state.updateConversationState(new LlmConversationState("conv-openai", "resp-openai", 2));
+        state.markLlmBootstrapped();
+        when(sessionStore.getOrCreate(SessionId.of("s-claude"))).thenReturn(state);
+        when(rulebookUseCase.searchContexts(anyString())).thenReturn(List.of());
+        when(claudeClient.generate(anyString(), anyString(), anyString(), anyString(), any(), any()))
+                .thenReturn(statelessResult());
+
+        FeedbackResult result = multiProvider.generateFeedback(
+                "sk-ant-key",
+                command("s-claude", "anthropic", "en", "This is my answer.")
+        );
+
+        assertTrue(result.isGenerated());
+        ArgumentCaptor<String> systemPrompt = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<LlmConversationState> conversation = ArgumentCaptor.forClass(LlmConversationState.class);
+        verify(claudeClient, atLeastOnce()).generate(
+                eq("sk-ant-key"),
+                anyString(),
+                systemPrompt.capture(),
+                anyString(),
+                conversation.capture(),
+                any()
+        );
+        assertFalse(systemPrompt.getAllValues().get(0).isBlank());
+        assertFalse(conversation.getAllValues().get(0).hasConversationId());
+        assertEquals("conv-openai", state.conversationState().conversationId());
+        verify(openAiClient, never()).generate(anyString(), anyString(), anyString(), anyString(), any(), any());
+    }
+
+    private LlmClient statelessClient() {
+        LlmClient client = mock(LlmClient.class);
+        when(client.provider()).thenReturn("anthropic");
+        when(client.isStateless()).thenReturn(true);
+        return client;
+    }
+
+    private FeedbackUseCase useCaseWith(LlmClient extraClient) {
+        return new FeedbackUseCase(
+                List.of(openAiClient, extraClient),
+                rulebookUseCase,
+                feedbackPolicy,
+                metrics,
+                sessionStore,
+                wrongNoteUseCase
+        );
+    }
+
+    private LlmGenerateResult statelessResult() {
+        return new LlmGenerateResult(successResult().feedback(), List.of(), LlmConversationState.empty(), "summary");
     }
 
     private LlmGenerateResult successResult() {

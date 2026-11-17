@@ -97,7 +97,7 @@ export function bindVoiceEvents({
             return
         }
         if (normalizedQuestion.text) {
-            setStatus('질문이 도착했습니다. 답변을 시작해 주세요.')
+            setStatus('다음 질문입니다. 질문을 끝까지 들은 뒤 답변해 주세요.')
         }
     })
 
@@ -122,6 +122,7 @@ export function bindVoiceEvents({
         stopSession({
             forced: false,
             notifyServer: false,
+            preserveReplay: true,
             statusMessage: endedByExhausted
                 ? '모든 질문을 완료하여 세션이 자동 종료되었습니다.'
                 : '세션이 서버에서 종료되었습니다.'

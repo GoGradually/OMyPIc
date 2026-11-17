@@ -128,13 +128,15 @@ Windows 설치형은 Windows 환경에서, macOS DMG는 macOS 환경에서 빌�
 
 ## 7) API Key 저장
 
-- API Key는 Electron에서 OS Keychain(`keytar`)에 저장됩니다.
+- API Key는 Electron에서 OS Keychain(`keytar`)에 공급자별 항목(`openai`, `anthropic`)으로 저장됩니다.
 - Backend에는 저장하지 않고 요청 시 헤더로 전달됩니다.
-- 현재 앱은 OpenAI API Key만 지원합니다.
+  - `X-API-Key`: OpenAI API Key. 질문 음성(TTS)과 답변 인식(STT)에 항상 사용하고, GPT 피드백 모델도 이 키로 호출합니다.
+  - `X-Feedback-API-Key`: Claude API Key. Claude 피드백 모델을 선택하고 AI 피드백이 켜져 있을 때만 전송합니다.
+- 설정 화면의 `저장 + 검증`은 두 키를 각각 해당 공급자에 확인합니다. Claude 키는 모델 조회(`GET /v1/models/{id}`)로 확인하므로 토큰을 쓰지 않습니다.
 
 ## 8) 피드백 모델 지원 범위
 
-- 지원 모델:
+- OpenAI 모델:
   - `gpt-5-mini`
   - `gpt-5-nano`
   - `gpt-4.1`
@@ -142,9 +144,34 @@ Windows 설치형은 Windows 환경에서, macOS DMG는 macOS 환경에서 빌�
   - `gpt-4.1-nano`
   - `gpt-4o`
   - `gpt-4o-mini`
-- 기본 피드백 모델: `gpt-5-nano`
+- Claude 모델:
+  - `claude-opus-5-5`
+  - `claude-sonnet-5-5`
+  - `claude-haiku-5-5`
+  - `claude-fable-5-2`
+- 기본 피드백 모델: `gpt-5-nano` (Claude를 고르면 공급자 기본값은 `claude-opus-5-5`)
 - 기본 설정(`gpt-5-nano`) 기준 세션 1회당 비용은 약 50원 수준이며, 실제 비용은 발화 길이/선택 모델에 따라 달라질 수 있습니다.
 - 비용 정책상 `gpt-5-mini`보다 상위 GPT-5 계열(`gpt-5`, `gpt-5.1`, `gpt-5.2`, `gpt-5-pro`)은 지원 대상에서 제외됩니다.
+- Claude 호출 방식:
+  - 공식 Anthropic Java SDK로 Messages API를 호출하고, 응답 형식은 structured outputs(JSON Schema)로 고정합니다.
+  - Claude는 서버에 대화를 보관하지 않으므로 매 턴 시스템 프롬프트를 함께 보내고, 세션 기억(요약/최근 턴/추천 표현)은 사용자 프롬프트에 붙입니다.
+  - `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-fable-5-2`는 거절 응답에 대비해 서버 측 fallback(`fallbacks: "default"`)을 켭니다.
+  - 음성 턴이 이 호출을 기다리므로 effort 기본값은 `low`입니다. 아래 환경 변수로 바꿀 수 있습니다.
+- Claude 관련 환경 변수:
+  - `OMYPIC_ANTHROPIC_BASE_URL` (기본값: `https://api.anthropic.com`)
+  - `OMYPIC_ANTHROPIC_EFFORT` (기본값: `low`, 허용값: `low`/`medium`/`high`/`xhigh`/`max`)
+  - `OMYPIC_ANTHROPIC_MAX_TOKENS` (기본값: `16000`)
+  - `OMYPIC_ANTHROPIC_TIMEOUT_SECONDS` (기본값: `120`)
+  - `OMYPIC_ANTHROPIC_MAX_RETRIES` (기본값: `2`)
+
+### AI 피드백 ON/OFF
+
+- 실전 연습 화면과 설정 화면의 `AI 피드백` 스위치로 전환하며, 다음 세션 시작부터 적용됩니다.
+- OFF로 시작한 세션은 피드백 모델을 호출하지 않습니다(부트스트랩, 룰북 프리페치, 피드백 생성, 오답노트 기록 모두 생략).
+  흐름은 `질문 음성 재생 -> 답변 녹음/인식 -> (내 응답 자동 재생) -> 다음 질문`으로 자동 진행됩니다.
+- `답변 후 내 응답 자동 재생`을 켜 두면 답변이 인식된 직후 방금 녹음한 응답을 재생하고, 재생이 끝난 뒤 다음 질문을 읽습니다.
+- OFF에서도 질문 음성(TTS)과 답변 인식(STT)은 OpenAI API Key를 사용합니다. Claude API Key는 필요하지 않습니다.
+- 요청 필드: `POST /api/voice/sessions` 본문의 `feedbackEnabled`(기본 `true`), `feedbackProvider`(생략 시 모델 ID로 판별).
 
 ## 9) 음성 청크 전송 보장
 

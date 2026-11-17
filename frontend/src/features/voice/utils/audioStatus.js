@@ -19,7 +19,7 @@ export function getAudioUiState({audioPermission, audioDeviceStatus, recording})
     if (audioPermission === 'unsupported') {
         audioQuickHint = '현재 환경에서는 장치 상태 확인을 지원하지 않습니다.'
     } else if (audioPermission === 'granted') {
-        audioQuickHint = `입력 ${audioDeviceStatus.inputCount}개 · 출력 ${audioDeviceStatus.outputCount}개`
+        audioQuickHint = `입력 ${audioDeviceStatus.inputCount}개, 출력 ${audioDeviceStatus.outputCount}개`
     }
 
     return {

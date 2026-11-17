@@ -73,7 +73,44 @@ class ApiKeyVerifyUseCaseTest {
 
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () -> useCase.verify(command));
 
-        assertEquals("Unsupported provider: only openai is allowed", error.getMessage());
+        assertEquals("Unsupported provider: only openai and anthropic are allowed", error.getMessage());
+        verifyNoInteractions(probePort);
+    }
+
+    @Test
+    void verify_probesAnthropic_whenClaudeKeyAndModelAreGiven() throws Exception {
+        ApiKeyVerifyCommand command = command("Anthropic", "sk-ant-test-key", "claude-opus-5-5");
+
+        ApiKeyVerifyResult result = useCase.verify(command);
+
+        assertTrue(result.isValid());
+        assertEquals("anthropic", result.getProvider());
+        verify(probePort).probe("anthropic", "sk-ant-test-key", "claude-opus-5-5");
+    }
+
+    @Test
+    void verify_returnsFailure_whenAnthropicKeyFormatInvalid() {
+        ApiKeyVerifyResult result = useCase.verify(command("anthropic", "sk-openai-style", null));
+
+        assertFalse(result.isValid());
+        assertTrue(result.getMessage().contains("sk-ant-"));
+        verifyNoInteractions(probePort);
+    }
+
+    @Test
+    void verify_returnsFailure_whenAnthropicKeyIsSavedAsOpenAiKey() {
+        ApiKeyVerifyResult result = useCase.verify(command("openai", "sk-ant-test-key", null));
+
+        assertFalse(result.isValid());
+        assertTrue(result.getMessage().contains("Anthropic"));
+        verifyNoInteractions(probePort);
+    }
+
+    @Test
+    void verify_throws_whenModelBelongsToAnotherProvider() {
+        ApiKeyVerifyCommand command = command("anthropic", "sk-ant-test-key", "gpt-5-mini");
+
+        assertThrows(IllegalArgumentException.class, () -> useCase.verify(command));
         verifyNoInteractions(probePort);
     }
 

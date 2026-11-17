@@ -1,92 +1,106 @@
 import React from 'react'
 
-function correctionLines(corrections = {}) {
-    return [
-        {label: 'Grammar', value: corrections.grammar},
-        {label: 'Expression', value: corrections.expression},
-        {label: 'Logic', value: corrections.logic}
-    ]
-        .map(({label, value}) => {
-            const issue = value?.issue || ''
-            const fix = value?.fix || ''
-            if (!issue && !fix) {
-                return ''
-            }
-            if (issue && fix) {
-                return `${label}: ${issue} / ${fix}`
-            }
-            return `${label}: ${issue || fix}`
-        })
-        .filter(Boolean)
+const CORRECTION_LABELS = [
+    {key: 'grammar', label: '문법'},
+    {key: 'expression', label: '표현'},
+    {key: 'logic', label: '논리'}
+]
+
+const RECOMMENDATION_LABELS = [
+    {key: 'filler', label: '필러'},
+    {key: 'adjective', label: '형용사'},
+    {key: 'adverb', label: '부사'}
+]
+
+function pickCorrections(corrections = {}) {
+    return CORRECTION_LABELS
+        .map(({key, label}) => ({
+            label,
+            issue: corrections[key]?.issue || '',
+            fix: corrections[key]?.fix || ''
+        }))
+        .filter((item) => item.issue || item.fix)
 }
 
-function recommendationLines(recommendations = {}) {
-    return [
-        {label: 'Filler', value: recommendations.filler},
-        {label: 'Adjective', value: recommendations.adjective},
-        {label: 'Adverb', value: recommendations.adverb}
-    ]
-        .map(({label, value}) => {
-            const term = value?.term || ''
-            const usage = value?.usage || ''
-            if (!term && !usage) {
-                return ''
-            }
-            if (term && usage) {
-                return `${label}: ${term} - ${usage}`
-            }
-            return `${label}: ${term || usage}`
-        })
-        .filter(Boolean)
+function pickRecommendations(recommendations = {}) {
+    return RECOMMENDATION_LABELS
+        .map(({key, label}) => ({
+            label,
+            term: recommendations[key]?.term || '',
+            usage: recommendations[key]?.usage || ''
+        }))
+        .filter((item) => item.term || item.usage)
 }
 
-export function RecentFeedbackPanel({feedback, onOpenWrongnotes}) {
+function FeedbackItem({item}) {
+    const corrections = pickCorrections(item.corrections)
+    const recommendations = pickRecommendations(item.recommendations)
+
     return (
-        <section className="panel compact-panel recent-feedback-panel">
-            <div className="panel-head">
+        <article className="markup">
+            {item.questionText && <p className="markup__question" lang="en">{item.questionText}</p>}
+            {item.summary && <p className="markup__summary">{item.summary}</p>}
+
+            {corrections.length > 0 && (
+                <>
+                    <h4>교정 포인트</h4>
+                    <dl className="markup__list">
+                        {corrections.map((correction) => (
+                            <div key={correction.label}>
+                                <dt>{correction.label}</dt>
+                                <dd>
+                                    {correction.issue && <span className="markup__issue">{correction.issue}</span>}
+                                    {correction.fix && <span className="markup__fix">{correction.fix}</span>}
+                                </dd>
+                            </div>
+                        ))}
+                    </dl>
+                </>
+            )}
+
+            {recommendations.length > 0 && (
+                <>
+                    <h4>추천 표현</h4>
+                    <dl className="markup__list">
+                        {recommendations.map((recommendation) => (
+                            <div key={recommendation.label}>
+                                <dt>{recommendation.label}</dt>
+                                <dd>
+                                    {recommendation.term && <mark lang="en">{recommendation.term}</mark>}
+                                    {recommendation.usage && <span>{recommendation.usage}</span>}
+                                </dd>
+                            </div>
+                        ))}
+                    </dl>
+                </>
+            )}
+        </article>
+    )
+}
+
+export function RecentFeedbackPanel({feedback, aiFeedbackEnabled = true, onOpenWrongnotes}) {
+    const items = feedback?.items && feedback.items.length > 0 ? feedback.items : (feedback ? [feedback] : [])
+
+    return (
+        <section className="side-section recent-feedback-panel">
+            <div className="section-head">
                 <h3>최근 피드백</h3>
                 <button className="control-button secondary" onClick={onOpenWrongnotes}>
                     오답노트
                 </button>
             </div>
-            {!feedback && <p className="empty-text">아직 생성된 피드백이 없습니다.</p>}
-            {feedback && (
-                <>
-                    {feedback.items && feedback.items.length > 1 && (
-                        <p className="tiny-meta">문답별 피드백 {feedback.items.length}건</p>
-                    )}
-                    {(feedback.items && feedback.items.length > 0 ? feedback.items : [feedback]).map((item, idx) => {
-                        const corrections = correctionLines(item.corrections)
-                        const recommendations = recommendationLines(item.recommendations)
-                        return (
-                            <div key={`${item.questionId || 'item'}-${idx}`} className="feedback-block">
-                                {item.questionText && <div className="feedback-title">{item.questionText}</div>}
-                                <p className="feedback-summary">{item.summary}</p>
-                                {corrections.length > 0 && (
-                                    <>
-                                        <p className="tiny-meta">교정 포인트</p>
-                                        <ul className="bullet-list">
-                                            {corrections.map((point, pointIndex) => (
-                                                <li key={`${idx}-correction-${pointIndex}`}>{point}</li>
-                                            ))}
-                                        </ul>
-                                    </>
-                                )}
-                                {recommendations.length > 0 && (
-                                    <>
-                                        <p className="tiny-meta">추천 표현</p>
-                                        <ul className="bullet-list">
-                                            {recommendations.map((point, pointIndex) => (
-                                                <li key={`${idx}-recommendation-${pointIndex}`}>{point}</li>
-                                            ))}
-                                        </ul>
-                                    </>
-                                )}
-                            </div>
-                        )
-                    })}
-                </>
+
+            {items.length === 0 && (
+                <p className="empty-text">
+                    {aiFeedbackEnabled
+                        ? '답변을 마치면 AI 첨삭이 여기에 표시됩니다.'
+                        : 'AI 피드백이 꺼져 있습니다. 켜면 답변마다 첨삭을 받을 수 있습니다.'}
+                </p>
             )}
+            {items.length > 1 && <p className="tiny-meta">문답별 피드백 {items.length}건</p>}
+            {items.map((item, index) => (
+                <FeedbackItem key={`${item.questionId || 'item'}-${index}`} item={item}/>
+            ))}
         </section>
     )
 }

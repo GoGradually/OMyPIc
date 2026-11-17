@@ -1,4 +1,4 @@
-import React from 'react'
+import React, {useCallback} from 'react'
 import {Header} from '../features/layout/components/Header.jsx'
 import {VoicePanel} from '../features/voice/components/VoicePanel.jsx'
 import {QuestionPanel} from '../features/questions/components/QuestionPanel.jsx'
@@ -25,27 +25,29 @@ export default function App() {
         statusBarProps
     } = useAppViewModel()
 
+    const closeOverlay = useCallback(() => setActivePanel(''), [setActivePanel])
+
     return (
-        <div className="app-shell app">
+        <div className="app-shell">
             <Header activePanel={activePanel} onTogglePanel={togglePanel}/>
 
-            <div className="workspace app__workspace">
-                <main className="practice-column app__practice-column">
+            <div className="workspace">
+                <main className="sheet">
                     <VoicePanel {...voicePanelProps} />
                     <QuestionPanel {...questionPanelProps} />
                     <TranscriptPanel {...transcriptPanelProps} />
                 </main>
 
-                <aside className="info-column app__info-column">
-                    <SummaryPanel {...summaryPanelProps} />
+                <aside className="side">
                     <RecentFeedbackPanel {...recentFeedbackPanelProps} />
+                    <SummaryPanel {...summaryPanelProps} />
                 </aside>
             </div>
 
             <StatusBar {...statusBarProps} />
 
             {activePanel && (
-                <OverlayShell title={overlayTitle} onClose={() => setActivePanel('')}>
+                <OverlayShell title={overlayTitle} onClose={closeOverlay}>
                     <ActiveOverlayContent {...overlayContentProps} />
                 </OverlayShell>
             )}

@@ -2,63 +2,99 @@
     position: fixed;
     inset: 0;
     z-index: 30;
-    background: rgba(11, 18, 30, 0.58);
+    background: rgba(28, 37, 65, 0.52);
     display: grid;
     place-items: center;
     padding: 20px;
 }
 
 .overlay-body {
-    width: min(950px, 96vw);
+    width: min(860px, 96vw);
     max-height: 90vh;
     overflow: auto;
-    border-radius: 20px;
-    border: 1px solid var(--line);
-    background: #f4f8ff;
-    box-shadow: 0 24px 56px rgba(5, 18, 40, 0.35);
-    padding: 18px;
+    border-radius: var(--radius-sheet);
+    background: var(--paper);
+    box-shadow: 0 24px 60px rgba(12, 18, 36, 0.38);
+    padding: 22px 26px 26px;
 }
 
 .overlay-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 10px;
-    margin-bottom: 14px;
+    gap: 12px;
+    margin-bottom: 18px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--rule);
 }
 
 .overlay-header h2 {
-    margin: 0;
-    font-family: 'Sora', 'IBM Plex Sans KR', sans-serif;
-    font-size: 24px;
-    letter-spacing: -0.02em;
+    font-size: 22px;
 }
 
 .overlay-content {
     display: grid;
-    gap: 12px;
+    gap: 16px;
 }
 
 .field-grid {
     display: grid;
-    gap: 10px;
+    gap: 12px;
 }
 
 .field-grid.two-col {
     grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.field-grid.three-col {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .field-block {
     display: grid;
     gap: 6px;
+    align-content: start;
 }
 
 .field-block label {
     font-size: 13px;
-    font-weight: 700;
-    color: #31415e;
+    font-weight: 600;
 }
 
+/* Settings: one group per decision the learner makes */
+.settings {
+    gap: 0;
+}
+
+.settings__group {
+    display: grid;
+    gap: 12px;
+    padding: 18px 0;
+}
+
+.settings__group:first-child {
+    padding-top: 0;
+}
+
+.settings__group + .settings__group {
+    border-top: 1px solid var(--rule);
+}
+
+.settings__group .ai-control {
+    margin-top: 0;
+}
+
+.key-field {
+    display: flex;
+    gap: 8px;
+}
+
+.key-field input {
+    font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+    font-size: 14px;
+}
+
+/* Chips: learning mode and tag selection */
 .mode-tabs {
     display: flex;
     flex-wrap: wrap;
@@ -66,45 +102,60 @@
 }
 
 .mode-tab {
+    border: 1px solid var(--rule-strong);
     border-radius: 999px;
-    border: 1px solid var(--line);
-    background: var(--surface);
-    color: var(--text);
-    padding: 8px 12px;
+    background: var(--paper);
+    padding: 6px 13px;
     font-size: 13px;
-    font-weight: 700;
+    font-weight: 500;
     cursor: pointer;
 }
 
-.mode-tab.is-active {
-    border-color: var(--accent);
-    color: var(--accent-strong);
-    background: var(--accent-soft);
+.mode-tab:hover:not(:disabled) {
+    border-color: var(--ink);
 }
 
+.mode-tab.is-active {
+    border-color: var(--ink);
+    background: var(--marker);
+    font-weight: 600;
+}
+
+.mode-tab:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+/* Lists are ruled rows, not stacked cards */
 .item-list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
     display: grid;
-    gap: 8px;
+    border-top: 1px solid var(--rule);
 }
 
 .item-list li {
-    border-radius: 12px;
-    border: 1px solid var(--line);
-    background: #f9fbff;
-    padding: 10px 12px;
     display: flex;
     justify-content: space-between;
-    gap: 10px;
     align-items: center;
+    gap: 12px;
+    padding: 10px 2px;
+    border-bottom: 1px solid var(--rule);
+}
+
+.item-list li small {
+    color: var(--ink-soft);
+}
+
+.item-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 10px;
 }
 
 .item-actions {
     display: flex;
-    gap: 6px;
     flex-wrap: wrap;
+    gap: 6px;
 }
 
 .question-items li {
@@ -117,7 +168,7 @@
 }
 
 .question-line small {
-    color: var(--muted);
+    color: var(--ink-soft);
 }
 
 .edit-box {
@@ -127,26 +178,21 @@
 }
 
 .count-banner {
-    font-size: 27px;
-    font-weight: 700;
-    letter-spacing: -0.02em;
+    font-size: 15px;
+    font-weight: 500;
 }
 
 .count-banner span {
-    display: inline-grid;
-    place-items: center;
-    min-width: 44px;
-    min-height: 44px;
-    border-radius: 10px;
-    background: var(--accent-soft);
-    color: var(--accent-strong);
-    margin: 0 6px;
-    padding: 3px 8px;
+    margin: 0 4px;
+    font-family: var(--font-display);
+    font-size: 30px;
+    font-weight: 700;
 }
 
 .wrongnote-items li {
     display: grid;
-    justify-content: flex-start;
+    justify-content: stretch;
+    gap: 2px;
 }
 
 .summary-line {
@@ -154,41 +200,39 @@
 }
 
 .count-line {
+    display: flex;
+    gap: 12px;
+    color: var(--ink-soft);
     font-size: 13px;
-    color: var(--muted);
 }
 
 .feedback-block {
-    border-radius: 12px;
-    border: 1px solid var(--line);
-    background: #f8fbff;
-    padding: 12px;
+    border-radius: var(--radius);
+    background: var(--paper-sunk);
+    padding: 14px 16px;
 }
 
 .feedback-title {
     margin-bottom: 6px;
     font-size: 14px;
-    font-weight: 700;
+    font-weight: 600;
+}
+
+.bullet-list {
+    display: grid;
+    gap: 6px;
+    padding-left: 18px;
+    list-style: disc;
+    font-size: 14px;
 }
 
 .crud-section {
-    border-radius: 12px;
-    border: 1px solid var(--line);
-    background: #f9fbff;
     display: grid;
     gap: 10px;
-    padding: 12px;
-}
-
-.crud-section h3 {
-    margin: 0;
-    font-family: 'Sora', 'IBM Plex Sans KR', sans-serif;
-    font-size: 17px;
-    letter-spacing: -0.02em;
 }
 
 .question-group-list-panel {
-    gap: 12px;
+    gap: 14px;
 }
 
 .question-group-list-items li {
@@ -196,27 +240,25 @@
 }
 
 .question-group-list-items li.is-active {
-    border-color: var(--accent);
-    background: var(--accent-soft);
+    background: var(--marker-soft);
 }
 
 .group-row-select {
+    display: grid;
+    gap: 2px;
     border: 0;
     background: transparent;
+    padding: 0 6px;
     text-align: left;
-    display: grid;
-    gap: 4px;
-    padding: 0;
     cursor: pointer;
 }
 
 .group-row-select strong {
-    color: var(--text);
     font-size: 14px;
 }
 
 .group-row-select small {
-    color: var(--muted);
+    color: var(--ink-soft);
     font-size: 12px;
 }
 
@@ -224,28 +266,24 @@
     position: fixed;
     inset: 0;
     z-index: 40;
-    background: rgba(11, 18, 30, 0.46);
+    background: rgba(28, 37, 65, 0.42);
     display: grid;
     place-items: center;
     padding: 16px;
 }
 
 .inline-modal {
-    width: min(520px, 96vw);
-    border-radius: 16px;
-    border: 1px solid var(--line);
-    background: #f4f8ff;
-    box-shadow: 0 20px 46px rgba(5, 18, 40, 0.3);
+    width: min(500px, 96vw);
     display: grid;
-    gap: 10px;
-    padding: 16px;
+    gap: 12px;
+    border-radius: var(--radius-sheet);
+    background: var(--paper);
+    box-shadow: 0 20px 48px rgba(12, 18, 36, 0.34);
+    padding: 20px;
 }
 
 .inline-modal h3 {
-    margin: 0;
-    font-family: 'Sora', 'IBM Plex Sans KR', sans-serif;
-    font-size: 19px;
-    letter-spacing: -0.02em;
+    font-size: 18px;
 }
 
 .inline-modal-actions {
@@ -254,76 +292,17 @@
     gap: 8px;
 }
 
-@media (max-width: 1120px) {
-    .workspace {
-        grid-template-columns: 1fr;
-    }
-
-    .app-header {
-        flex-direction: column;
-    }
-
-    .quick-actions {
-        justify-content: flex-start;
-    }
-}
-
-@media (max-width: 760px) {
-    .app-shell {
-        width: calc(100% - 20px);
-        margin: 10px auto 16px;
-        gap: 12px;
-    }
-
-    .app-header,
-    .panel,
-    .status-bar,
-    .status-details {
-        padding: 12px;
-        border-radius: 14px;
-    }
-
-    .panel-head {
-        flex-wrap: wrap;
-    }
-
+@media (max-width: 720px) {
     .overlay {
         padding: 10px;
     }
 
     .overlay-body {
-        padding: 12px;
-        border-radius: 14px;
+        padding: 16px;
     }
 
-    .overlay-header h2 {
-        font-size: 20px;
-    }
-
-    .field-grid.two-col {
+    .field-grid.two-col,
+    .field-grid.three-col {
         grid-template-columns: 1fr;
-    }
-
-    .audio-quick-strip {
-        display: grid;
-    }
-
-    .audio-quick-button {
-        justify-self: flex-start;
-    }
-
-    .player-row {
-        flex-direction: column;
-        align-items: flex-start;
-    }
-
-    .count-banner {
-        font-size: 21px;
-    }
-
-    .crud-section,
-    .inline-modal {
-        border-radius: 10px;
-        padding: 10px;
     }
 }

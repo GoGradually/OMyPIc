@@ -483,6 +483,125 @@ class VoiceSessionUseCaseTest {
         assertTrue(limitedUseCase.recover(stoppedC, 0L).stopped());
     }
 
+    @Test
+    void feedbackDisabled_skipsLlmAndMovesStraightToNextQuestion() throws Exception {
+        SessionState state = new SessionState(SessionId.of("s-off"));
+        state.applyModeUpdate(ModeType.IMMEDIATE, null);
+        when(sessionUseCase.getOrCreate("s-off")).thenReturn(state);
+        when(questionUseCase.nextQuestion("s-off")).thenReturn(
+                question("q-1", "question-1", "g-1", "travel"),
+                question("q-2", "question-2", "g-2", "hobby")
+        );
+        VoiceSessionOpenCommand command = openCommand("s-off");
+        command.setFeedbackEnabled(false);
+
+        String voiceSessionId = useCase.open(command);
+        List<EventRecord> events = new ArrayList<>();
+        useCase.registerSink(voiceSessionId, capture(events));
+
+        int readyIndex = firstIndex(events, event -> "session.ready".equals(event.type()));
+        assertEquals(false, events.get(readyIndex).payload().get("feedbackEnabled"));
+
+        events.clear();
+        useCase.appendAudio(audioChunk(voiceSessionId));
+
+        int sttIndex = firstIndex(events, event -> "stt.final".equals(event.type()));
+        int questionPromptIndex = firstIndex(events, event -> "question.prompt".equals(event.type()));
+        int questionSpeechIndex = firstIndex(events, event -> isTtsRole(event, "question"));
+        assertTrue(sttIndex >= 0);
+        assertTrue(questionPromptIndex > sttIndex);
+        assertTrue(questionSpeechIndex > questionPromptIndex);
+        assertEquals(-1, firstIndex(events, event -> "feedback.final".equals(event.type())));
+        assertEquals(-1, firstIndex(events, event -> isTtsRole(event, "feedback")));
+        verify(feedbackUseCase, never()).bootstrapConversation(anyString(), any(FeedbackCommand.class), anyString());
+        verify(feedbackUseCase, never()).prefetchTurnPrompt(anyString(), anyString(), any(), anyString(), anyInt());
+        verify(feedbackUseCase, never())
+                .generateFeedbackForTurn(anyString(), any(FeedbackCommand.class), anyString(), any(), anyString(), anyInt());
+    }
+
+    @Test
+    void feedbackDisabled_stopsAutomaticallyWhenQuestionsAreExhausted() throws Exception {
+        SessionState state = new SessionState(SessionId.of("s-off-end"));
+        state.applyModeUpdate(ModeType.CONTINUOUS, 3);
+        when(sessionUseCase.getOrCreate("s-off-end")).thenReturn(state);
+        NextQuestion skipped = new NextQuestion();
+        skipped.setSkipped(true);
+        when(questionUseCase.nextQuestion("s-off-end")).thenReturn(
+                question("q-1", "question-1", "g-1", "travel"),
+                skipped
+        );
+        VoiceSessionOpenCommand command = openCommand("s-off-end");
+        command.setFeedbackEnabled(false);
+
+        String voiceSessionId = useCase.open(command);
+        List<EventRecord> events = new ArrayList<>();
+        useCase.registerSink(voiceSessionId, capture(events));
+        events.clear();
+        useCase.appendAudio(audioChunk(voiceSessionId));
+
+        int stoppedIndex = firstIndex(events, event -> "session.stopped".equals(event.type()));
+        assertTrue(stoppedIndex >= 0);
+        assertEquals("question_exhausted", String.valueOf(events.get(stoppedIndex).payload().get("reason")).toLowerCase());
+        assertEquals(-1, firstIndex(events, event -> "feedback.final".equals(event.type())));
+    }
+
+    @Test
+    void claudeModel_usesFeedbackApiKeyAndAnthropicProviderForFeedback() throws Exception {
+        SessionState state = new SessionState(SessionId.of("s-claude"));
+        state.applyModeUpdate(ModeType.IMMEDIATE, null);
+        when(sessionUseCase.getOrCreate("s-claude")).thenReturn(state);
+        when(questionUseCase.nextQuestion("s-claude")).thenReturn(
+                question("q-1", "question-1", "g-1", "travel"),
+                question("q-2", "question-2", "g-2", "hobby")
+        );
+        VoiceSessionOpenCommand command = openCommand("s-claude");
+        command.setFeedbackModel("claude-opus-5-5");
+        command.setFeedbackApiKey("sk-ant-key");
+
+        String voiceSessionId = useCase.open(command);
+        useCase.registerSink(voiceSessionId, capture(new ArrayList<>()));
+        useCase.appendAudio(audioChunk(voiceSessionId));
+
+        org.mockito.ArgumentCaptor<FeedbackCommand> feedbackCommand =
+                org.mockito.ArgumentCaptor.forClass(FeedbackCommand.class);
+        verify(feedbackUseCase).generateFeedbackForTurn(
+                org.mockito.ArgumentMatchers.eq("sk-ant-key"),
+                feedbackCommand.capture(),
+                anyString(),
+                any(),
+                anyString(),
+                anyInt()
+        );
+        assertEquals("anthropic", feedbackCommand.getValue().getProvider());
+        assertEquals("claude-opus-5-5", feedbackCommand.getValue().getModel());
+        org.mockito.ArgumentCaptor<SttCommand> sttCommand = org.mockito.ArgumentCaptor.forClass(SttCommand.class);
+        verify(sttUseCase).transcribe(sttCommand.capture());
+        assertEquals("api-key", sttCommand.getValue().getApiKey());
+        verify(ttsGateway, times(3))
+                .synthesize(org.mockito.ArgumentMatchers.eq("api-key"), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void open_throws_whenClaudeModelHasNoFeedbackApiKey() {
+        VoiceSessionOpenCommand command = openCommand("s-claude-nokey");
+        command.setFeedbackModel("claude-sonnet-5-5");
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () -> useCase.open(command));
+
+        assertEquals("Anthropic API key is required for Claude feedback models", error.getMessage());
+    }
+
+    @Test
+    void open_allowsClaudeModelWithoutKey_whenFeedbackIsDisabled() {
+        SessionState state = new SessionState(SessionId.of("s-claude-off"));
+        when(sessionUseCase.getOrCreate("s-claude-off")).thenReturn(state);
+        VoiceSessionOpenCommand command = openCommand("s-claude-off");
+        command.setFeedbackModel("claude-sonnet-5-5");
+        command.setFeedbackEnabled(false);
+
+        assertNotNull(useCase.open(command));
+    }
+
     private VoiceSessionOpenCommand openCommand(String sessionId) {
         VoiceSessionOpenCommand command = new VoiceSessionOpenCommand();
         command.setSessionId(sessionId);

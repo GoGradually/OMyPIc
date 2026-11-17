@@ -5,10 +5,9 @@ import me.go_gradually.omypic.application.apikey.model.ApiKeyVerifyResult;
 import me.go_gradually.omypic.application.apikey.port.ApiKeyProbePort;
 import me.go_gradually.omypic.application.feedback.policy.FeedbackModelPolicy;
 
-import java.util.Locale;
-
 public class ApiKeyVerifyUseCase {
-    private static final String OPENAI_PROVIDER = "openai";
+    private static final String OPENAI_KEY_PREFIX = "sk-";
+    private static final String ANTHROPIC_KEY_PREFIX = "sk-ant-";
     private final ApiKeyProbePort probePort;
 
     public ApiKeyVerifyUseCase(ApiKeyProbePort probePort) {
@@ -16,13 +15,13 @@ public class ApiKeyVerifyUseCase {
     }
 
     public ApiKeyVerifyResult verify(ApiKeyVerifyCommand command) {
-        String provider = normalizeProvider(command.getProvider());
+        String provider = FeedbackModelPolicy.normalizeProvider(command.getProvider());
         String apiKey = command.getApiKey();
-        String formatError = validateFormat(apiKey);
+        String formatError = validateFormat(provider, apiKey);
         if (formatError != null) {
             return ApiKeyVerifyResult.failure(provider, formatError);
         }
-        FeedbackModelPolicy.validateOrThrow(command.getModel());
+        FeedbackModelPolicy.validateOrThrow(provider, command.getModel());
         return verifyProvider(provider, apiKey, command.getModel());
     }
 
@@ -40,21 +39,16 @@ public class ApiKeyVerifyUseCase {
         return message == null || message.isBlank() ? "Provider verification failed" : message;
     }
 
-    private String normalizeProvider(String provider) {
-        if (provider == null || provider.isBlank()) {
-            throw new IllegalArgumentException("Provider is required");
-        }
-        String normalized = provider.trim().toLowerCase(Locale.ROOT);
-        if (!OPENAI_PROVIDER.equals(normalized)) {
-            throw new IllegalArgumentException("Unsupported provider: only openai is allowed");
-        }
-        return normalized;
-    }
-
-    private String validateFormat(String apiKey) {
+    private String validateFormat(String provider, String apiKey) {
         if (apiKey == null || apiKey.isBlank()) {
             return "API key is required";
         }
-        return apiKey.startsWith("sk-") ? null : "OpenAI key must start with sk-";
+        if (FeedbackModelPolicy.ANTHROPIC_PROVIDER.equals(provider)) {
+            return apiKey.startsWith(ANTHROPIC_KEY_PREFIX) ? null : "Anthropic key must start with sk-ant-";
+        }
+        if (apiKey.startsWith(ANTHROPIC_KEY_PREFIX)) {
+            return "This looks like an Anthropic key. Save it as the Claude API key instead.";
+        }
+        return apiKey.startsWith(OPENAI_KEY_PREFIX) ? null : "OpenAI key must start with sk-";
     }
 }

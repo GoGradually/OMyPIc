@@ -29,6 +29,7 @@ public class MetaController {
         return new ModelMetaResponse(
                 feedbackModels,
                 resolveDefault(voicePolicy.voiceFeedbackModel(), feedbackModels),
+                feedbackProviders(),
                 sttModels,
                 resolveDefault(voicePolicy.voiceSttModel(), sttModels),
                 ttsModels,
@@ -38,6 +39,19 @@ public class MetaController {
                 feedbackLanguages,
                 resolveDefault(voicePolicy.voiceFeedbackLanguage(), feedbackLanguages)
         );
+    }
+
+    private List<ModelMetaResponse.FeedbackProviderMeta> feedbackProviders() {
+        return FeedbackModelPolicy.supportedProviders().stream()
+                .map(this::feedbackProvider)
+                .toList();
+    }
+
+    private ModelMetaResponse.FeedbackProviderMeta feedbackProvider(String provider) {
+        List<String> models = FeedbackModelPolicy.supportedModels(provider);
+        String configured = voicePolicy.voiceFeedbackModel();
+        String defaultModel = models.contains(configured) ? configured : FeedbackModelPolicy.defaultModel(provider);
+        return new ModelMetaResponse.FeedbackProviderMeta(provider, models, defaultModel);
     }
 
     private String resolveDefault(String configured, List<String> supported) {

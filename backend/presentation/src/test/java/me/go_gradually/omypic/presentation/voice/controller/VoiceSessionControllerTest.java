@@ -64,6 +64,33 @@ class VoiceSessionControllerTest {
     }
 
     @Test
+    void open_passesFeedbackProviderKeyAndAiToggle() throws Exception {
+        when(voiceSessionUseCase.open(any())).thenReturn("voice-2");
+
+        mockMvc.perform(post("/api/voice/sessions")
+                        .header("X-API-Key", "openai-key")
+                        .header("X-Feedback-API-Key", "sk-ant-key")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "sessionId":"s2",
+                                  "feedbackModel":"claude-opus-5-5",
+                                  "feedbackProvider":"anthropic",
+                                  "feedbackEnabled":false
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.voiceSessionId").value("voice-2"));
+
+        ArgumentCaptor<VoiceSessionOpenCommand> captor = ArgumentCaptor.forClass(VoiceSessionOpenCommand.class);
+        verify(voiceSessionUseCase).open(captor.capture());
+        assertEquals("openai-key", captor.getValue().getApiKey());
+        assertEquals("sk-ant-key", captor.getValue().getFeedbackApiKey());
+        assertEquals("anthropic", captor.getValue().getFeedbackProvider());
+        assertEquals(Boolean.FALSE, captor.getValue().getFeedbackEnabled());
+    }
+
+    @Test
     void appendAudio_returnsNoContent() throws Exception {
         mockMvc.perform(post("/api/voice/sessions/voice-1/audio-chunks")
                         .contentType(MediaType.APPLICATION_JSON)
