@@ -87,15 +87,27 @@ describe('ModelSettingsOverlay', () => {
         expect(screen.getByLabelText('음성 스타일').disabled).toBe(true)
     })
 
-    it('disables every model choice while AI is off', () => {
+    it('explains the wait and the download when the local Kokoro voice is selected', () => {
+        render(<ModelSettingsOverlay {...buildProps({
+            ttsModel: 'local-kokoro',
+            ttsModelOptions: ['gpt-4o-mini-tts', 'device-voice', 'local-kokoro']
+        })} />)
+
+        expect(screen.getByRole('option', {name: '로컬 Kokoro (무료, 원어민 영어)'})).toBeTruthy()
+        expect(screen.getByText(/원어민 발음의 영어 음성을 이 기기에서 합성합니다/)).toBeTruthy()
+        expect(screen.getByLabelText('음성 스타일').disabled).toBe(true)
+    })
+
+    it('disables the API model choices while AI is off but keeps the free voice choice', () => {
         const setAiEnabled = vi.fn()
         render(<ModelSettingsOverlay {...buildProps({aiEnabled: false, setAiEnabled})} />)
 
         expect(screen.getByLabelText('피드백 모델').disabled).toBe(true)
         expect(screen.getByLabelText('피드백 언어').disabled).toBe(true)
         expect(screen.getByLabelText('STT 모델').disabled).toBe(true)
-        expect(screen.getByLabelText('TTS 모델').disabled).toBe(true)
-        expect(screen.getByText('AI를 끄면 질문을 기기 내장 음성으로 읽어 드립니다.')).toBeTruthy()
+        // The TTS choice stays: AI off still reads questions aloud with a free local voice.
+        expect(screen.getByLabelText('TTS 모델').disabled).toBe(false)
+        expect(screen.getByText(/AI를 끄면 질문을 기기 내장 음성으로 읽어 드립니다/)).toBeTruthy()
         fireEvent.click(screen.getByRole('switch', {name: 'AI 사용'}))
         expect(setAiEnabled).toHaveBeenCalledWith(true)
     })

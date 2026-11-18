@@ -1,6 +1,7 @@
 // Free speech options that run on the learner's device instead of calling an API.
 export const LOCAL_STT_MODEL = 'local-whisper'
 export const DEVICE_TTS_MODEL = 'device-voice'
+export const LOCAL_TTS_MODEL = 'local-kokoro'
 
 export const MODEL_LABELS = {
     'gpt-5-mini': 'gpt-5-mini (균형형)',
@@ -21,7 +22,8 @@ export const MODEL_LABELS = {
     'gpt-4o-mini-tts': 'gpt-4o-mini-tts (기본)',
     'tts-1-hd': 'tts-1-hd (품질 우선)',
     'tts-1': 'tts-1 (속도 우선)',
-    'device-voice': '기기 내장 음성 (무료)'
+    'device-voice': '기기 내장 음성 (무료)',
+    'local-kokoro': '로컬 Kokoro (무료, 원어민 영어)'
 }
 
 export const FEEDBACK_PROVIDER_LABELS = {

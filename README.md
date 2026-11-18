@@ -149,7 +149,7 @@ Intel Mac용 DMG는 워크플로에 포함되어 있지 않습니다. 필요하�
   - `X-Feedback-API-Key`: Claude API Key. Claude 피드백 모델을 선택하고 AI가 켜져 있을 때만 전송합니다.
 - 키가 필요 없는 조합:
   - AI를 끈 세션: 키가 전혀 필요 없습니다.
-  - Claude 피드백 + 로컬 Whisper(STT) + 기기 내장 음성(TTS): Claude 키만 필요합니다.
+  - Claude 피드백 + 로컬 Whisper(STT) + 기기 내장 음성 또는 로컬 Kokoro(TTS): Claude 키만 필요합니다.
 - 설정 화면의 `저장 + 검증`은 두 키를 각각 해당 공급자에 확인합니다. Claude 키는 모델 조회(`GET /v1/models/{id}`)로 확인하므로 토큰을 쓰지 않습니다.
 
 ## 8) 피드백 모델 지원 범위
@@ -192,6 +192,7 @@ Claude API에는 음성 인식/합성 기능이 없습니다. 그래서 STT/TTS�
 | `local-whisper` | STT | 기기(앱 안에서 Whisper 실행) | 무료 |
 | `gpt-4o-mini-tts`, `tts-1-hd`, `tts-1` | TTS | OpenAI API | 유료 |
 | `device-voice` | TTS | 기기(운영체제 내장 음성) | 무료 |
+| `local-kokoro` | TTS | 기기(앱 안에서 Kokoro 실행) | 무료 |
 
 - `local-whisper`
   - 렌더러의 Web Worker에서 `@huggingface/transformers`(ONNX Runtime WebAssembly)로 Whisper를 실행합니다.
@@ -202,17 +203,26 @@ Claude API에는 음성 인식/합성 기능이 없습니다. 그래서 STT/TTS�
     - `VITE_OMYPIC_LOCAL_STT_MODEL` (기본값: `Xenova/whisper-base.en`)
     - `VITE_OMYPIC_LOCAL_STT_HOST` (기본값: Hugging Face. 사내 미러나 앱에 동봉한 모델 경로를 지정할 때 사용)
     - `VITE_OMYPIC_LOCAL_STT_PATH_TEMPLATE` (기본값: `{model}/`, `VITE_OMYPIC_LOCAL_STT_HOST`를 지정했을 때만 적용)
+- 기기에서 읽어 주기(`device-voice`, `local-kokoro`, AI OFF 세션)
+  - 서버는 오디오 대신 읽을 문장을 `tts.text` 이벤트로 보내고, 앱이 문장 단위로 읽습니다.
+  - 문장마다 언어를 판별해 그 언어의 음성으로만 읽습니다. 영어 문장을 한국어 음성으로 읽지 않습니다.
+  - 읽을 수단이 전혀 없으면 세션을 끊지 않고 질문을 화면으로만 보여 준 뒤 답변을 받습니다.
 - `device-voice`
-  - 서버는 오디오 대신 읽을 문장을 `tts.text` 이벤트로 보내고, 앱이 Web Speech(`speechSynthesis`)로 읽습니다.
-  - 문장 단위로 나눠 읽고, 문장 언어(영어/한국어)에 맞는 음성을 고릅니다.
-  - 기기에 쓸 수 있는 음성이 없으면 세션을 끊지 않고 질문을 화면으로만 보여 준 뒤 답변을 받습니다.
+  - 운영체제에 설치된 음성(Web Speech `speechSynthesis`)으로 바로 읽습니다.
+  - 기기에 영어 음성이 없으면(한국어 Windows 기본 상태 등) 영어 문장만 `local-kokoro`로 읽습니다. 이때 세션 시작 시 모델을 준비합니다.
+  - 운영체제에 영어 음성을 설치하면 기다림 없이 읽습니다(Windows: 설정 > 시간 및 언어 > 음성 > 음성 추가에서 영어(미국)).
+- `local-kokoro`
+  - 영어 문장을 Kokoro 모델(`kokoro-js`, ONNX Runtime WebAssembly)로 합성해 원어민 발음으로 읽습니다. 한국어 문장은 기기 내장 음성으로 읽습니다.
+  - 처음 사용할 때 모델(약 90MB)과 음성 파일을 Hugging Face에서 내려받습니다.
+  - CPU에서 합성하므로 문장을 준비하는 데 시간이 걸립니다. 문장이 도착하는 즉시 합성을 시작하고, 같은 문장은 다시 합성하지 않습니다(질문 두 번째 재생은 즉시).
+  - 빌드 시 환경 변수: `VITE_OMYPIC_LOCAL_TTS_MODEL`(기본값 `onnx-community/Kokoro-82M-v1.0-ONNX`), `VITE_OMYPIC_LOCAL_TTS_VOICE`(기본값 `af_heart`), `VITE_OMYPIC_LOCAL_TTS_HOST`, `VITE_OMYPIC_LOCAL_TTS_PATH_TEMPLATE`.
 
 ### AI ON/OFF
 
 - 실전 연습 화면과 설정 화면의 `AI` 스위치로 전환하며, 다음 세션 시작부터 적용됩니다.
 - OFF로 시작한 세션은 어떤 API도 호출하지 않습니다.
   - 음성 인식(STT)과 피드백 생성(부트스트랩/룰북 프리페치/오답노트 기록 포함)을 하지 않습니다.
-  - 질문은 기기 내장 음성(`device-voice`)으로 읽어 줍니다. 선택한 TTS 모델과 무관합니다.
+  - 질문은 기기에서 읽어 줍니다. TTS 모델이 `local-kokoro`면 Kokoro로, 그 밖에는 기기 내장 음성으로 읽습니다(영어 음성이 없으면 Kokoro).
   - API Key 없이 시작할 수 있습니다(`X-API-Key` 헤더 불필요).
   - 답변 녹음은 기기에만 남습니다. 서버에는 오디오를 올리지 않고 답변 종료 신호만 보냅니다.
   - 흐름: `질문 읽어 주기 -> 답변 녹음 -> (내 응답 자동 재생) -> 다음 질문`.

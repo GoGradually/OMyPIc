@@ -1,5 +1,5 @@
-// Speaks text with the voice built into the device (Web Speech synthesis).
-// It calls no API and costs nothing; quality depends on the voices the OS provides.
+// The voice built into the device (Web Speech synthesis). It calls no API and costs nothing;
+// which languages it can speak depends on the voices installed in the OS.
 
 const VOICE_WAIT_MS = 1500
 const START_WATCHDOG_MS = 5000
@@ -34,21 +34,32 @@ export function splitForSpeech(text) {
     return chunks
 }
 
-// Questions are English; feedback may be Korean. Each sentence gets a voice for its own language.
+// Questions are English; feedback may be Korean. Each sentence is spoken in its own language.
 export function detectSpeechLang(text) {
     return /[ㄱ-ㆎ가-힣]/.test(text) ? 'ko-KR' : 'en-US'
 }
 
+/**
+ * Picks a voice of the sentence's language, or null when the device has none.
+ * A voice of another language is never returned: a Korean voice reading an English question
+ * produces Korean-accented English, which defeats the listening practice.
+ */
 export function pickVoice(voices, lang) {
     const language = lang.slice(0, 2).toLowerCase()
-    const candidates = voices.filter((voice) => (voice.lang || '').toLowerCase().startsWith(language))
-    return candidates.find((voice) => (voice.lang || '').toLowerCase() === lang.toLowerCase() && voice.localService)
+    const candidates = voices.filter((voice) => (voice.lang || '').toLowerCase().replace('_', '-').startsWith(language))
+    const exact = candidates.filter((voice) => (voice.lang || '').toLowerCase().replace('_', '-') === lang.toLowerCase())
+    return exact.find((voice) => voice.localService)
+        || exact[0]
         || candidates.find((voice) => voice.localService)
         || candidates[0]
         || null
 }
 
-function loadVoices() {
+/** Voices installed on this device. Empty when there is no speech engine. */
+export function loadDeviceVoices() {
+    if (!isDeviceVoiceSupported()) {
+        return Promise.resolve([])
+    }
     const synth = window.speechSynthesis
     const ready = synth.getVoices()
     if (ready.length > 0) {
@@ -71,74 +82,40 @@ function loadVoices() {
 }
 
 /**
- * Speaks the text and calls onEnd when it finished, or onUnavailable when this device cannot
- * speak it (no speech engine, no voice, or the engine never started).
- * Returns a function that cancels the speech without calling either callback.
+ * Speaks one sentence with the given voice. Resolves true when it was spoken to the end and
+ * false when the engine failed or never started. cancel() stops it and resolves false.
  */
-export function speakWithDeviceVoice(text, {onEnd, onUnavailable} = {}) {
-    let cancelled = false
+export function speakSentence(sentence, voice) {
+    let finish = () => {
+    }
     let watchdog = null
-    const settle = (callback) => {
-        if (cancelled) {
-            return
-        }
-        cancelled = true
-        clearTimeout(watchdog)
-        callback?.()
-    }
-    const cancel = () => {
-        const wasActive = !cancelled
-        cancelled = true
-        clearTimeout(watchdog)
-        if (wasActive && isDeviceVoiceSupported()) {
-            window.speechSynthesis.cancel()
-        }
-    }
-
-    if (!isDeviceVoiceSupported()) {
-        Promise.resolve().then(() => settle(onUnavailable))
-        return cancel
-    }
-
-    loadVoices().then((voices) => {
-        const chunks = splitForSpeech(text)
-        if (cancelled) {
-            return
-        }
-        if (voices.length === 0 || chunks.length === 0) {
-            settle(chunks.length === 0 ? onEnd : onUnavailable)
-            return
-        }
-        const speakChunk = (index) => {
-            if (cancelled) {
+    const done = new Promise((resolve) => {
+        let settled = false
+        finish = (spoken) => {
+            if (settled) {
                 return
             }
-            if (index >= chunks.length) {
-                settle(onEnd)
-                return
-            }
-            const lang = detectSpeechLang(chunks[index])
-            const utterance = new window.SpeechSynthesisUtterance(chunks[index])
-            const voice = pickVoice(voices, lang)
-            utterance.lang = voice?.lang || lang
-            if (voice) {
-                utterance.voice = voice
-            }
-            utterance.onstart = () => clearTimeout(watchdog)
-            utterance.onend = () => speakChunk(index + 1)
-            utterance.onerror = () => {
-                // The first sentence failing means nothing was heard; later failures just end early.
-                settle(index === 0 ? onUnavailable : onEnd)
-            }
+            settled = true
             clearTimeout(watchdog)
-            watchdog = setTimeout(() => {
-                window.speechSynthesis.cancel()
-                settle(index === 0 ? onUnavailable : onEnd)
-            }, START_WATCHDOG_MS)
-            window.speechSynthesis.speak(utterance)
+            resolve(spoken)
         }
-        window.speechSynthesis.cancel()
-        speakChunk(0)
     })
-    return cancel
+    const utterance = new window.SpeechSynthesisUtterance(sentence)
+    utterance.voice = voice
+    utterance.lang = voice.lang
+    utterance.onstart = () => clearTimeout(watchdog)
+    utterance.onend = () => finish(true)
+    utterance.onerror = () => finish(false)
+    watchdog = setTimeout(() => {
+        window.speechSynthesis.cancel()
+        finish(false)
+    }, START_WATCHDOG_MS)
+    window.speechSynthesis.speak(utterance)
+    return {
+        done,
+        cancel: () => {
+            window.speechSynthesis.cancel()
+            finish(false)
+        }
+    }
 }

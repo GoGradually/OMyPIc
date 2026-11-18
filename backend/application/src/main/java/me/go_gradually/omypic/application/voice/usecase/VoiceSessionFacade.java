@@ -965,8 +965,8 @@ final class VoiceSessionFacade {
     }
 
     /**
-     * Device voice (and every AI-off session): the client speaks this text with the built-in
-     * voice of the device, so no synthesis API is called.
+     * Client-side TTS (and every AI-off session): the client reads this text aloud on the
+     * device, so no synthesis API is called.
      */
     private void emitSpeechText(RuntimeContext context, long turnId, String phase, String text) {
         context.emit("tts.text", Map.of(
@@ -1189,7 +1189,7 @@ final class VoiceSessionFacade {
 
         /** The server calls the speech synthesis API only for AI-on sessions with a hosted TTS model. */
         private boolean serverTts() {
-            return aiEnabled && !VoiceModelCatalog.isDeviceTts(ttsModel);
+            return aiEnabled && !VoiceModelCatalog.isClientTts(ttsModel);
         }
 
         private boolean usesAnthropicFeedback() {

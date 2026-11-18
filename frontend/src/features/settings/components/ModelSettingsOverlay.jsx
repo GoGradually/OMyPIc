@@ -4,7 +4,8 @@ import {
     FEEDBACK_LANGUAGE_LABELS,
     getModelLabel,
     getProviderLabel,
-    LOCAL_STT_MODEL
+    LOCAL_STT_MODEL,
+    LOCAL_TTS_MODEL
 } from '../../../shared/constants/models.js'
 
 function ModelOptions({models}) {
@@ -82,8 +83,10 @@ export function ModelSettingsOverlay({
         : ['ko', 'en']
     const usesClaude = feedbackProvider === 'anthropic'
     const usesLocalStt = aiEnabled && voiceSttModel === LOCAL_STT_MODEL
-    // AI off always reads questions with the device voice, whatever TTS model is selected.
-    const usesDeviceVoice = !aiEnabled || ttsModel === DEVICE_TTS_MODEL
+    const usesKokoro = ttsModel === LOCAL_TTS_MODEL
+    // AI off reads questions on this device: with Kokoro if it is selected, else the device voice.
+    const usesDeviceVoice = !usesKokoro && (!aiEnabled || ttsModel === DEVICE_TTS_MODEL)
+    const usesLocalSpeech = usesKokoro || usesDeviceVoice
 
     return (
         <div className="overlay-content settings">
@@ -183,15 +186,19 @@ export function ModelSettingsOverlay({
                             id="tts-model"
                             value={ttsModel}
                             onChange={(event) => setTtsModel(event.target.value)}
-                            disabled={!aiEnabled}
                         >
                             <ModelOptions models={ttsModelOptions}/>
                         </select>
                         {usesDeviceVoice && (
                             <p className="tiny-meta">
                                 {aiEnabled
-                                    ? '운영체제에 설치된 음성으로 읽습니다. 음질은 기기마다 다릅니다.'
-                                    : 'AI를 끄면 질문을 기기 내장 음성으로 읽어 드립니다.'}
+                                    ? '운영체제에 설치된 음성으로 바로 읽습니다. 영어 음성이 없는 기기에서는 영어만 로컬 Kokoro로 읽습니다.'
+                                    : 'AI를 끄면 질문을 기기 내장 음성으로 읽어 드립니다. 영어 음성이 없으면 로컬 Kokoro로 읽습니다.'}
+                            </p>
+                        )}
+                        {usesKokoro && (
+                            <p className="tiny-meta">
+                                원어민 발음의 영어 음성을 이 기기에서 합성합니다. 처음 한 번 모델(약 90MB)을 내려받고, 문장을 준비하는 데 몇 초에서 수십 초가 걸립니다.
                             </p>
                         )}
                     </div>
@@ -201,7 +208,7 @@ export function ModelSettingsOverlay({
                             id="tts-voice"
                             value={voice}
                             onChange={(event) => setVoice(event.target.value)}
-                            disabled={usesDeviceVoice}
+                            disabled={usesLocalSpeech}
                         >
                             {voiceOptions.map((item) => (
                                 <option key={item} value={item}>{item}</option>
@@ -241,7 +248,7 @@ export function ModelSettingsOverlay({
                 <h3 id="settings-cost">비용 안내</h3>
                 <p className="tiny-meta">기본 설정(gpt-5-nano) 기준으로 세션 1회당 약 50원이 사용됩니다.</p>
                 <p className="tiny-meta">실제 비용은 발화 길이와 선택 모델에 따라 달라질 수 있습니다.</p>
-                <p className="tiny-meta">로컬 Whisper와 기기 내장 음성은 무료입니다. AI를 끄면 어떤 API도 호출하지 않습니다.</p>
+                <p className="tiny-meta">로컬 Whisper, 로컬 Kokoro, 기기 내장 음성은 무료입니다. AI를 끄면 어떤 API도 호출하지 않습니다.</p>
             </section>
 
             <section className="settings__group" aria-labelledby="settings-data">

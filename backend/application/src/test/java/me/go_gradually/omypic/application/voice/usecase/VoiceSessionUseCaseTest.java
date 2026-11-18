@@ -625,6 +625,24 @@ class VoiceSessionUseCaseTest {
     }
 
     @Test
+    void localKokoro_isSpokenByTheClientLikeTheDeviceVoice() throws Exception {
+        SessionState state = new SessionState(SessionId.of("s-kokoro"));
+        when(sessionUseCase.getOrCreate("s-kokoro")).thenReturn(state);
+        when(questionUseCase.nextQuestion("s-kokoro"))
+                .thenReturn(question("q-1", "question-1", "g-1", "travel"));
+        VoiceSessionOpenCommand command = openCommand("s-kokoro");
+        command.setTtsModel("local-kokoro");
+
+        String voiceSessionId = useCase.open(command);
+        List<EventRecord> events = new ArrayList<>();
+        useCase.registerSink(voiceSessionId, capture(events));
+
+        int speechIndex = firstIndex(events, event -> "tts.text".equals(event.type()));
+        assertEquals("question-1", events.get(speechIndex).payload().get("text"));
+        verify(ttsGateway, never()).synthesize(any(), any(), any(), any());
+    }
+
+    @Test
     void localStt_takesTheTranscriptFromTheClientAndNeverCallsTheSttApi() throws Exception {
         SessionState state = new SessionState(SessionId.of("s-local"));
         state.applyModeUpdate(ModeType.IMMEDIATE, null);

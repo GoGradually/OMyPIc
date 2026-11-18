@@ -1,12 +1,12 @@
 import {useCallback, useRef} from 'react'
 import {fromBase64} from '../../../shared/utils/audioCodec.js'
-import {speakWithDeviceVoice} from '../local/deviceVoice.js'
+import {prepareLocalSpeech, speakLocally} from '../local/localSpeech.js'
 
 const QUESTION_REPEAT_DELAY_MS = 3000
 
 /**
  * Plays session speech in order. An item is either audio synthesized by the server (tts.audio)
- * or text the device voice reads aloud (tts.text). Questions play twice, 3 seconds apart, and the
+ * or text read aloud on this device (tts.text). Questions play twice, 3 seconds apart, and the
  * answer window opens after the second pass.
  */
 export function useTtsPlaybackQueue({
@@ -15,6 +15,8 @@ export function useTtsPlaybackQueue({
                                         onQuestionPlaybackCompleted,
                                         onTtsFailure,
                                         onDeviceVoiceUnavailable,
+                                        onLocalSpeechNotice,
+                                        getSpeechEngine,
                                         speechState
                                     }) {
     const ttsPlaybackQueueRef = useRef([])
@@ -91,7 +93,9 @@ export function useTtsPlaybackQueue({
 
         if (nextItem.speechText) {
             ttsPlayingRef.current = true
-            ttsCancelSpeechRef.current = speakWithDeviceVoice(nextItem.speechText, {
+            ttsCancelSpeechRef.current = speakLocally(nextItem.speechText, {
+                engine: getSpeechEngine?.(),
+                onNotice: onLocalSpeechNotice,
                 onEnd: () => {
                     ttsCancelSpeechRef.current = null
                     completeItem()
@@ -137,7 +141,9 @@ export function useTtsPlaybackQueue({
             finishPlayback({failed: true})
         })
     }, [
+        getSpeechEngine,
         onDeviceVoiceUnavailable,
+        onLocalSpeechNotice,
         onQuestionPlaybackCompleted,
         onTtsFailure,
         resetPendingAudio,
@@ -151,6 +157,11 @@ export function useTtsPlaybackQueue({
         const speechText = data?.deviceVoice ? (data?.text || '').trim() : ''
         if (!audioBase64 && !speechText) {
             return
+        }
+        if (speechText) {
+            // Synthesis can take a while; start now so it is ready when this item's turn comes.
+            prepareLocalSpeech(speechText, getSpeechEngine?.()).catch(() => {
+            })
         }
         const parsedSequence = Number(data?.sequence)
         const sequence = Number.isFinite(parsedSequence) ? parsedSequence : null
@@ -193,7 +204,7 @@ export function useTtsPlaybackQueue({
             return left.order - right.order
         })
         playNextTtsAudio()
-    }, [playNextTtsAudio])
+    }, [getSpeechEngine, playNextTtsAudio])
 
     return {
         clearTtsPlayback,

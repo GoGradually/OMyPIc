@@ -16,6 +16,7 @@ import {
     getModeSummary,
     getProviderLabel,
     LOCAL_STT_MODEL,
+    LOCAL_TTS_MODEL,
     PANEL_TITLES
 } from '../../shared/constants/models.js'
 import {readPreference, writePreference} from '../../shared/utils/preferences.js'
@@ -436,9 +437,9 @@ export function useAppViewModel() {
     }, [])
 
     const usesLocalStt = voiceSttModel === LOCAL_STT_MODEL
-    const usesDeviceVoice = !aiEnabled || ttsModel === DEVICE_TTS_MODEL
+    const usesLocalSpeech = !aiEnabled || ttsModel === DEVICE_TTS_MODEL || ttsModel === LOCAL_TTS_MODEL
     const needsOpenAiKey = aiEnabled
-        && (!usesLocalStt || !usesDeviceVoice || feedbackProvider === OPENAI_PROVIDER)
+        && (!usesLocalStt || !usesLocalSpeech || feedbackProvider === OPENAI_PROVIDER)
 
     const handleStartSession = useCallback(async () => {
         try {
@@ -486,13 +487,16 @@ export function useAppViewModel() {
     const stageAiEnabled = sessionActive ? sessionAiEnabled : aiEnabled
     const feedbackSummary = aiEnabled ? getModelLabel(feedbackModel) : '꺼짐'
 
+    // AI off still reads questions aloud: with the selected local model, or else the device voice.
+    const localSpeechModel = aiEnabled || ttsModel === LOCAL_TTS_MODEL ? ttsModel : DEVICE_TTS_MODEL
+
     const statusDetails = {
         sessionIdPrefix: sessionId.slice(0, 8),
         audioPermissionLabel,
         audioInputCount: audioDeviceStatus.inputCount,
         voiceSttModel: aiEnabled ? voiceSttModel : '꺼짐',
         feedbackModel: aiEnabled ? feedbackModel : '꺼짐',
-        ttsModel: aiEnabled ? ttsModel : DEVICE_TTS_MODEL
+        ttsModel: localSpeechModel
     }
 
     const rulebookProps = {

@@ -13,6 +13,11 @@ public final class VoiceModelCatalog {
      * The server sends the text to speak instead of audio.
      */
     public static final String DEVICE_TTS_MODEL = "device-voice";
+    /**
+     * Speech synthesis by a model that runs on the learner's device (no API, no cost).
+     * Like the device voice, the server sends the text to speak instead of audio.
+     */
+    public static final String LOCAL_TTS_MODEL = "local-kokoro";
 
     private static final List<String> STT_MODELS = List.of(
             "gpt-4o-transcribe",
@@ -24,7 +29,8 @@ public final class VoiceModelCatalog {
             "gpt-4o-mini-tts",
             "tts-1-hd",
             "tts-1",
-            DEVICE_TTS_MODEL
+            DEVICE_TTS_MODEL,
+            LOCAL_TTS_MODEL
     );
     private static final List<String> TTS_VOICES = List.of(
             "alloy",
@@ -45,8 +51,10 @@ public final class VoiceModelCatalog {
         return LOCAL_STT_MODEL.equalsIgnoreCase(model == null ? "" : model.trim());
     }
 
-    public static boolean isDeviceTts(String model) {
-        return DEVICE_TTS_MODEL.equalsIgnoreCase(model == null ? "" : model.trim());
+    /** True for TTS models the client speaks itself: the device voice and the on-device model. */
+    public static boolean isClientTts(String model) {
+        String candidate = model == null ? "" : model.trim();
+        return DEVICE_TTS_MODEL.equalsIgnoreCase(candidate) || LOCAL_TTS_MODEL.equalsIgnoreCase(candidate);
     }
 
     public static List<String> supportedSttModels() {

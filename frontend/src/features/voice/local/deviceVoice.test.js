@@ -1,6 +1,12 @@
 /** @vitest-environment jsdom */
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
-import {detectSpeechLang, pickVoice, speakWithDeviceVoice, splitForSpeech} from './deviceVoice.js'
+import {
+    detectSpeechLang,
+    loadDeviceVoices,
+    pickVoice,
+    speakSentence,
+    splitForSpeech
+} from './deviceVoice.js'
 
 const VOICES = [
     {name: 'Remote English', lang: 'en-GB', localService: false},
@@ -45,78 +51,70 @@ describe('device voice', () => {
         expect(splitForSpeech('   ')).toEqual([])
     })
 
-    it('chooses a voice that matches the language of the sentence', () => {
+    it('detects the language of a sentence', () => {
         expect(detectSpeechLang('Tell me about your home.')).toBe('en-US')
         expect(detectSpeechLang('과거 시제를 써야 합니다.')).toBe('ko-KR')
+    })
+
+    it('chooses a voice of the same language', () => {
         expect(pickVoice(VOICES, 'en-US').name).toBe('Local English')
         expect(pickVoice(VOICES, 'ko-KR').name).toBe('Local Korean')
-        expect(pickVoice(VOICES, 'ja-JP')).toBeNull()
+        expect(pickVoice([{name: 'UK', lang: 'en_GB', localService: true}], 'en-US').name).toBe('UK')
     })
 
-    it('speaks sentence by sentence and reports the end once', async () => {
-        const onEnd = vi.fn()
-        speakWithDeviceVoice('First sentence. 두 번째 문장입니다.', {onEnd})
-        await Promise.resolve()
+    it('never hands an English sentence to a voice of another language', () => {
+        const koreanOnly = [{name: 'Heami', lang: 'ko-KR', localService: true}]
 
-        expect(spoken.length).toBe(1)
+        expect(pickVoice(koreanOnly, 'en-US')).toBeNull()
+        expect(pickVoice(koreanOnly, 'ko-KR').name).toBe('Heami')
+    })
+
+    it('lists no voices when the device has no speech engine', async () => {
+        delete window.speechSynthesis
+
+        expect(await loadDeviceVoices()).toEqual([])
+    })
+
+    it('waits for voices that load late', async () => {
+        vi.useFakeTimers()
+        let voices = []
+        installSpeech(voices)
+        window.speechSynthesis.getVoices = () => voices
+
+        const pending = loadDeviceVoices()
+        voices = VOICES
+        await vi.advanceTimersByTimeAsync(1500)
+
+        expect(await pending).toEqual(VOICES)
+    })
+
+    it('speaks a sentence with the chosen voice and reports that it was heard', async () => {
+        const speech = speakSentence('First sentence.', VOICES[1])
+
         expect(spoken[0].text).toBe('First sentence.')
         expect(spoken[0].voice.name).toBe('Local English')
+        expect(spoken[0].lang).toBe('en-US')
         spoken[0].onend()
-        expect(spoken[1].text).toBe('두 번째 문장입니다.')
-        expect(spoken[1].voice.name).toBe('Local Korean')
-        expect(onEnd).not.toHaveBeenCalled()
-        spoken[1].onend()
-        expect(onEnd).toHaveBeenCalledTimes(1)
+
+        expect(await speech.done).toBe(true)
     })
 
-    it('reports that the device cannot speak when it has no voices', async () => {
+    it('reports failure when the engine never starts speaking', async () => {
         vi.useFakeTimers()
-        installSpeech([])
-        const onEnd = vi.fn()
-        const onUnavailable = vi.fn()
+        const speech = speakSentence('Hello there.', VOICES[1])
 
-        speakWithDeviceVoice('Hello there.', {onEnd, onUnavailable})
-        await vi.advanceTimersByTimeAsync(2000)
-
-        expect(onUnavailable).toHaveBeenCalledTimes(1)
-        expect(onEnd).not.toHaveBeenCalled()
-        expect(window.speechSynthesis.speak).not.toHaveBeenCalled()
-    })
-
-    it('reports that the device cannot speak when there is no speech engine', async () => {
-        delete window.speechSynthesis
-        const onUnavailable = vi.fn()
-
-        speakWithDeviceVoice('Hello there.', {onUnavailable})
-        await Promise.resolve()
-
-        expect(onUnavailable).toHaveBeenCalledTimes(1)
-    })
-
-    it('gives up when the engine never starts speaking', async () => {
-        vi.useFakeTimers()
-        const onUnavailable = vi.fn()
-
-        speakWithDeviceVoice('Hello there.', {onUnavailable})
-        await vi.advanceTimersByTimeAsync(0)
-        expect(spoken.length).toBe(1)
         await vi.advanceTimersByTimeAsync(5000)
 
-        expect(onUnavailable).toHaveBeenCalledTimes(1)
+        expect(await speech.done).toBe(false)
+        expect(window.speechSynthesis.cancel).toHaveBeenCalled()
     })
 
-    it('stays silent after cancel', async () => {
-        const onEnd = vi.fn()
-        const onUnavailable = vi.fn()
+    it('stops when cancelled', async () => {
+        const speech = speakSentence('Hello there.', VOICES[1])
 
-        const cancel = speakWithDeviceVoice('First sentence. Second sentence.', {onEnd, onUnavailable})
-        await Promise.resolve()
-        cancel()
-        spoken[0].onend()
+        speech.cancel()
 
+        expect(await speech.done).toBe(false)
         expect(window.speechSynthesis.cancel).toHaveBeenCalled()
-        expect(spoken.length).toBe(1)
-        expect(onEnd).not.toHaveBeenCalled()
-        expect(onUnavailable).not.toHaveBeenCalled()
     })
 })

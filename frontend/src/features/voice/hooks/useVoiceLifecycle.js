@@ -29,7 +29,8 @@ import {
 } from './voiceSessionConstants.js'
 import {computeRms, joinByteChunks} from './voiceSessionAudio.js'
 import {loadLocalStt, transcribePcm16} from '../local/localStt.js'
-import {LOCAL_STT_MODEL} from '../../../shared/constants/models.js'
+import {loadLocalTts, needsLocalTtsModel, SPEECH_ENGINE} from '../local/localSpeech.js'
+import {DEVICE_TTS_MODEL, LOCAL_STT_MODEL, LOCAL_TTS_MODEL} from '../../../shared/constants/models.js'
 
 const VOICE_CHUNK_UPLOAD_TIMEOUT_MS = 3000
 const REPLAY_STATE = {
@@ -138,6 +139,7 @@ export function useVoiceLifecycle({
     const sessionSttModeRef = useRef(STT_MODE.SERVER)
     const transcribingRef = useRef(false)
     const deviceVoiceNoticeShownRef = useRef(false)
+    const sessionSpeechEngineRef = useRef(SPEECH_ENGINE.DEVICE)
     const onConnectionErrorRef = useRef(() => {
     })
 
@@ -293,8 +295,18 @@ export function useVoiceLifecycle({
             return
         }
         deviceVoiceNoticeShownRef.current = true
-        setStatus('이 기기에서 쓸 수 있는 내장 음성이 없어 질문을 화면으로만 보여 드립니다.')
+        setStatus('이 기기에서 쓸 수 있는 음성이 없어 질문을 화면으로만 보여 드립니다.')
     }, [setStatus])
+
+    const handleLocalSpeechNotice = useCallback((notice) => {
+        if (notice === 'preparing') {
+            setStatus('음성을 준비하고 있습니다. 기기에서 합성하므로 잠시 걸릴 수 있습니다.')
+        } else if (notice === 'ready') {
+            setStatus('음성을 재생합니다.')
+        }
+    }, [setStatus])
+
+    const getSpeechEngine = useCallback(() => sessionSpeechEngineRef.current, [])
 
     const {
         clearTtsPlayback,
@@ -305,6 +317,8 @@ export function useVoiceLifecycle({
         onQuestionPlaybackCompleted,
         onTtsFailure: handleTtsFailure,
         onDeviceVoiceUnavailable: handleDeviceVoiceUnavailable,
+        onLocalSpeechNotice: handleLocalSpeechNotice,
+        getSpeechEngine,
         speechState: SPEECH_STATE
     })
 
@@ -1206,6 +1220,35 @@ export function useVoiceLifecycle({
         }
     }, [setStatus])
 
+    // English needs the Kokoro model when it is selected, or when the OS has no English voice.
+    const prepareLocalTts = useCallback(async (engine) => {
+        if (!(await needsLocalTtsModel(engine))) {
+            return
+        }
+        const selected = engine === SPEECH_ENGINE.KOKORO
+        setStatus(selected
+            ? '기기에서 실행할 음성 합성 모델을 준비하고 있습니다.'
+            : '이 기기에 영어 음성이 없어, 원어민 발음으로 읽어 줄 음성 합성 모델을 준비하고 있습니다.')
+        let lastReported = -1
+        try {
+            await loadLocalTts(({progress}) => {
+                const percent = Math.floor(progress / 10) * 10
+                if (percent > lastReported) {
+                    lastReported = percent
+                    setStatus(`음성 합성 모델을 내려받는 중입니다. (${percent}%)`)
+                }
+            })
+        } catch (error) {
+            if (selected) {
+                throw new Error(
+                    `로컬 음성 합성 모델을 불러오지 못했습니다. 네트워크를 확인하거나 설정에서 TTS 모델을 바꿔 주세요. (${error?.message || '알 수 없는 오류'})`
+                )
+            }
+            // Fallback case: go on without it. Questions are still shown on screen.
+            setStatus('음성 합성 모델을 불러오지 못해 질문을 화면으로만 보여 드립니다.')
+        }
+    }, [setStatus])
+
     const startSession = useCallback(async () => {
         if (sessionActiveRef.current) {
             return
@@ -1248,6 +1291,12 @@ export function useVoiceLifecycle({
                 : (settingsRef.current.voiceSttModel === LOCAL_STT_MODEL ? STT_MODE.LOCAL : STT_MODE.SERVER)
             if (sessionSttModeRef.current === STT_MODE.LOCAL) {
                 await prepareLocalStt()
+            }
+            // Speech is read on this device when AI is off or a free local TTS model is selected.
+            const ttsModel = settingsRef.current.ttsModel
+            sessionSpeechEngineRef.current = ttsModel === LOCAL_TTS_MODEL ? SPEECH_ENGINE.KOKORO : SPEECH_ENGINE.DEVICE
+            if (!aiOn || ttsModel === LOCAL_TTS_MODEL || ttsModel === DEVICE_TTS_MODEL) {
+                await prepareLocalTts(sessionSpeechEngineRef.current)
             }
 
             const created = await openVoiceSession({
@@ -1419,6 +1468,7 @@ export function useVoiceLifecycle({
         flushPendingAudio,
         parseTurnId,
         prepareLocalStt,
+        prepareLocalTts,
         refreshAudioDeviceStatus,
         resetPendingAudio,
         resetReconnectState,
