@@ -55,7 +55,8 @@
       }
     ],
     "directories": {
-      "buildResources": "electron"
+      "buildResources": "electron",
+      "output": "release"
     },
     "artifactName": "OMyPIc-${version}-${os}-${arch}.${ext}",
     "win": {

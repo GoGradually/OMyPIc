@@ -10,6 +10,7 @@ import {pipeline} from 'node:stream/promises'
 import {spawn} from 'node:child_process'
 import extract from 'extract-zip'
 import * as tar from 'tar'
+import {copyMongoRuntime} from './mongo-runtime.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -255,12 +256,7 @@ async function copyMongoBinary() {
     const extractedRoot = await findFirstEntry(tempExtractRoot)
     const sourceBinDir = path.join(extractedRoot, 'bin')
     const targetDir = path.join(resourcesRoot, 'mongodb', 'bin')
-    await cp(sourceBinDir, targetDir, {recursive: true, force: true})
-
-    const targetBin = path.join(targetDir, process.platform === 'win32' ? 'mongod.exe' : 'mongod')
-    if (process.platform !== 'win32') {
-        await chmod(targetBin, 0o755)
-    }
+    const targetBin = await copyMongoRuntime(sourceBinDir, targetDir)
     console.log(`[prepare] mongodb binary copied: ${targetBin}`)
 }
 

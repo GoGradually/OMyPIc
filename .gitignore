@@ -1,6 +1,7 @@
 .idea
 frontend/node_modules
 frontend/dist
+frontend/release
 frontend/.cache
 frontend/electron/resources
 backend/build

@@ -61,7 +61,7 @@ OMYPIC_EMBEDDING_MODEL_VERSION=cc.ko.300.vec.gz \
 npm run electron:build
 ```
 
-산출물은 `frontend/dist/` 하위에 생성됩니다.
+산출물(설치 파일, `win-unpacked/` 등)은 `frontend/release/` 하위에 생성됩니다. `frontend/dist/`는 Vite UI 빌드 전용입니다.
 Windows 설치형은 Windows 환경에서, macOS DMG는 macOS 환경에서 빌드하는 것을 권장합니다.
 
 ## 4) 런타임 기동 순서
