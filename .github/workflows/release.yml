@@ -5,7 +5,6 @@ name: Release
 on:
   push:
     tags: ['v*']
-    branches: ['claude/lucid-cannon-j0jd9y']
   workflow_dispatch:
 
 permissions:
