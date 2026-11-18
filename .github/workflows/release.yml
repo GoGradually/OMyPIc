@@ -1,11 +1,18 @@
 name: Release
 
 # Builds the desktop installers on the OS each one targets and attaches them to a draft
-# GitHub Release. Push a version tag (for example v0.2.0) to run it; the draft is published by hand.
+# GitHub Release. The draft is published by hand.
+#   - Push a version tag (for example v0.2.0), or
+#   - run it manually with a version: the tag is then created when the draft is published.
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to draft a release for, for example 0.2.0. Leave empty to only build the installers.'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -80,7 +87,7 @@ jobs:
           retention-days: 14
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.version != ''
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -94,8 +101,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          VERSION: ${{ inputs.version }}
+          COMMIT: ${{ github.sha }}
         run: |
-          flags="--draft --verify-tag --generate-notes"
-          case "$TAG" in *-*) flags="$flags --prerelease" ;; esac
-          gh release create "$TAG" $flags --title "OMyPIc $TAG" installers/*
+          if [ "$REF_TYPE" = "tag" ]; then
+            tag="$REF_NAME"
+            flags="--verify-tag"
+          else
+            # Manual run: the tag does not exist yet. Publishing the draft creates it on this commit.
+            if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+              echo "version must look like 0.2.0 or 0.2.0-rc.1" >&2
+              exit 1
+            fi
+            tag="v$VERSION"
+            flags="--target $COMMIT"
+          fi
+          case "$tag" in *-*) flags="$flags --prerelease" ;; esac
+          gh release create "$tag" --draft --generate-notes $flags --title "OMyPIc $tag" installers/*
