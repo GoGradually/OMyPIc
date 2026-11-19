@@ -220,8 +220,14 @@ impl AppConfig {
                 .split(',')
                 .map(str::trim)
                 .filter(|origin| !origin.is_empty())
-                .map(str::to_string)
-                .collect();
+                .map(|origin| {
+                    if is_origin(origin) {
+                        Ok(origin.to_string())
+                    } else {
+                        Err(invalid("OMYPIC_ALLOWED_ORIGINS", origin))
+                    }
+                })
+                .collect::<AppResult<_>>()?;
         }
 
         let rag = &mut config.rag;
@@ -300,6 +306,43 @@ impl Env<'_> {
 
 fn invalid(name: &str, value: &str) -> AppError {
     AppError::InvalidArgument(format!("Invalid value for {name}: '{value}'"))
+}
+
+/// `scheme://host[:port]` 꼴의 origin인지 본다. 와일드카드, 경로, 쿼리, 끝의 `/`는 받지 않는다.
+/// (CORS 계층은 목록에 `*`가 있으면 시작할 때 패닉하므로 설정 단계에서 거절한다.)
+fn is_origin(text: &str) -> bool {
+    let Some((scheme, authority)) = text.split_once("://") else {
+        return false;
+    };
+    let mut scheme_chars = scheme.chars();
+    let scheme_ok = scheme_chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && scheme_chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    let (host, port) = if let Some(rest) = authority.strip_prefix('[') {
+        match rest.split_once(']') {
+            Some((host, "")) => (host, None),
+            Some((host, port)) => match port.strip_prefix(':') {
+                Some(port) => (host, Some(port)),
+                None => return false,
+            },
+            None => return false,
+        }
+    } else {
+        match authority.split_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (authority, None),
+        }
+    };
+    let host_ok = !host.is_empty()
+        && if authority.starts_with('[') {
+            host.chars().all(|c| c.is_ascii_hexdigit() || c == ':')
+        } else {
+            host.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_'))
+        };
+    let port_ok = port.is_none_or(|port| {
+        !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) && port.parse::<u16>().is_ok()
+    });
+    scheme_ok && host_ok && port_ok
 }
 
 impl DataDirProvider for AppConfig {
@@ -489,6 +532,44 @@ mod tests {
             vec!["http://localhost:3000", "tauri://localhost"],
             config.allowed_origins
         );
+    }
+
+    #[test]
+    fn allowed_origins_accept_scheme_host_and_optional_port() {
+        let config = from_map(&[(
+            "OMYPIC_ALLOWED_ORIGINS",
+            "http://localhost:5173,tauri://localhost,https://app.example.com,http://[::1]:8080",
+        )])
+        .unwrap();
+
+        assert_eq!(4, config.allowed_origins.len());
+    }
+
+    #[test]
+    fn allowed_origins_reject_wildcards_and_non_origins_naming_the_variable() {
+        for value in [
+            "*",
+            "http://localhost:5173,*",
+            "https://*.example.com",
+            "localhost:5173",
+            "http://localhost:5173/",
+            "http://localhost/path",
+            "http://",
+            "://localhost",
+            "http://localhost:",
+            "http://localhost:99999",
+            "http://local host",
+            "http://[::1",
+        ] {
+            let error = from_map(&[("OMYPIC_ALLOWED_ORIGINS", value)]).unwrap_err();
+
+            match error {
+                AppError::InvalidArgument(message) => {
+                    assert!(message.contains("OMYPIC_ALLOWED_ORIGINS"), "{message}");
+                }
+                other => panic!("expected InvalidArgument for {value}, got {other:?}"),
+            }
+        }
     }
 
     #[test]
