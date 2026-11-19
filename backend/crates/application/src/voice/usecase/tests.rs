@@ -10,7 +10,7 @@
 //!   달리 피드백은 보통 프리페치로 만들어진다. 프리페치가 없는 경우는
 //!   `feedback_searches_rulebooks_itself_when_prefetch_has_not_finished`가 따로 본다.
 
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chrono::{TimeZone, Utc};
@@ -31,6 +31,8 @@ use crate::question::usecase::QuestionUseCase;
 use crate::rulebook::usecase::RulebookUseCase;
 use crate::session::usecase::SessionUseCase;
 use crate::shared::port::AsyncExecutor;
+use crate::stt::model::VadSettings;
+use crate::stt::port::SttGateway;
 use crate::stt::usecase::SttUseCase;
 use crate::test_support::{
     DeferredExecutor, FakeFeedbackPolicy, FakeRagPolicy, FakeSttPolicy, FakeTtsGateway,
@@ -73,6 +75,8 @@ pub(super) struct Fixture {
     anthropic: Arc<ScriptedLlmClient>,
     index: Arc<InMemoryRulebookIndexPort>,
     feedback_failure: Arc<Mutex<Option<AppError>>>,
+    /// 참이면 다음 피드백 요청 하나가 패닉한다.
+    feedback_panic: Arc<AtomicBool>,
     pub(super) deps: VoiceSessionDependencies,
 }
 
@@ -83,8 +87,19 @@ impl Fixture {
 
     pub(super) fn with(policy: FakeVoicePolicy, executor: Arc<dyn AsyncExecutor>) -> Self {
         let feedback_failure: Arc<Mutex<Option<AppError>>> = Arc::new(Mutex::new(None));
-        let open_ai = Arc::new(feedback_client("openai", false, &feedback_failure));
-        let anthropic = Arc::new(feedback_client("anthropic", true, &feedback_failure));
+        let feedback_panic = Arc::new(AtomicBool::new(false));
+        let open_ai = Arc::new(feedback_client(
+            "openai",
+            false,
+            &feedback_failure,
+            &feedback_panic,
+        ));
+        let anthropic = Arc::new(feedback_client(
+            "anthropic",
+            true,
+            &feedback_failure,
+            &feedback_panic,
+        ));
         let sessions = Arc::new(InMemorySessionStorePort::new());
         let questions = Arc::new(InMemoryQuestionGroupPort::new());
         let stt = Arc::new(ScriptedSttGateway::new(vec![Ok("answer text".to_string())]));
@@ -143,6 +158,7 @@ impl Fixture {
             anthropic,
             index,
             feedback_failure,
+            feedback_panic,
             deps,
         }
     }
@@ -215,9 +231,14 @@ fn feedback_client(
     provider: &str,
     stateless: bool,
     failure: &Arc<Mutex<Option<AppError>>>,
+    panic_once: &Arc<AtomicBool>,
 ) -> ScriptedLlmClient {
     let failure = failure.clone();
+    let panic_once = panic_once.clone();
     ScriptedLlmClient::with_responder(provider, stateless, move |_| {
+        if panic_once.swap(false, Ordering::SeqCst) {
+            panic!("feedback client exploded");
+        }
         if let Some(error) = failure.lock().unwrap().clone() {
             return Err(error);
         }
@@ -1413,4 +1434,166 @@ fn user_stop_is_reported_once_with_reason() {
     let snapshot = use_case.recover(&voice_session_id, None).unwrap();
     assert!(snapshot.stopped);
     assert_eq!("user_stop", snapshot.stop_reason);
+}
+
+/// 첫 호출은 패닉하고 그 뒤로는 "answer text"를 돌려주는 STT.
+#[derive(Default)]
+struct PanicOnceStt {
+    calls: AtomicUsize,
+}
+
+impl SttGateway for PanicOnceStt {
+    fn transcribe(
+        &self,
+        _file_bytes: &[u8],
+        _model: &str,
+        _api_key: &str,
+        _translate: bool,
+        _vad_settings: &VadSettings,
+    ) -> omypic_domain::error::AppResult<String> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            panic!("stt gateway exploded");
+        }
+        Ok("answer text".to_string())
+    }
+}
+
+#[test]
+fn panic_inside_an_audio_turn_reports_session_error_and_accepts_the_next_answer() {
+    let mut f = Fixture::new();
+    f.deps.stt_use_case = Arc::new(SttUseCase::new(
+        Arc::new(PanicOnceStt::default()),
+        Arc::new(FakeSttPolicy::default()),
+        Arc::new(RecordingMetrics::new()),
+    ));
+    f.session("s1", Some(ModeType::Immediate), None, &[Q1, Q2, Q3]);
+    let use_case = f.use_case();
+    let voice_session_id = use_case.open(&open_command("s1")).unwrap();
+    let sink = Arc::new(RecordingSink::new());
+    use_case
+        .register_sink(&voice_session_id, sink.clone())
+        .unwrap();
+    sink.clear();
+
+    use_case
+        .append_audio(&audio_chunk(&voice_session_id, 1))
+        .unwrap();
+
+    let snapshot = use_case.recover(&voice_session_id, None).unwrap();
+    assert!(snapshot.active);
+    assert!(!snapshot.turn_processing);
+    let errors = sink.payloads("session.error");
+    assert_eq!(1, errors.len(), "{:?}", sink.events());
+    assert_eq!(1, errors[0]["turnId"]);
+
+    use_case
+        .append_audio(&audio_chunk(&voice_session_id, 2))
+        .unwrap();
+
+    let finals = sink.payloads("stt.final");
+    assert_eq!(1, finals.len(), "{:?}", sink.events());
+    assert_eq!(1, sink.payloads("feedback.final").len());
+    assert!(
+        !use_case
+            .recover(&voice_session_id, None)
+            .unwrap()
+            .turn_processing
+    );
+}
+
+#[test]
+fn panic_inside_a_transcript_turn_reports_session_error_and_accepts_the_next_answer() {
+    let f = Fixture::new();
+    f.session("s-local", Some(ModeType::Immediate), None, &[Q1, Q2, Q3]);
+    let use_case = f.use_case();
+    let command = VoiceSessionOpenCommand {
+        stt_model: Some("local-whisper".to_string()),
+        ..open_command("s-local")
+    };
+    let voice_session_id = use_case.open(&command).unwrap();
+    let sink = Arc::new(RecordingSink::new());
+    use_case
+        .register_sink(&voice_session_id, sink.clone())
+        .unwrap();
+    sink.clear();
+    f.feedback_panic.store(true, Ordering::SeqCst);
+
+    let first = VoiceAnswerCommand {
+        text: Some("first answer".to_string()),
+        ..answer(&voice_session_id, 1)
+    };
+    use_case.complete_answer(&first).unwrap();
+
+    assert!(
+        !use_case
+            .recover(&voice_session_id, None)
+            .unwrap()
+            .turn_processing
+    );
+    assert!(
+        !sink.payloads("session.error").is_empty(),
+        "{:?}",
+        sink.events()
+    );
+
+    let second = VoiceAnswerCommand {
+        text: Some("second answer".to_string()),
+        ..answer(&voice_session_id, 2)
+    };
+    use_case.complete_answer(&second).unwrap();
+    assert!(Fixture::requested_feedback(&f.open_ai, "", "second answer"));
+    assert!(
+        !use_case
+            .recover(&voice_session_id, None)
+            .unwrap()
+            .turn_processing
+    );
+}
+
+#[test]
+fn turn_in_flight_when_the_session_stops_does_no_more_work() {
+    let executor = Arc::new(DeferredExecutor::new());
+    let f = Fixture::with(java_voice_policy(), executor.clone());
+    f.session("s1", Some(ModeType::Immediate), None, &[Q1, Q2, Q3]);
+    let use_case = f.use_case();
+    let voice_session_id = use_case.open(&open_command("s1")).unwrap();
+    let sink = Arc::new(RecordingSink::new());
+    use_case
+        .register_sink(&voice_session_id, sink.clone())
+        .unwrap();
+    executor.run_all();
+    let generate_calls_before = f.open_ai.generate_calls().len();
+    use_case
+        .append_audio(&audio_chunk(&voice_session_id, 1))
+        .unwrap();
+    assert_eq!(1, executor.pending(), "the turn is queued");
+
+    // 사용자가 정지한 뒤에 STT를 마친 턴이 돈다.
+    use_case.stop(&stop_command(&voice_session_id)).unwrap();
+    sink.clear();
+    executor.run_all();
+
+    let events = sink.events();
+    for name in [
+        "stt.final",
+        "feedback.final",
+        "question.prompt",
+        "tts.audio",
+    ] {
+        assert_eq!(
+            None,
+            first_index(&events, of_type(name)),
+            "{name}: {events:?}"
+        );
+    }
+    assert_eq!(generate_calls_before, f.open_ai.generate_calls().len());
+    // 다음 질문을 꺼내지 않았으므로 세션의 다음 질문은 그대로 question-2다.
+    let next = f.deps.question_use_case.next_question("s1").unwrap();
+    assert_eq!(Some("question-2"), next.text.as_deref());
+    assert!(
+        !use_case
+            .recover(&voice_session_id, None)
+            .unwrap()
+            .turn_processing
+    );
 }

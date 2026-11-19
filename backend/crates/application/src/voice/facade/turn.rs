@@ -2,7 +2,13 @@
 //!
 //! 한 세션에서 턴은 한 번에 하나만 처리한다(`start_turn_processing`). 처리 중에 온 오디오와
 //! 전사문은 쌓아 두었다가 턴이 끝나면 이어서 처리한다.
+//!
+//! 턴 안에서 패닉이 나도 처리 중 표시를 풀고 `session.error`를 보낸다(`catch_turn_panic`).
+//! 세션이 멈춘 뒤에 끝난 턴은 STT 다음부터 아무 일도 하지 않는다(LLM 호출, 오답노트, 다음 질문,
+//! 이벤트 모두 없음).
 
+use std::any::Any;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -63,14 +69,17 @@ impl VoiceSessionFacade {
         let task_context = Arc::clone(context);
         self.deps.async_executor.execute(Box::new(move || {
             let started_at = Instant::now();
-            let question = turn.question.as_ref().expect("checked above");
-            if let Err(error) = this.process_transcript(
-                &task_context,
-                question,
-                &turn.text,
-                turn.turn_id,
-                started_at,
-            ) {
+            let result = catch_turn_panic(&task_context, turn.turn_id, || {
+                let question = turn.question.as_ref().expect("checked above");
+                this.process_transcript(
+                    &task_context,
+                    question,
+                    &turn.text,
+                    turn.turn_id,
+                    started_at,
+                )
+            });
+            if let Err(error) = result {
                 task_context.emit(
                     "session.error",
                     error_payload(
@@ -92,8 +101,10 @@ impl VoiceSessionFacade {
         if !context.start_turn_processing() {
             return Ok(());
         }
-        let result = (|| {
+        let mut turn_id = 0;
+        let result = catch_unwind(AssertUnwindSafe(|| {
             let snapshot = context.consume_audio_snapshot();
+            turn_id = snapshot.turn_id;
             if snapshot.question.is_none() {
                 return Ok(());
             }
@@ -107,15 +118,23 @@ impl VoiceSessionFacade {
                 .get_or_create(&context.session_id)?;
             let mode = lock_session(&state)?.mode();
             self.advance_without_feedback(context, mode, snapshot.turn_id)
-        })();
+        }));
         context.finish_turn_processing();
-        result
+        result.unwrap_or_else(|payload| {
+            let error = turn_panic_error(context, turn_id, payload.as_ref());
+            context.emit(
+                "session.error",
+                error_payload(&context.session_id, turn_id, &error_message(&error)),
+            );
+            Err(error)
+        })
     }
 
     fn process_turn(self: &Arc<Self>, context: &Arc<RuntimeContext>, snapshot: AudioSnapshot) {
         let started_at = Instant::now();
         let turn_id = snapshot.turn_id;
-        let result = self.transcribe(&snapshot, context).and_then(|transcript| {
+        let result = catch_turn_panic(context, turn_id, || {
+            let transcript = self.transcribe(&snapshot, context)?;
             let question = snapshot.question.as_ref().expect("checked by flush_turn");
             self.process_transcript(context, question, &transcript, turn_id, started_at)
         });
@@ -156,6 +175,10 @@ impl VoiceSessionFacade {
         turn_id: i64,
         started_at: Instant,
     ) -> AppResult<()> {
+        // STT가 끝나기 전에 세션이 멈췄으면 결과를 버린다.
+        if context.is_inactive() {
+            return Ok(());
+        }
         if java_is_blank(transcript) {
             context.emit(
                 "stt.skipped",
@@ -210,6 +233,10 @@ impl VoiceSessionFacade {
             answer_text: answer_text.to_string(),
         };
 
+        // 다음 질문을 꺼내면 세션의 질문 순서가 앞으로 간다. 멈춘 세션에서는 꺼내지 않는다.
+        if context.is_inactive() {
+            return Ok(());
+        }
         let next_question = self
             .deps
             .question_use_case
@@ -226,6 +253,9 @@ impl VoiceSessionFacade {
             exhausted,
         )?;
         let emit_feedback = || {
+            if context.is_inactive() {
+                return;
+            }
             let result = self
                 .emit_main_feedback(context, turn_id, mode, &plan, next_action)
                 .and_then(|emitted| {
@@ -239,11 +269,17 @@ impl VoiceSessionFacade {
                         emitted,
                     )
                 });
+            // 세션이 멈춰서 그만둔 것이면 알리지 않는다.
             if let Err(error) = result {
-                emit_feedback_error_and_continue(context, turn_id, &error);
+                if !context.is_inactive() {
+                    emit_feedback_error_and_continue(context, turn_id, &error);
+                }
             }
         };
         let emit_next_question = || {
+            if context.is_inactive() {
+                return;
+            }
             let next_turn_id = self.emit_question_prompt_and_track(
                 context,
                 mode,
@@ -377,6 +413,9 @@ impl VoiceSessionFacade {
             return Ok(false);
         }
         let items = self.generate_feedback_items(context, &plan.inputs)?;
+        if context.is_inactive() {
+            return Ok(true);
+        }
         let state = self
             .deps
             .session_use_case
@@ -429,6 +468,9 @@ impl VoiceSessionFacade {
             return Ok(());
         }
         let items = self.generate_feedback_items(context, &remainder)?;
+        if context.is_inactive() {
+            return Ok(());
+        }
         context.emit(
             "feedback.final",
             feedback_payload(
@@ -453,6 +495,10 @@ impl VoiceSessionFacade {
         inputs
             .iter()
             .map(|input| {
+                // 묶음의 피드백을 만드는 동안 세션이 멈추면 남은 LLM 호출을 하지 않는다.
+                if context.is_inactive() {
+                    return Err(AppError::InvalidState(SESSION_STOPPED.to_string()));
+                }
                 Ok(FeedbackItem {
                     question_id: input.question_id.clone(),
                     question_text: input.question_text.clone(),
@@ -489,6 +535,39 @@ impl VoiceSessionFacade {
             ),
         }
     }
+}
+
+const SESSION_STOPPED: &str = "Voice session stopped";
+const TURN_PANIC_MESSAGE: &str = "음성 처리 중 예기치 않은 오류가 발생했습니다.";
+
+/// `body`가 패닉하면 잡아서 로그를 남기고 오류로 돌려준다. 부르는 쪽은 다른 오류처럼
+/// `session.error`를 보내고 처리 중 표시를 푼다.
+fn catch_turn_panic(
+    context: &RuntimeContext,
+    turn_id: i64,
+    body: impl FnOnce() -> AppResult<()>,
+) -> AppResult<()> {
+    catch_unwind(AssertUnwindSafe(body))
+        .unwrap_or_else(|payload| Err(turn_panic_error(context, turn_id, payload.as_ref())))
+}
+
+fn turn_panic_error(
+    context: &RuntimeContext,
+    turn_id: i64,
+    payload: &(dyn Any + Send),
+) -> AppError {
+    let detail = payload
+        .downcast_ref::<&str>()
+        .map(|message| (*message).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic payload".to_string());
+    tracing::error!(
+        "voice turn panicked sessionId={} turnId={} reason={}",
+        context.session_id,
+        turn_id,
+        detail
+    );
+    AppError::Internal(TURN_PANIC_MESSAGE.to_string())
 }
 
 fn group_batch_size(mode: ModeType, state: &SharedSessionState) -> AppResult<i32> {
