@@ -2,7 +2,7 @@
 // so questions are read in a native voice even when the OS has no English voice. No API is called.
 import {env} from '@huggingface/transformers'
 import {KokoroTTS} from 'kokoro-js'
-import {redirectHuggingFaceFetch} from './backendModelHost.js'
+import {dropBrokenVoiceCache, redirectHuggingFaceFetch} from './backendModelHost.js'
 // Same bundled ONNX Runtime binary as the speech recognizer (see localSttWorker.js).
 import ortFactoryUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.mjs?url'
 import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url'
@@ -38,11 +38,12 @@ function reportProgress(event) {
 function load(config) {
     if (!ttsPromise) {
         configure(config)
-        ttsPromise = KokoroTTS.from_pretrained(config.model, {
+        // A failed voice download stored by an earlier run would otherwise be read back every time.
+        ttsPromise = dropBrokenVoiceCache(self.caches).then(() => KokoroTTS.from_pretrained(config.model, {
             dtype: 'q8',
             device: 'wasm',
             progress_callback: reportProgress
-        }).catch((error) => {
+        })).catch((error) => {
             ttsPromise = null
             throw error
         })
