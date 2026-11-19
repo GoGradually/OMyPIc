@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use rusqlite::Connection;
+use rusqlite::{Connection, Transaction, TransactionBehavior};
 
 use omypic_domain::error::{AppError, AppResult};
 
@@ -62,6 +62,14 @@ impl Database {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         f(&mut guard)
     }
+}
+
+/// 쓰기 잠금을 바로 잡는 트랜잭션(`BEGIN IMMEDIATE`). DEFERRED 트랜잭션이 읽은 뒤 쓰기로
+/// 올리려 할 때 다른 프로세스가 쓰고 있으면 busy_timeout을 기다리지 않고 바로 실패하므로,
+/// 쓰는 트랜잭션은 모두 이것으로 시작한다. 잠금을 기다리는 동안에는 busy_timeout이 적용된다.
+pub(crate) fn write_transaction(conn: &mut Connection) -> AppResult<Transaction<'_>> {
+    conn.transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(db_err)
 }
 
 pub(crate) fn db_err(err: rusqlite::Error) -> AppError {
@@ -193,6 +201,62 @@ mod tests {
 
         assert_eq!(0, errors.load(std::sync::atomic::Ordering::SeqCst));
         assert_eq!(400, notes.find_all().unwrap().len());
+    }
+
+    /// 앱을 두 번 띄운 경우처럼 같은 파일을 연 두 핸들이 동시에 쓴다. 읽고 나서 쓰는
+    /// 트랜잭션이 DEFERRED로 시작하면 쓰기 잠금으로 올릴 때 busy_timeout 없이 바로
+    /// "database is locked"로 실패한다.
+    #[test]
+    fn two_handles_on_one_file_write_concurrently_without_lock_errors() {
+        use crate::embedding::LocalHashEmbeddingAdapter;
+        use omypic_application::rulebook::port::RulebookIndexPort;
+        use omypic_domain::rulebook::RulebookId;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("omypic.db");
+        let handles = [
+            Database::open(&path).unwrap(),
+            Database::open(&path).unwrap(),
+        ];
+        let error_log = std::sync::Mutex::new(Vec::new());
+        let errors = &error_log;
+        std::thread::scope(|scope| {
+            for (n, db) in handles.iter().enumerate() {
+                let groups = SqliteQuestionGroupAdapter::new(db.clone());
+                let index = SqliteRulebookIndexAdapter::new(
+                    db.clone(),
+                    std::sync::Arc::new(LocalHashEmbeddingAdapter::new(8)),
+                );
+                scope.spawn(move || {
+                    for i in 0..40 {
+                        let group =
+                            QuestionGroupAggregate::create(&format!("g{n}-{i}"), ["t"], Utc::now());
+                        if let Err(err) = groups.save(group) {
+                            errors.lock().unwrap().push(err);
+                        }
+                    }
+                });
+                scope.spawn(move || {
+                    for i in 0..40 {
+                        let id = RulebookId::of(&format!("r{n}-{i}")).unwrap();
+                        if let Err(err) =
+                            index.index_rulebook_chunks(&id, "r.md", &["chunk".to_string()])
+                        {
+                            errors.lock().unwrap().push(err);
+                        }
+                    }
+                });
+            }
+        });
+
+        assert_eq!(Vec::<AppError>::new(), error_log.into_inner().unwrap());
+        assert_eq!(
+            80,
+            SqliteQuestionGroupAdapter::new(handles[0].clone())
+                .find_all()
+                .unwrap()
+                .len()
+        );
     }
 
     #[test]

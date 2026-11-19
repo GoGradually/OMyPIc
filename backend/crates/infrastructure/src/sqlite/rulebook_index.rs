@@ -10,7 +10,7 @@ use omypic_application::rulebook::port::{EmbeddingPort, RulebookIndexPort};
 use omypic_domain::error::{AppError, AppResult};
 use omypic_domain::rulebook::{RulebookContext, RulebookId};
 
-use super::{db_err, Database};
+use super::{db_err, write_transaction, Database};
 
 const META_PROVIDER: &str = "provider";
 const META_MODEL_VERSION: &str = "modelVersion";
@@ -156,7 +156,7 @@ impl RulebookIndexPort for SqliteRulebookIndexAdapter {
         // 임베딩 계산은 연결 잠금 밖에서 끝낸다.
         let rows = embed_chunks(self.embedding.as_ref(), chunks)?;
         self.db.with_conn(|conn| {
-            let tx = conn.transaction().map_err(db_err)?;
+            let tx = write_transaction(conn)?;
             self.ensure_index_compatibility(&tx)?;
             insert_chunks(&tx, rulebook_id, filename, chunks, &rows)?;
             tx.commit().map_err(db_err)
@@ -184,7 +184,7 @@ impl RulebookIndexPort for SqliteRulebookIndexAdapter {
 
         // 1단계: 호환성을 맞추고 임베딩만 읽는다.
         let candidates = self.db.with_conn(|conn| {
-            let tx = conn.transaction().map_err(db_err)?;
+            let tx = write_transaction(conn)?;
             self.ensure_index_compatibility(&tx)?;
             let mut found: Vec<(i64, Vec<u8>)> = Vec::new();
             for batch in ids.chunks(ID_BATCH) {
@@ -271,7 +271,7 @@ impl RulebookIndexPort for SqliteRulebookIndexAdapter {
     fn reset(&self) -> AppResult<()> {
         let metadata = self.expected_metadata();
         self.db.with_conn(|conn| {
-            let tx = conn.transaction().map_err(db_err)?;
+            let tx = write_transaction(conn)?;
             tx.execute("DELETE FROM rulebook_chunks", [])
                 .map_err(db_err)?;
             write_metadata(&tx, &metadata)?;

@@ -2,8 +2,6 @@
 
 use std::sync::Arc;
 
-use rusqlite::TransactionBehavior;
-
 use omypic_application::datatransfer::port::{DataReplacement, DataReplacementPort};
 use omypic_application::rulebook::port::EmbeddingPort;
 use omypic_domain::error::AppResult;
@@ -12,7 +10,7 @@ use super::question::insert_group;
 use super::rulebook::upsert_rulebook;
 use super::rulebook_index::{embed_chunks, index_metadata, insert_chunks, write_metadata};
 use super::wrongnote::{upsert_note, write_global_queue};
-use super::{db_err, Database};
+use super::{db_err, write_transaction, Database};
 
 pub struct SqliteDataReplacementAdapter {
     db: Database,
@@ -37,9 +35,7 @@ impl DataReplacementPort for SqliteDataReplacementAdapter {
         let metadata = index_metadata(self.embedding.as_ref());
 
         self.db.with_conn(|conn| {
-            let tx = conn
-                .transaction_with_behavior(TransactionBehavior::Immediate)
-                .map_err(db_err)?;
+            let tx = write_transaction(conn)?;
             tx.execute_batch(
                 "DELETE FROM question_items;
                  DELETE FROM question_groups;

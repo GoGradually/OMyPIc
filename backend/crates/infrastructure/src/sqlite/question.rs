@@ -8,7 +8,7 @@ use omypic_domain::question::{
     QuestionGroupAggregate, QuestionGroupId, QuestionItem, QuestionItemId,
 };
 
-use super::{db_err, format_ts, parse_ts, Database};
+use super::{db_err, format_ts, parse_ts, write_transaction, Database};
 
 pub struct SqliteQuestionGroupAdapter {
     db: Database,
@@ -114,7 +114,7 @@ fn sorted_tags(group: &QuestionGroupAggregate) -> Vec<String> {
 }
 
 fn write_group(conn: &mut Connection, group: &QuestionGroupAggregate) -> AppResult<()> {
-    let tx = conn.transaction().map_err(db_err)?;
+    let tx = write_transaction(conn)?;
     insert_group(&tx, group)?;
     tx.commit().map_err(db_err)
 }
@@ -193,7 +193,7 @@ impl QuestionGroupPort for SqliteQuestionGroupAdapter {
 
     fn delete_by_id(&self, id: &QuestionGroupId) -> AppResult<()> {
         self.db.with_conn(|conn| {
-            let tx = conn.transaction().map_err(db_err)?;
+            let tx = write_transaction(conn)?;
             tx.execute(
                 "DELETE FROM question_items WHERE group_id = ?1",
                 params![id.value()],
@@ -210,7 +210,7 @@ impl QuestionGroupPort for SqliteQuestionGroupAdapter {
 
     fn delete_all(&self) -> AppResult<()> {
         self.db.with_conn(|conn| {
-            let tx = conn.transaction().map_err(db_err)?;
+            let tx = write_transaction(conn)?;
             tx.execute("DELETE FROM question_items", [])
                 .map_err(db_err)?;
             tx.execute("DELETE FROM question_groups", [])
