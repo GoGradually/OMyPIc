@@ -1,6 +1,7 @@
 //! SQLite 영속성 어댑터(MongoDB 대체).
 
 mod question;
+mod replacement;
 mod rulebook;
 mod rulebook_index;
 pub mod schema;
@@ -16,6 +17,7 @@ use rusqlite::Connection;
 use omypic_domain::error::{AppError, AppResult};
 
 pub use question::SqliteQuestionGroupAdapter;
+pub use replacement::SqliteDataReplacementAdapter;
 pub use rulebook::SqliteRulebookAdapter;
 pub use rulebook_index::SqliteRulebookIndexAdapter;
 pub use wrongnote::{SqliteWrongNoteAdapter, SqliteWrongNoteRecentQueueAdapter};

@@ -16,8 +16,9 @@ use zip::{ZipArchive, ZipWriter};
 use super::usecase::{read_zip_entries, DataTransferUseCase, ZipLimits};
 use crate::rulebook::port::{RulebookFileStore, RulebookPort};
 use crate::test_support::{
-    InMemoryQuestionGroupPort, InMemoryRulebookFileStore, InMemoryRulebookIndexPort,
-    InMemoryRulebookPort, InMemoryWrongNotePort, InMemoryWrongNoteRecentQueuePort,
+    InMemoryDataReplacementPort, InMemoryQuestionGroupPort, InMemoryRulebookFileStore,
+    InMemoryRulebookIndexPort, InMemoryRulebookPort, InMemoryWrongNotePort,
+    InMemoryWrongNoteRecentQueuePort,
 };
 
 fn fixed_time() -> DateTime<Utc> {
@@ -31,6 +32,7 @@ struct Fixture {
     queue: Arc<InMemoryWrongNoteRecentQueuePort>,
     files: Arc<InMemoryRulebookFileStore>,
     index: Arc<InMemoryRulebookIndexPort>,
+    replacement: Arc<InMemoryDataReplacementPort>,
     use_case: DataTransferUseCase,
 }
 
@@ -57,13 +59,20 @@ fn fixture_with(
     );
     let files = Arc::new(InMemoryRulebookFileStore::new());
     let index = Arc::new(InMemoryRulebookIndexPort::new());
+    let replacement = Arc::new(InMemoryDataReplacementPort::new(
+        groups.clone(),
+        rulebooks.clone(),
+        notes.clone(),
+        queue.clone(),
+        index.clone(),
+    ));
     let use_case = DataTransferUseCase::new(
         groups.clone(),
         rulebooks.clone(),
         notes.clone(),
         queue.clone(),
         files.clone(),
-        index.clone(),
+        replacement.clone(),
     );
     Fixture {
         groups,
@@ -72,6 +81,7 @@ fn fixture_with(
         queue,
         files,
         index,
+        replacement,
         use_case,
     }
 }
@@ -248,16 +258,12 @@ fn import_zip_replaces_all_data_and_reindexes() {
     assert_eq!(1, result.wrong_note_queue_size);
     assert!(result.restart_required);
 
-    // 지우기가 저장보다 먼저 실행된다.
-    assert_eq!(vec!["delete_all", "save"], f.groups.call_log());
-    assert_eq!(vec!["delete_all", "save"], f.rulebooks.call_log());
-    assert_eq!(vec!["delete_all", "save"], f.notes.call_log());
-    assert_eq!(
-        vec!["clear_global_queue", "save_global_queue"],
-        f.queue.call_log()
-    );
-    assert_eq!(1, f.files.clear_calls());
-    assert_eq!(1, f.index.reset_calls());
+    // 저장소 변경은 "모두 바꾸기" 한 번으로 적용하고, 포트를 하나씩 지우거나 저장하지 않는다.
+    assert_eq!(1, f.replacement.replacements().len());
+    assert!(f.groups.call_log().is_empty());
+    assert!(f.rulebooks.call_log().is_empty());
+    assert!(f.notes.call_log().is_empty());
+    assert!(f.queue.call_log().is_empty());
 
     assert_eq!(1, f.groups.groups().len());
     assert_eq!(1, f.rulebooks.rulebooks().len());
@@ -293,7 +299,7 @@ fn import_zip_rejects_unsupported_schema_version() {
         )),
         result
     );
-    assert_eq!(0, f.groups.delete_all_calls());
+    assert!(f.replacement.replacements().is_empty());
 }
 
 #[test]
@@ -462,7 +468,7 @@ fn import_rejects_entry_that_escapes_rulebook_directory() {
         )),
         result
     );
-    assert_eq!(0, f.groups.delete_all_calls());
+    assert!(f.replacement.replacements().is_empty());
     assert!(f.files.files().is_empty());
 }
 
@@ -489,7 +495,7 @@ fn import_rejects_rulebook_file_entry_outside_allowed_path() {
             "{entry}: {result:?}"
         );
         assert!(f.files.files().is_empty());
-        assert_eq!(0, f.rulebooks.delete_all_calls());
+        assert!(f.replacement.replacements().is_empty());
     }
 }
 
@@ -541,7 +547,7 @@ fn import_rejects_invalid_rulebook_before_deleting_existing_data() {
         )),
         result
     );
-    assert_eq!(0, f.groups.delete_all_calls());
+    assert!(f.replacement.replacements().is_empty());
 }
 
 #[test]
@@ -723,5 +729,184 @@ fn import_rejects_oversized_entry_before_touching_data() {
         )),
         result
     );
-    assert_eq!(0, f.groups.delete_all_calls());
+    assert!(f.replacement.replacements().is_empty());
+}
+
+/// 가져오기 전에 들어 있던 데이터: 그룹 하나, 룰북 하나(파일 포함), 오답노트 하나, 큐.
+fn fixture_with_existing_data() -> Fixture {
+    let group = QuestionGroupAggregate::rehydrate(
+        QuestionGroupId::of("local-group").unwrap(),
+        "Local",
+        ["local"],
+        vec![QuestionItem::rehydrate(
+            QuestionItemId::of("lq").unwrap(),
+            "Local question",
+            None,
+        )],
+        Some(fixed_time()),
+        Some(fixed_time()),
+    )
+    .unwrap();
+    let rulebook = Rulebook::rehydrate(
+        RulebookId::of("local-rulebook").unwrap(),
+        "local.md",
+        "/tmp/local.md",
+        Some(RulebookScope::Main),
+        None,
+        true,
+        Some(fixed_time()),
+        Some(fixed_time()),
+    )
+    .unwrap();
+    let note = WrongNote::rehydrate(
+        WrongNoteId::of("local-note").unwrap(),
+        "local pattern",
+        3,
+        "local summary",
+        Some(fixed_time()),
+    );
+    let f = fixture_with(
+        InMemoryQuestionGroupPort::with_groups(vec![group]),
+        InMemoryRulebookPort::with_rulebooks(vec![rulebook]),
+        InMemoryWrongNotePort::with_notes(vec![note]),
+        InMemoryWrongNoteRecentQueuePort::with_queue(vec!["local pattern".to_string()]),
+    );
+    f.files.put("/tmp/local.md", b"# local");
+    f
+}
+
+fn assert_existing_data_untouched(f: &Fixture) {
+    let groups = f.groups.groups();
+    assert_eq!(1, groups.len());
+    assert_eq!("local-group", groups[0].id().value());
+    assert_eq!("Local", groups[0].name());
+    let rulebooks = f.rulebooks.rulebooks();
+    assert_eq!(1, rulebooks.len());
+    assert_eq!("local-rulebook", rulebooks[0].id().value());
+    assert_eq!("/tmp/local.md", rulebooks[0].path());
+    let notes = f.notes.notes();
+    assert_eq!(1, notes.len());
+    assert_eq!("local-note", notes[0].id().value());
+    assert_eq!(3, notes[0].count());
+    assert_eq!(vec!["local pattern".to_string()], f.queue.queue());
+    assert_eq!(
+        vec![("/tmp/local.md".to_string(), b"# local".to_vec())],
+        f.files.files()
+    );
+}
+
+#[test]
+fn import_with_non_utf8_rulebook_keeps_existing_data() {
+    let f = fixture_with_existing_data();
+    let mut entries = backup_entries(1, iso());
+    let file = entries
+        .iter_mut()
+        .find(|(n, _)| *n == "files/rulebooks/r1_rules.md")
+        .unwrap();
+    // CP949로 저장한 "규칙"
+    file.1 = vec![0xb1, 0xd4, 0xc4, 0xa2];
+
+    let result = f.use_case.import_zip(&to_zip(&entries));
+
+    assert_eq!(
+        Err(AppError::InvalidArgument(
+            "Rulebook file must be UTF-8 text: files/rulebooks/r1_rules.md".to_string()
+        )),
+        result.map(|_| ())
+    );
+    assert_existing_data_untouched(&f);
+}
+
+fn backup_with_two_rulebooks() -> Vec<(&'static str, Vec<u8>)> {
+    let mut entries = backup_entries(1, iso());
+    replace_entry(
+        &mut entries,
+        "data/rulebooks.json",
+        json!([
+            {"id": "r1", "filename": "rules.md", "scope": "MAIN", "enabled": true,
+             "createdAt": iso(), "updatedAt": iso(), "fileEntry": "files/rulebooks/r1_rules.md"},
+            {"id": "r2", "filename": "rules.md", "scope": "MAIN", "enabled": true,
+             "createdAt": iso(), "updatedAt": iso(), "fileEntry": "files/rulebooks/r2_rules.md"}
+        ]),
+    );
+    entries.push(("files/rulebooks/r2_rules.md", b"# second".to_vec()));
+    entries
+}
+
+#[test]
+fn import_that_fails_to_replace_data_keeps_existing_data_and_removes_new_files() {
+    for error in [
+        AppError::InvalidArgument("Failed to download FastText model after retries".to_string()),
+        AppError::Internal("database is locked".to_string()),
+    ] {
+        let f = fixture_with_existing_data();
+        f.replacement.fail_with(error.clone());
+
+        let result = f.use_case.import_zip(&to_zip(&backup_with_two_rulebooks()));
+
+        assert_eq!(Err(error), result.map(|_| ()));
+        assert_existing_data_untouched(&f);
+        assert_eq!(2, f.files.deleted().len());
+    }
+}
+
+#[test]
+fn import_that_fails_to_write_a_file_keeps_existing_data_and_removes_new_files() {
+    let f = fixture_with_existing_data();
+    f.files.fail_store_after(1);
+
+    let result = f.use_case.import_zip(&to_zip(&backup_with_two_rulebooks()));
+
+    assert_eq!(
+        Err(AppError::Internal(
+            "Failed to write rulebook: rules.md".to_string()
+        )),
+        result.map(|_| ())
+    );
+    assert_existing_data_untouched(&f);
+    assert!(f.replacement.replacements().is_empty());
+    assert_eq!(vec!["/tmp/rules.md".to_string()], f.files.deleted());
+}
+
+#[test]
+fn successful_import_removes_previous_files_and_keeps_new_ones() {
+    let f = fixture_with_existing_data();
+
+    f.use_case
+        .import_zip(&to_zip(&backup_with_two_rulebooks()))
+        .unwrap();
+
+    assert_eq!(vec!["/tmp/local.md".to_string()], f.files.deleted());
+    let rulebooks = f.rulebooks.rulebooks();
+    assert_eq!(2, rulebooks.len());
+    assert_ne!(rulebooks[0].path(), rulebooks[1].path());
+    assert_eq!("# rules", f.files.read_text(rulebooks[0].path()).unwrap());
+    assert_eq!("# second", f.files.read_text(rulebooks[1].path()).unwrap());
+    assert_eq!(2, f.files.files().len());
+    assert_eq!(
+        vec![vec!["# rules".to_string()], vec!["# second".to_string()]],
+        f.index
+            .indexed()
+            .into_iter()
+            .map(|(_, _, chunks)| chunks)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn files_left_by_an_interrupted_import_are_not_exported() {
+    let f = fixture_with_existing_data();
+    // 이전 가져오기가 새 파일을 저장한 뒤 데이터를 바꾸기 전에 멈췄다.
+    f.files.put("/tmp/leftover.md", b"# leftover");
+
+    let entries = unzip_entries(&f.use_case.export_zip().unwrap());
+
+    let rulebook_files: Vec<_> = entries
+        .keys()
+        .filter(|name| name.starts_with("files/"))
+        .collect();
+    assert_eq!(
+        vec!["files/rulebooks/local-rulebook_local.md"],
+        rulebook_files
+    );
 }

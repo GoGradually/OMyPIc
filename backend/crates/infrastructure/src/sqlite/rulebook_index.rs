@@ -29,11 +29,7 @@ impl SqliteRulebookIndexAdapter {
     }
 
     fn expected_metadata(&self) -> [(&'static str, String); 3] {
-        [
-            (META_PROVIDER, self.embedding.provider()),
-            (META_MODEL_VERSION, self.embedding.model_version()),
-            (META_DIMENSION, self.embedding.dimension().to_string()),
-        ]
+        index_metadata(self.embedding.as_ref())
     }
 
     /// 저장된 메타데이터가 현재 임베딩과 다르면 청크를 모두 지우고 메타데이터를 갱신한다.
@@ -60,7 +56,65 @@ impl SqliteRulebookIndexAdapter {
     }
 }
 
-fn write_metadata(conn: &Connection, metadata: &[(&'static str, String)]) -> AppResult<()> {
+pub(super) fn index_metadata(embedding: &dyn EmbeddingPort) -> [(&'static str, String); 3] {
+    [
+        (META_PROVIDER, embedding.provider()),
+        (META_MODEL_VERSION, embedding.model_version()),
+        (META_DIMENSION, embedding.dimension().to_string()),
+    ]
+}
+
+/// 조각마다 임베딩을 계산해 BLOB으로 만든다. 연결 잠금 밖에서 부른다.
+pub(super) fn embed_chunks(
+    embedding: &dyn EmbeddingPort,
+    chunks: &[String],
+) -> AppResult<Vec<Vec<u8>>> {
+    let dimension = embedding.dimension();
+    let mut rows = Vec::with_capacity(chunks.len());
+    for chunk in chunks {
+        let vector = embedding.embed(chunk)?;
+        if vector.len() != dimension {
+            return Err(AppError::InvalidState(format!(
+                "Embedding dimension mismatch. expected={dimension} actual={}",
+                vector.len()
+            )));
+        }
+        rows.push(encode_embedding(&vector));
+    }
+    Ok(rows)
+}
+
+pub(super) fn insert_chunks(
+    conn: &Connection,
+    rulebook_id: &RulebookId,
+    filename: &str,
+    chunks: &[String],
+    embeddings: &[Vec<u8>],
+) -> AppResult<()> {
+    let mut insert = conn
+        .prepare_cached(
+            "INSERT INTO rulebook_chunks (rulebook_id, filename, position, text, embedding)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )
+        .map_err(db_err)?;
+    for (position, (chunk, blob)) in chunks.iter().zip(embeddings).enumerate() {
+        insert
+            .execute(params![
+                rulebook_id.value(),
+                filename,
+                position as i64,
+                chunk,
+                blob
+            ])
+            .map_err(db_err)?;
+    }
+    Ok(())
+}
+
+pub(super) fn write_metadata(
+    conn: &Connection,
+    metadata: &[(&'static str, String)],
+) -> AppResult<()> {
     for (key, value) in metadata {
         conn.execute(
             "INSERT INTO rulebook_index_meta (key, value) VALUES (?1, ?2)
@@ -100,35 +154,11 @@ impl RulebookIndexPort for SqliteRulebookIndexAdapter {
         chunks: &[String],
     ) -> AppResult<()> {
         // 임베딩 계산은 연결 잠금 밖에서 끝낸다.
-        let dimension = self.embedding.dimension();
-        let mut rows = Vec::with_capacity(chunks.len());
-        for chunk in chunks {
-            let vector = self.embedding.embed(chunk)?;
-            if vector.len() != dimension {
-                return Err(AppError::InvalidState(format!(
-                    "Embedding dimension mismatch. expected={dimension} actual={}",
-                    vector.len()
-                )));
-            }
-            rows.push(encode_embedding(&vector));
-        }
-
+        let rows = embed_chunks(self.embedding.as_ref(), chunks)?;
         self.db.with_conn(|conn| {
             let tx = conn.transaction().map_err(db_err)?;
             self.ensure_index_compatibility(&tx)?;
-            {
-                let mut insert = tx
-                    .prepare(
-                        "INSERT INTO rulebook_chunks (rulebook_id, filename, position, text, embedding)
-                         VALUES (?1, ?2, ?3, ?4, ?5)",
-                    )
-                    .map_err(db_err)?;
-                for (position, (chunk, blob)) in chunks.iter().zip(&rows).enumerate() {
-                    insert
-                        .execute(params![rulebook_id.value(), filename, position as i64, chunk, blob])
-                        .map_err(db_err)?;
-                }
-            }
+            insert_chunks(&tx, rulebook_id, filename, chunks, &rows)?;
             tx.commit().map_err(db_err)
         })
     }

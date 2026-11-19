@@ -84,6 +84,31 @@ fn find_by_id(conn: &Connection, id: &str) -> AppResult<Option<Rulebook>> {
     .transpose()
 }
 
+/// 룰북 행 하나를 쓴다. ON CONFLICT 갱신은 rowid를 유지해 목록 순서를 바꾸지 않는다.
+pub(super) fn upsert_rulebook(conn: &Connection, rulebook: &Rulebook) -> AppResult<()> {
+    conn.execute(
+        &format!(
+            "INSERT INTO rulebooks ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(id) DO UPDATE SET filename = excluded.filename,
+                 path = excluded.path, scope = excluded.scope,
+                 question_group = excluded.question_group, enabled = excluded.enabled,
+                 created_at = excluded.created_at, updated_at = excluded.updated_at"
+        ),
+        params![
+            rulebook.id().value(),
+            rulebook.filename(),
+            rulebook.path(),
+            scope_name(rulebook.scope()),
+            rulebook.question_group().map(QuestionGroup::value),
+            rulebook.is_enabled(),
+            format_ts(rulebook.created_at()),
+            format_ts(rulebook.updated_at()),
+        ],
+    )
+    .map(|_| ())
+    .map_err(db_err)
+}
+
 impl RulebookPort for SqliteRulebookAdapter {
     fn find_all(&self) -> AppResult<Vec<Rulebook>> {
         self.db.with_conn(|conn| {
@@ -105,27 +130,7 @@ impl RulebookPort for SqliteRulebookAdapter {
 
     fn save(&self, rulebook: Rulebook) -> AppResult<Rulebook> {
         self.db.with_conn(|conn| {
-            // ON CONFLICT 갱신은 rowid를 유지해 목록 순서를 바꾸지 않는다.
-            conn.execute(
-                &format!(
-                    "INSERT INTO rulebooks ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-                     ON CONFLICT(id) DO UPDATE SET filename = excluded.filename,
-                         path = excluded.path, scope = excluded.scope,
-                         question_group = excluded.question_group, enabled = excluded.enabled,
-                         created_at = excluded.created_at, updated_at = excluded.updated_at"
-                ),
-                params![
-                    rulebook.id().value(),
-                    rulebook.filename(),
-                    rulebook.path(),
-                    scope_name(rulebook.scope()),
-                    rulebook.question_group().map(QuestionGroup::value),
-                    rulebook.is_enabled(),
-                    format_ts(rulebook.created_at()),
-                    format_ts(rulebook.updated_at()),
-                ],
-            )
-            .map_err(db_err)?;
+            upsert_rulebook(conn, &rulebook)?;
             find_by_id(conn, rulebook.id().value())?
                 .ok_or_else(|| AppError::Internal("Saved rulebook not found".to_string()))
         })

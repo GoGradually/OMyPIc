@@ -19,8 +19,9 @@ use super::model::{
     BackupManifest, DataTransferImportResult, QuestionGroupSnapshot, QuestionItemSnapshot,
     RulebookSnapshot, WrongNoteQueueSnapshot, WrongNoteSnapshot,
 };
+use super::port::{DataReplacement, DataReplacementPort, ReplacementRulebook};
 use crate::question::port::QuestionGroupPort;
-use crate::rulebook::port::{RulebookFileStore, RulebookIndexPort, RulebookPort};
+use crate::rulebook::port::{RulebookFileStore, RulebookPort};
 use crate::wrongnote::port::{WrongNotePort, WrongNoteRecentQueuePort};
 
 const SCHEMA_VERSION: i64 = 1;
@@ -54,7 +55,7 @@ pub struct DataTransferUseCase {
     wrong_note_port: Arc<dyn WrongNotePort>,
     wrong_note_recent_queue_port: Arc<dyn WrongNoteRecentQueuePort>,
     rulebook_file_store: Arc<dyn RulebookFileStore>,
-    rulebook_index_port: Arc<dyn RulebookIndexPort>,
+    data_replacement_port: Arc<dyn DataReplacementPort>,
 }
 
 struct ImportedRulebook {
@@ -66,6 +67,7 @@ struct ImportedRulebook {
     created_at: Option<DateTime<Utc>>,
     updated_at: Option<DateTime<Utc>>,
     bytes: Vec<u8>,
+    chunks: Vec<String>,
 }
 
 struct ImportedPayload {
@@ -82,7 +84,7 @@ impl DataTransferUseCase {
         wrong_note_port: Arc<dyn WrongNotePort>,
         wrong_note_recent_queue_port: Arc<dyn WrongNoteRecentQueuePort>,
         rulebook_file_store: Arc<dyn RulebookFileStore>,
-        rulebook_index_port: Arc<dyn RulebookIndexPort>,
+        data_replacement_port: Arc<dyn DataReplacementPort>,
     ) -> Self {
         Self {
             question_group_port,
@@ -90,7 +92,7 @@ impl DataTransferUseCase {
             wrong_note_port,
             wrong_note_recent_queue_port,
             rulebook_file_store,
-            rulebook_index_port,
+            data_replacement_port,
         }
     }
 
@@ -196,21 +198,37 @@ impl DataTransferUseCase {
         Ok(snapshots)
     }
 
+    /// 실패할 수 있는 일(파싱, 검증, UTF-8 해석, 조각 나누기)은 이미 끝났다. 새 파일을 기존 파일
+    /// 옆에 따로 저장하고, 저장소 변경은 `DataReplacementPort` 한 번(SQLite 트랜잭션 하나)으로
+    /// 적용한 뒤, 성공했을 때만 이전 파일을 지운다. 실패하면 새로 저장한 파일만 지운다.
+    /// 도중에 프로세스가 죽으면 어느 행도 가리키지 않는 파일만 남는다.
     fn apply_imported_payload(&self, payload: &ImportedPayload) -> AppResult<()> {
-        self.question_group_port.delete_all()?;
-        self.rulebook_port.delete_all()?;
-        self.wrong_note_port.delete_all()?;
-        self.wrong_note_recent_queue_port.clear_global_queue()?;
-        self.rulebook_file_store.clear_all()?;
-        self.rulebook_index_port.reset()?;
-
-        for group in &payload.question_groups {
-            self.question_group_port.save(group.clone())?;
+        let previous_paths: Vec<String> = self
+            .rulebook_port
+            .find_all()?
+            .iter()
+            .map(|rulebook| rulebook.path().to_string())
+            .collect();
+        let mut staged_paths = Vec::new();
+        if let Err(error) = self.stage_and_replace(payload, &mut staged_paths) {
+            self.remove_files(&staged_paths);
+            return Err(error);
         }
+        self.remove_files(&previous_paths);
+        Ok(())
+    }
+
+    fn stage_and_replace(
+        &self,
+        payload: &ImportedPayload,
+        staged_paths: &mut Vec<String>,
+    ) -> AppResult<()> {
+        let mut rulebooks = Vec::with_capacity(payload.rulebooks.len());
         for imported in &payload.rulebooks {
             let stored = self
                 .rulebook_file_store
                 .store(&imported.filename, &imported.bytes)?;
+            staged_paths.push(stored.path.clone());
             let rulebook = Rulebook::rehydrate(
                 imported.id.clone(),
                 &imported.filename,
@@ -221,20 +239,26 @@ impl DataTransferUseCase {
                 imported.created_at,
                 imported.updated_at,
             )?;
-            self.rulebook_port.save(rulebook.clone())?;
-            let text = self.rulebook_file_store.read_text(&stored.path)?;
-            let chunks = split_chunks(Some(&text), CHUNK_SIZE);
-            self.rulebook_index_port.index_rulebook_chunks(
-                rulebook.id(),
-                rulebook.filename(),
-                &chunks,
-            )?;
+            rulebooks.push(ReplacementRulebook {
+                rulebook,
+                chunks: imported.chunks.clone(),
+            });
         }
-        for note in &payload.wrong_notes {
-            self.wrong_note_port.save(note.clone())?;
+        self.data_replacement_port.replace_all(&DataReplacement {
+            question_groups: payload.question_groups.clone(),
+            rulebooks,
+            wrong_notes: payload.wrong_notes.clone(),
+            wrong_note_queue: payload.wrong_note_queue.clone(),
+        })
+    }
+
+    /// 파일 정리는 데이터가 확정된 뒤의 일이라 실패해도 가져오기를 실패로 만들지 않는다.
+    fn remove_files(&self, paths: &[String]) {
+        for path in paths {
+            if let Err(error) = self.rulebook_file_store.delete(path) {
+                tracing::warn!("Failed to remove rulebook file {path}: {error}");
+            }
         }
-        self.wrong_note_recent_queue_port
-            .save_global_queue(&payload.wrong_note_queue)
     }
 }
 
@@ -459,6 +483,11 @@ fn imported_rulebook(
     let filename = snapshot
         .filename
         .ok_or_else(|| invalid("Rulebook filename is missing"))?;
+    let entry = snapshot.file_entry.as_deref().unwrap_or_default();
+    let bytes = entries.get(entry).cloned().unwrap_or_default();
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|_| invalid(&format!("Rulebook file must be UTF-8 text: {entry}")))?;
+    let chunks = split_chunks(Some(text), CHUNK_SIZE);
     let imported = ImportedRulebook {
         id: RulebookId::of(snapshot.id.as_deref().unwrap_or_default())?,
         filename,
@@ -467,12 +496,8 @@ fn imported_rulebook(
         enabled: snapshot.enabled,
         created_at: snapshot.created_at,
         updated_at: snapshot.updated_at,
-        bytes: snapshot
-            .file_entry
-            .as_deref()
-            .and_then(|entry| entries.get(entry))
-            .cloned()
-            .unwrap_or_default(),
+        bytes,
+        chunks,
     };
     // 기존 데이터를 지우기 전에 범위와 질문 그룹 조합을 검증한다.
     Rulebook::rehydrate(

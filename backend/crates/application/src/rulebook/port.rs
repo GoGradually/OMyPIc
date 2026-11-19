@@ -18,10 +18,13 @@ pub trait EmbeddingPort: Send + Sync {
 
 /// 트랜잭션을 지원하지 못하는 파일 저장소.
 pub trait RulebookFileStore: Send + Sync {
+    /// 새 파일로 저장한다. 같은 `filename`을 여러 번 저장해도 경로는 매번 다르고,
+    /// 이미 있는 파일을 덮어쓰지 않는다.
     fn store(&self, filename: &str, bytes: &[u8]) -> AppResult<StoredRulebookFile>;
     fn read_text(&self, path: &str) -> AppResult<String>;
     fn read_bytes(&self, path: &str) -> AppResult<Vec<u8>>;
-    fn clear_all(&self) -> AppResult<()>;
+    /// `store`가 돌려준 경로의 파일을 지운다. 이미 없으면 아무것도 하지 않는다.
+    fn delete(&self, path: &str) -> AppResult<()>;
 }
 
 pub trait RulebookIndexPort: Send + Sync {

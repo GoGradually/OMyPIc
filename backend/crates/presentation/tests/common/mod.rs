@@ -19,9 +19,10 @@ use omypic_application::session::usecase::SessionUseCase;
 use omypic_application::stt::usecase::SttUseCase;
 use omypic_application::test_support::{
     FakeApiKeyProbePort, FakeFeedbackPolicy, FakeRagPolicy, FakeSttPolicy, FakeTtsGateway,
-    FakeVoicePolicy, ImmediateExecutor, InMemoryQuestionGroupPort, InMemoryRulebookFileStore,
-    InMemoryRulebookIndexPort, InMemoryRulebookPort, InMemorySessionStorePort,
-    InMemoryWrongNotePort, InMemoryWrongNoteRecentQueuePort, ScriptedLlmClient, ScriptedSttGateway,
+    FakeVoicePolicy, ImmediateExecutor, InMemoryDataReplacementPort, InMemoryQuestionGroupPort,
+    InMemoryRulebookFileStore, InMemoryRulebookIndexPort, InMemoryRulebookPort,
+    InMemorySessionStorePort, InMemoryWrongNotePort, InMemoryWrongNoteRecentQueuePort,
+    ScriptedLlmClient, ScriptedSttGateway,
 };
 use omypic_application::voice::usecase::{VoiceSessionDependencies, VoiceSessionUseCase};
 use omypic_application::wrongnote::port::WrongNotePort;
@@ -127,13 +128,20 @@ impl Fixture {
             voice_policy: voice_policy.clone(),
             metrics: metrics.clone(),
         }));
+        let replacement = Arc::new(InMemoryDataReplacementPort::new(
+            questions.clone(),
+            rulebooks.clone(),
+            wrong_notes.clone(),
+            queue.clone(),
+            index,
+        ));
         let data_transfer = Arc::new(DataTransferUseCase::new(
             question_port,
             rulebooks.clone(),
             wrong_notes.clone(),
             queue,
             files.clone(),
-            index,
+            replacement,
         ));
         let state = AppState {
             api_key_verify: Arc::new(ApiKeyVerifyUseCase::new(Arc::new(

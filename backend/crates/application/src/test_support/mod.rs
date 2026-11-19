@@ -19,9 +19,9 @@ pub use policies::{
     FakeDataDirProvider, FakeFeedbackPolicy, FakeRagPolicy, FakeSttPolicy, FakeVoicePolicy,
 };
 pub use stores::{
-    InMemoryQuestionGroupPort, InMemoryRulebookFileStore, InMemoryRulebookIndexPort,
-    InMemoryRulebookPort, InMemorySessionStorePort, InMemoryWrongNotePort,
-    InMemoryWrongNoteRecentQueuePort, SearchCall,
+    InMemoryDataReplacementPort, InMemoryQuestionGroupPort, InMemoryRulebookFileStore,
+    InMemoryRulebookIndexPort, InMemoryRulebookPort, InMemorySessionStorePort,
+    InMemoryWrongNotePort, InMemoryWrongNoteRecentQueuePort, SearchCall,
 };
 
 use std::sync::{Mutex, MutexGuard};

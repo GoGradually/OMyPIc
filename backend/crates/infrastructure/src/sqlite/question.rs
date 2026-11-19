@@ -114,11 +114,17 @@ fn sorted_tags(group: &QuestionGroupAggregate) -> Vec<String> {
 }
 
 fn write_group(conn: &mut Connection, group: &QuestionGroupAggregate) -> AppResult<()> {
+    let tx = conn.transaction().map_err(db_err)?;
+    insert_group(&tx, group)?;
+    tx.commit().map_err(db_err)
+}
+
+/// 그룹 행과 질문 행을 쓴다. 트랜잭션은 부르는 쪽이 연다.
+pub(super) fn insert_group(conn: &Connection, group: &QuestionGroupAggregate) -> AppResult<()> {
     let tags_json = serde_json::to_string(&sorted_tags(group))
         .map_err(|err| AppError::Internal(err.to_string()))?;
-    let tx = conn.transaction().map_err(db_err)?;
     // ON CONFLICT 갱신은 rowid를 유지하므로 목록 순서가 바뀌지 않는다(REPLACE는 바꾼다).
-    tx.execute(
+    conn.execute(
         "INSERT INTO question_groups (id, name, tags_json, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5)
          ON CONFLICT(id) DO UPDATE SET name = excluded.name, tags_json = excluded.tags_json,
@@ -132,13 +138,13 @@ fn write_group(conn: &mut Connection, group: &QuestionGroupAggregate) -> AppResu
         ],
     )
     .map_err(db_err)?;
-    tx.execute(
+    conn.execute(
         "DELETE FROM question_items WHERE group_id = ?1",
         params![group.id().value()],
     )
     .map_err(db_err)?;
     for (position, item) in group.questions().iter().enumerate() {
-        tx.execute(
+        conn.execute(
             "INSERT INTO question_items (id, group_id, position, text, question_type)
              VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
@@ -151,7 +157,7 @@ fn write_group(conn: &mut Connection, group: &QuestionGroupAggregate) -> AppResu
         )
         .map_err(db_err)?;
     }
-    tx.commit().map_err(db_err)
+    Ok(())
 }
 
 impl QuestionGroupPort for SqliteQuestionGroupAdapter {

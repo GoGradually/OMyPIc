@@ -46,6 +46,26 @@ fn find_by_id(conn: &Connection, id: &str) -> AppResult<Option<WrongNote>> {
     .transpose()
 }
 
+pub(super) fn upsert_note(conn: &Connection, note: &WrongNote) -> AppResult<()> {
+    conn.execute(
+        &format!(
+            "INSERT INTO wrong_notes ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(id) DO UPDATE SET pattern = excluded.pattern,
+                 count = excluded.count, short_summary = excluded.short_summary,
+                 last_seen_at = excluded.last_seen_at"
+        ),
+        params![
+            note.id().value(),
+            note.pattern(),
+            note.count(),
+            note.short_summary(),
+            format_ts(note.last_seen_at()),
+        ],
+    )
+    .map(|_| ())
+    .map_err(db_err)
+}
+
 impl WrongNotePort for SqliteWrongNoteAdapter {
     /// 저장된 순서(rowid)대로. Mongo의 `findAll`도 정렬하지 않았다.
     fn find_all(&self) -> AppResult<Vec<WrongNote>> {
@@ -80,22 +100,7 @@ impl WrongNotePort for SqliteWrongNoteAdapter {
 
     fn save(&self, note: WrongNote) -> AppResult<WrongNote> {
         self.db.with_conn(|conn| {
-            conn.execute(
-                &format!(
-                    "INSERT INTO wrong_notes ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5)
-                     ON CONFLICT(id) DO UPDATE SET pattern = excluded.pattern,
-                         count = excluded.count, short_summary = excluded.short_summary,
-                         last_seen_at = excluded.last_seen_at"
-                ),
-                params![
-                    note.id().value(),
-                    note.pattern(),
-                    note.count(),
-                    note.short_summary(),
-                    format_ts(note.last_seen_at()),
-                ],
-            )
-            .map_err(db_err)?;
+            upsert_note(conn, &note)?;
             find_by_id(conn, note.id().value())?
                 .ok_or_else(|| AppError::Internal("Saved wrong note not found".to_string()))
         })
@@ -120,6 +125,21 @@ impl WrongNotePort for SqliteWrongNoteAdapter {
 
 const GLOBAL_ID: &str = "global";
 const MAX_PATTERNS: usize = 100;
+
+/// 전역 큐를 쓴다. 마지막 100개만 저장한다.
+pub(super) fn write_global_queue(conn: &Connection, patterns: &[String]) -> AppResult<()> {
+    let kept = &patterns[patterns.len().saturating_sub(MAX_PATTERNS)..];
+    let json = serde_json::to_string(kept).map_err(|err| AppError::Internal(err.to_string()))?;
+    conn.execute(
+        "INSERT INTO wrong_note_queue_states (id, patterns_json, updated_at)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(id) DO UPDATE SET patterns_json = excluded.patterns_json,
+             updated_at = excluded.updated_at",
+        params![GLOBAL_ID, json, format_ts(chrono::Utc::now())],
+    )
+    .map(|_| ())
+    .map_err(db_err)
+}
 
 pub struct SqliteWrongNoteRecentQueueAdapter {
     db: Database,
@@ -152,20 +172,7 @@ impl WrongNoteRecentQueuePort for SqliteWrongNoteRecentQueueAdapter {
 
     /// 마지막 100개만 저장한다.
     fn save_global_queue(&self, patterns: &[String]) -> AppResult<()> {
-        let kept = &patterns[patterns.len().saturating_sub(MAX_PATTERNS)..];
-        let json =
-            serde_json::to_string(kept).map_err(|err| AppError::Internal(err.to_string()))?;
-        self.db.with_conn(|conn| {
-            conn.execute(
-                "INSERT INTO wrong_note_queue_states (id, patterns_json, updated_at)
-                 VALUES (?1, ?2, ?3)
-                 ON CONFLICT(id) DO UPDATE SET patterns_json = excluded.patterns_json,
-                     updated_at = excluded.updated_at",
-                params![GLOBAL_ID, json, format_ts(chrono::Utc::now())],
-            )
-            .map(|_| ())
-            .map_err(db_err)
-        })
+        self.db.with_conn(|conn| write_global_queue(conn, patterns))
     }
 
     fn clear_global_queue(&self) -> AppResult<()> {

@@ -8,6 +8,7 @@ use omypic_domain::session::{SessionId, SessionState};
 use omypic_domain::wrongnote::{WrongNote, WrongNoteId};
 
 use super::lock;
+use crate::datatransfer::port::{DataReplacement, DataReplacementPort};
 use crate::question::port::QuestionGroupPort;
 use crate::rulebook::model::StoredRulebookFile;
 use crate::rulebook::port::{RulebookFileStore, RulebookIndexPort, RulebookPort};
@@ -221,13 +222,16 @@ impl RulebookPort for InMemoryRulebookPort {
     }
 }
 
-/// 파일을 메모리에 둔다. 경로는 `<기준 디렉터리>/<파일 이름>`이다.
+/// 파일을 메모리에 둔다. 경로는 `<기준 디렉터리>/<파일 이름>`이고, 그 경로가 이미 있으면
+/// `<기준 디렉터리>/<번호>_<파일 이름>`이다(실제 저장소처럼 덮어쓰지 않는다).
 #[derive(Debug)]
 pub struct InMemoryRulebookFileStore {
     base_dir: String,
     files: Mutex<Vec<(String, Vec<u8>)>>,
     read_text_calls: Mutex<Vec<String>>,
-    clear_calls: Mutex<usize>,
+    deleted: Mutex<Vec<String>>,
+    /// `Some(n)`이면 성공한 `store`가 n번 더 있은 뒤부터 `store`가 실패한다.
+    store_failure_after: Mutex<Option<usize>>,
 }
 
 impl Default for InMemoryRulebookFileStore {
@@ -246,7 +250,8 @@ impl InMemoryRulebookFileStore {
             base_dir: base_dir.trim_end_matches('/').to_string(),
             files: Mutex::new(Vec::new()),
             read_text_calls: Mutex::new(Vec::new()),
-            clear_calls: Mutex::new(0),
+            deleted: Mutex::new(Vec::new()),
+            store_failure_after: Mutex::new(None),
         }
     }
 
@@ -268,8 +273,14 @@ impl InMemoryRulebookFileStore {
         lock(&self.read_text_calls).clone()
     }
 
-    pub fn clear_calls(&self) -> usize {
-        *lock(&self.clear_calls)
+    /// `delete`로 지운 경로(부른 순서).
+    pub fn deleted(&self) -> Vec<String> {
+        lock(&self.deleted).clone()
+    }
+
+    /// `successes`번 더 저장한 뒤부터 `store`가 `AppError::Internal`로 실패한다.
+    pub fn fail_store_after(&self, successes: usize) {
+        *lock(&self.store_failure_after) = Some(successes);
     }
 
     fn find(&self, path: &str) -> AppResult<Vec<u8>> {
@@ -283,8 +294,23 @@ impl InMemoryRulebookFileStore {
 
 impl RulebookFileStore for InMemoryRulebookFileStore {
     fn store(&self, filename: &str, bytes: &[u8]) -> AppResult<StoredRulebookFile> {
-        let path = format!("{}/{}", self.base_dir, filename);
-        self.put(&path, bytes);
+        if let Some(remaining) = lock(&self.store_failure_after).as_mut() {
+            if *remaining == 0 {
+                return Err(AppError::Internal(format!(
+                    "Failed to write rulebook: {filename}"
+                )));
+            }
+            *remaining -= 1;
+        }
+        let mut files = lock(&self.files);
+        let taken = |path: &str| files.iter().any(|(p, _)| p == path);
+        let mut path = format!("{}/{}", self.base_dir, filename);
+        let mut n = 1;
+        while taken(&path) {
+            path = format!("{}/{n}_{}", self.base_dir, filename);
+            n += 1;
+        }
+        files.push((path.clone(), bytes.to_vec()));
         Ok(StoredRulebookFile { path })
     }
 
@@ -298,9 +324,80 @@ impl RulebookFileStore for InMemoryRulebookFileStore {
         self.find(path)
     }
 
-    fn clear_all(&self) -> AppResult<()> {
-        *lock(&self.clear_calls) += 1;
-        lock(&self.files).clear();
+    fn delete(&self, path: &str) -> AppResult<()> {
+        lock(&self.deleted).push(path.to_string());
+        lock(&self.files).retain(|(p, _)| p != path);
+        Ok(())
+    }
+}
+
+/// 가져오기의 "모두 바꾸기"를 메모리 가짜 저장소들에 적용한다. `fail_with`로 정한 오류가
+/// 있으면 아무것도 바꾸지 않고 실패한다(SQLite 어댑터의 계약과 같다).
+pub struct InMemoryDataReplacementPort {
+    groups: Arc<InMemoryQuestionGroupPort>,
+    rulebooks: Arc<InMemoryRulebookPort>,
+    notes: Arc<InMemoryWrongNotePort>,
+    queue: Arc<InMemoryWrongNoteRecentQueuePort>,
+    index: Arc<InMemoryRulebookIndexPort>,
+    failure: Mutex<Option<AppError>>,
+    replacements: Mutex<Vec<DataReplacement>>,
+}
+
+impl InMemoryDataReplacementPort {
+    pub fn new(
+        groups: Arc<InMemoryQuestionGroupPort>,
+        rulebooks: Arc<InMemoryRulebookPort>,
+        notes: Arc<InMemoryWrongNotePort>,
+        queue: Arc<InMemoryWrongNoteRecentQueuePort>,
+        index: Arc<InMemoryRulebookIndexPort>,
+    ) -> Self {
+        Self {
+            groups,
+            rulebooks,
+            notes,
+            queue,
+            index,
+            failure: Mutex::new(None),
+            replacements: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// 이후 모든 `replace_all`이 이 오류로 실패한다(아무것도 바꾸지 않는다).
+    pub fn fail_with(&self, error: AppError) {
+        *lock(&self.failure) = Some(error);
+    }
+
+    /// 성공한 `replace_all`에 넘어온 값들.
+    pub fn replacements(&self) -> Vec<DataReplacement> {
+        lock(&self.replacements).clone()
+    }
+}
+
+impl DataReplacementPort for InMemoryDataReplacementPort {
+    fn replace_all(&self, replacement: &DataReplacement) -> AppResult<()> {
+        if let Some(error) = lock(&self.failure).clone() {
+            return Err(error);
+        }
+        *lock(&self.groups.groups) = replacement.question_groups.clone();
+        *lock(&self.rulebooks.rulebooks) = replacement
+            .rulebooks
+            .iter()
+            .map(|r| r.rulebook.clone())
+            .collect();
+        *lock(&self.notes.notes) = replacement.wrong_notes.clone();
+        *lock(&self.queue.queue) = replacement.wrong_note_queue.clone();
+        *lock(&self.index.indexed) = replacement
+            .rulebooks
+            .iter()
+            .map(|r| {
+                (
+                    r.rulebook.id().clone(),
+                    r.rulebook.filename().to_string(),
+                    r.chunks.clone(),
+                )
+            })
+            .collect();
+        lock(&self.replacements).push(replacement.clone());
         Ok(())
     }
 }

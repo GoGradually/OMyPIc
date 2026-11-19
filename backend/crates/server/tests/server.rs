@@ -358,3 +358,68 @@ async fn shutdown_ends_open_event_streams() {
         .unwrap();
     assert!(body.contains("event: session.ready"), "{body}");
 }
+
+fn file_names(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+async fn import_zip(server: &RunningServer, zip: Vec<u8>) -> (StatusCode, Value) {
+    let form = Form::new().part(
+        "file",
+        Part::bytes(zip).file_name("omypic-backup.zip".to_string()),
+    );
+    let response = reqwest::Client::new()
+        .post(url(server, "/api/data-transfer/import"))
+        .multipart(form)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, response.json().await.unwrap())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn import_that_fails_on_unavailable_embedding_model_keeps_existing_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = start_hash(dir.path()).await;
+    create_group(&source, "Exported", &["travel"]).await;
+    upload_rulebook(&source, "rules.md", "# Rules\nUse past tense.").await;
+    let zip = reqwest::get(url(&source, "/api/data-transfer/export"))
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap()
+        .to_vec();
+    create_group(&source, "Local only", &["home"]).await;
+    let (_, groups_before) = get_json(&source, "/api/question-groups").await;
+    let (_, rulebooks_before) = get_json(&source, "/api/rulebooks").await;
+    source.shutdown().await.unwrap();
+    let files_before = file_names(&dir.path().join("rulebooks"));
+    assert_eq!(1, files_before.len());
+
+    // 같은 데이터 폴더를, 모델을 구할 수 없는 fastText 설정으로 다시 연다.
+    let mut config = hash_config(dir.path());
+    config.rag.provider = "fasttext".to_string();
+    config.rag.download_url = "http://127.0.0.1:9/cc.ko.300.vec.gz".to_string();
+    config.rag.download_retry_max = 0;
+    let server = start(config, ephemeral()).await.unwrap();
+
+    let (status, body) = import_zip(&server, zip).await;
+
+    assert_eq!(StatusCode::BAD_REQUEST, status, "{body}");
+    let (_, groups_after) = get_json(&server, "/api/question-groups").await;
+    assert_eq!(groups_before, groups_after);
+    let (_, rulebooks_after) = get_json(&server, "/api/rulebooks").await;
+    assert_eq!(rulebooks_before, rulebooks_after);
+    assert_eq!(files_before, file_names(&dir.path().join("rulebooks")));
+    server.shutdown().await.unwrap();
+}

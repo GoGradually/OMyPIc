@@ -87,33 +87,18 @@ impl RulebookFileStore for FileSystemRulebookStore {
         fs::read(path).map_err(|e| io_error("Failed to read rulebook", Path::new(path), e))
     }
 
-    fn clear_all(&self) -> AppResult<()> {
-        let dir = self.rulebook_dir();
-        if !dir.exists() {
+    /// 룰북 디렉터리 바로 아래의 파일만 지운다. 다른 곳을 가리키는 경로는 건드리지 않는다.
+    fn delete(&self, path: &str) -> AppResult<()> {
+        let target = Path::new(path);
+        if target.parent() != Some(self.rulebook_dir().as_path()) {
+            tracing::warn!("Not deleting rulebook file outside rulebook dir: {path}");
             return Ok(());
         }
-        let entries =
-            fs::read_dir(&dir).map_err(|e| io_error("Failed to list rulebook dir", &dir, e))?;
-        for entry in entries {
-            let entry = entry.map_err(|e| io_error("Failed to list rulebook dir", &dir, e))?;
-            let path = entry.path();
-            let is_dir = entry
-                .file_type()
-                .map_err(|e| io_error("Failed to clear rulebook path", &path, e))?
-                .is_dir();
-            let result = if is_dir {
-                fs::remove_dir_all(&path)
-            } else {
-                fs::remove_file(&path)
-            };
-            result.map_err(|e| {
-                AppError::InvalidState(format!(
-                    "Failed to clear rulebook path: {} ({e})",
-                    path.display()
-                ))
-            })?;
+        match fs::remove_file(target) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(io_error("Failed to delete rulebook", target, e)),
         }
-        Ok(())
     }
 }
 
@@ -238,24 +223,28 @@ mod tests {
     }
 
     #[test]
-    fn clear_all_removes_contents_but_keeps_directory() {
+    fn delete_removes_stored_file_and_ignores_missing_one() {
         let temp = tempfile::tempdir().unwrap();
         let store = store_in(temp.path());
-        store.store("a.md", b"a").unwrap();
-        let nested = temp.path().join("rulebooks").join("nested");
-        fs::create_dir_all(&nested).unwrap();
-        fs::write(nested.join("b.md"), "b").unwrap();
+        let kept = store.store("a.md", b"a").unwrap();
+        let removed = store.store("a.md", b"b").unwrap();
 
-        store.clear_all().unwrap();
+        store.delete(&removed.path).unwrap();
+        store.delete(&removed.path).unwrap();
 
-        let dir = temp.path().join("rulebooks");
-        assert!(dir.exists());
-        assert_eq!(0, fs::read_dir(&dir).unwrap().count());
+        assert!(!Path::new(&removed.path).exists());
+        assert_eq!("a", store.read_text(&kept.path).unwrap());
     }
 
     #[test]
-    fn clear_all_without_directory_is_noop() {
+    fn delete_leaves_files_outside_rulebook_directory() {
         let temp = tempfile::tempdir().unwrap();
-        store_in(temp.path()).clear_all().unwrap();
+        let store = store_in(&temp.path().join("data"));
+        let outside = temp.path().join("keep.md");
+        fs::write(&outside, "keep").unwrap();
+
+        store.delete(&outside.to_string_lossy()).unwrap();
+
+        assert!(outside.exists());
     }
 }

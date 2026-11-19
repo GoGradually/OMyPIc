@@ -29,8 +29,8 @@ use omypic_infrastructure::openai::{
 };
 use omypic_infrastructure::session::InMemorySessionStore;
 use omypic_infrastructure::sqlite::{
-    Database, SqliteQuestionGroupAdapter, SqliteRulebookAdapter, SqliteRulebookIndexAdapter,
-    SqliteWrongNoteAdapter, SqliteWrongNoteRecentQueueAdapter,
+    Database, SqliteDataReplacementAdapter, SqliteQuestionGroupAdapter, SqliteRulebookAdapter,
+    SqliteRulebookIndexAdapter, SqliteWrongNoteAdapter, SqliteWrongNoteRecentQueueAdapter,
 };
 use omypic_infrastructure::storage::FileSystemRulebookStore;
 use omypic_presentation::AppState;
@@ -56,7 +56,12 @@ pub fn build_state(config: &AppConfig) -> anyhow::Result<AppState> {
     let wrong_notes = Arc::new(SqliteWrongNoteAdapter::new(db.clone()));
     let wrong_note_queue = Arc::new(SqliteWrongNoteRecentQueueAdapter::new(db.clone()));
     let rulebook_files = Arc::new(FileSystemRulebookStore::new(config_arc.clone()));
-    let rulebook_index = Arc::new(SqliteRulebookIndexAdapter::new(db, embedding_port(config)?));
+    let embedding = embedding_port(config)?;
+    let rulebook_index = Arc::new(SqliteRulebookIndexAdapter::new(
+        db.clone(),
+        embedding.clone(),
+    ));
+    let data_replacement = Arc::new(SqliteDataReplacementAdapter::new(db, embedding));
 
     let openai = &config.integrations.openai;
     let anthropic = &config.integrations.anthropic;
@@ -128,7 +133,7 @@ pub fn build_state(config: &AppConfig) -> anyhow::Result<AppState> {
         wrong_notes,
         wrong_note_queue,
         rulebook_files,
-        rulebook_index,
+        data_replacement,
     ));
 
     Ok(AppState {
