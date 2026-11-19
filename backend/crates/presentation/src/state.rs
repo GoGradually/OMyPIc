@@ -24,4 +24,6 @@ pub struct AppState {
     pub voice_policy: Arc<dyn VoicePolicy>,
     /// `/actuator/metrics`가 읽는다.
     pub metrics: Arc<dyn MetricsReader>,
+    /// 요청을 받아 주는 `Origin` 값(정확히 같은 문자열). 목록에 없는 `Origin`이 붙은 요청은 403이다.
+    pub allowed_origins: Arc<Vec<String>>,
 }

@@ -38,6 +38,15 @@ use omypic_presentation::{router, AppState};
 use serde_json::Value;
 use tower::ServiceExt;
 
+/// 서버 기본값(`AppConfig`)과 같은 목록.
+pub const DEFAULT_ALLOWED_ORIGINS: [&str; 5] = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+];
+
 pub struct Fixture {
     pub state: AppState,
     pub questions: Arc<InMemoryQuestionGroupPort>,
@@ -155,6 +164,12 @@ impl Fixture {
             wrong_note,
             voice_policy,
             metrics: metrics.clone(),
+            allowed_origins: Arc::new(
+                DEFAULT_ALLOWED_ORIGINS
+                    .iter()
+                    .map(|origin| origin.to_string())
+                    .collect(),
+            ),
         };
         Self {
             state,

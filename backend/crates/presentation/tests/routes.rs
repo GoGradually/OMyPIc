@@ -1111,21 +1111,26 @@ async fn events_passes_since_event_id_to_use_case() {
 }
 
 // ---- WebConfigTest
+// Java는 모든 origin(`*`)을 허용했다. 이제는 허용 목록의 origin만 받고 그 값을 그대로 돌려준다
+// (다른 origin은 `tests/origin.rs`에서 403을 확인한다).
 
 #[tokio::test]
-async fn add_cors_mappings_allows_api_wildcard_origins_and_methods() {
+async fn add_cors_mappings_allows_configured_origins_and_methods() {
     let fixture = Fixture::new();
     let request = Request::builder()
         .method(Method::OPTIONS)
         .uri("/api/question-groups")
-        .header(header::ORIGIN, "https://example.com")
+        .header(header::ORIGIN, "http://localhost:5173")
         .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
         .body(Body::empty())
         .unwrap();
     let reply = send(&fixture.router(), request).await;
 
     assert_eq!(StatusCode::OK, reply.status);
-    assert_eq!("*", reply.headers[header::ACCESS_CONTROL_ALLOW_ORIGIN]);
+    assert_eq!(
+        "http://localhost:5173",
+        reply.headers[header::ACCESS_CONTROL_ALLOW_ORIGIN]
+    );
     assert!(reply.headers[header::ACCESS_CONTROL_ALLOW_METHODS]
         .to_str()
         .unwrap()

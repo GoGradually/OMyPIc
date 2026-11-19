@@ -423,3 +423,35 @@ async fn import_that_fails_on_unavailable_embedding_model_keeps_existing_data() 
     assert_eq!(files_before, file_names(&dir.path().join("rulebooks")));
     server.shutdown().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn configured_origins_are_allowed_and_others_are_forbidden() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = hash_config(dir.path());
+    config.allowed_origins = vec!["http://localhost:3000".to_string()];
+    let server = start(config, ephemeral()).await.unwrap();
+    let client = reqwest::Client::new();
+    let get_with_origin = |origin: &'static str| {
+        client
+            .get(url(&server, "/api/question-groups"))
+            .header("Origin", origin)
+            .send()
+    };
+
+    let allowed = get_with_origin("http://localhost:3000").await.unwrap();
+    assert_eq!(StatusCode::OK, allowed.status());
+    assert_eq!(
+        "http://localhost:3000",
+        allowed.headers()["access-control-allow-origin"]
+    );
+    // 목록을 설정하면 기본 목록(개발 서버 origin 포함)을 대신한다.
+    let replaced = get_with_origin("http://localhost:5173").await.unwrap();
+    assert_eq!(StatusCode::FORBIDDEN, replaced.status());
+    let evil = get_with_origin("https://evil.example").await.unwrap();
+    assert_eq!(StatusCode::FORBIDDEN, evil.status());
+    assert_eq!(
+        json!({"message": "Origin not allowed"}),
+        evil.json::<Value>().await.unwrap()
+    );
+    server.shutdown().await.unwrap();
+}

@@ -17,6 +17,9 @@ pub struct AppConfig {
     pub port: u16,
     /// `OMYPIC_DATA_DIR`, 기본 `<홈>/OMyPIc`.
     pub data_dir: String,
+    /// `OMYPIC_ALLOWED_ORIGINS`(쉼표로 구분, 기본 목록을 대신한다). 브라우저가 보내는 `Origin`이
+    /// 이 목록에 없으면 요청을 거부한다. 기본값은 Vite 개발 서버와 Tauri 웹뷰의 origin이다.
+    pub allowed_origins: Vec<String>,
     pub stt: SttConfig,
     pub rag: RagConfig,
     pub feedback: FeedbackConfig,
@@ -104,11 +107,24 @@ pub struct AnthropicConfig {
     pub max_retries: u32,
 }
 
+/// `OMYPIC_ALLOWED_ORIGINS`가 없을 때 받아 주는 origin.
+pub const DEFAULT_ALLOWED_ORIGINS: [&str; 5] = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+];
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
             port: 4317,
             data_dir: default_data_dir(),
+            allowed_origins: DEFAULT_ALLOWED_ORIGINS
+                .iter()
+                .map(|origin| origin.to_string())
+                .collect(),
             stt: SttConfig {
                 max_file_bytes: 26_214_400,
                 max_duration_seconds: 180,
@@ -188,6 +204,14 @@ impl AppConfig {
 
         env.set("OMYPIC_PORT", &mut config.port)?;
         env.set("OMYPIC_DATA_DIR", &mut config.data_dir)?;
+        if let Some(raw) = env.raw("OMYPIC_ALLOWED_ORIGINS") {
+            config.allowed_origins = raw
+                .split(',')
+                .map(str::trim)
+                .filter(|origin| !origin.is_empty())
+                .map(str::to_string)
+                .collect();
+        }
 
         let rag = &mut config.rag;
         env.set("OMYPIC_RAG_PROVIDER", &mut rag.provider)?;
@@ -401,6 +425,34 @@ mod tests {
         assert_eq!("alloy", config.voice_tts_voice());
         assert_eq!(600_000, config.voice_recovery_retention_ms());
         assert_eq!(1000, config.voice_stopped_context_max());
+    }
+
+    #[test]
+    fn allowed_origins_default_to_vite_dev_server_and_tauri_webview() {
+        assert_eq!(
+            vec![
+                "http://localhost:5173",
+                "http://127.0.0.1:5173",
+                "tauri://localhost",
+                "http://tauri.localhost",
+                "https://tauri.localhost",
+            ],
+            AppConfig::default().allowed_origins
+        );
+    }
+
+    #[test]
+    fn allowed_origins_env_replaces_default_list() {
+        let config = from_map(&[(
+            "OMYPIC_ALLOWED_ORIGINS",
+            " http://localhost:3000 ,tauri://localhost,, ",
+        )])
+        .unwrap();
+
+        assert_eq!(
+            vec!["http://localhost:3000", "tauri://localhost"],
+            config.allowed_origins
+        );
     }
 
     #[test]

@@ -146,6 +146,7 @@ pub fn build_state(config: &AppConfig) -> anyhow::Result<AppState> {
         wrong_note,
         voice_policy: config_arc,
         metrics,
+        allowed_origins: Arc::new(config.allowed_origins.clone()),
     })
 }
 
