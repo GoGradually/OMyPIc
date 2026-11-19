@@ -9,7 +9,7 @@ mod metrics;
 mod policies;
 mod stores;
 
-pub use executor::{ImmediateExecutor, RecordingSink};
+pub use executor::{DeferredExecutor, ImmediateExecutor, RecordingSink};
 pub use gateways::{
     BootstrapCall, FakeApiKeyProbePort, FakeEmbeddingPort, FakeTtsGateway, GenerateCall, ProbeCall,
     ScriptedLlmClient, ScriptedSttGateway, SttCall, TtsCall,
@@ -61,6 +61,32 @@ mod tests {
         assert_eq!(Ok("done".to_string()), results[1]);
         assert_eq!(Ok("done".to_string()), results[2]);
         assert_eq!(3, gateway.calls().len());
+    }
+
+    #[test]
+    fn deferred_executor_runs_tasks_on_demand_in_either_order() {
+        use crate::shared::port::AsyncExecutor;
+        use std::sync::Arc;
+
+        let executor = Arc::new(DeferredExecutor::new());
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        for name in ["a", "b", "c"] {
+            let log = log.clone();
+            executor.execute(Box::new(move || log.lock().unwrap().push(name)));
+        }
+        let nested_executor = executor.clone();
+        let nested_log = log.clone();
+        executor.execute(Box::new(move || {
+            let log = nested_log.clone();
+            nested_executor.execute(Box::new(move || log.lock().unwrap().push("nested")));
+        }));
+
+        assert_eq!(4, executor.pending());
+        assert!(executor.run_next());
+        assert!(executor.run_last());
+        assert_eq!(3, executor.run_all());
+        assert!(!executor.run_next());
+        assert_eq!(vec!["a", "b", "c", "nested"], *log.lock().unwrap());
     }
 
     #[test]

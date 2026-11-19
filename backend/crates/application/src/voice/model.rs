@@ -1,4 +1,5 @@
 /// 이벤트를 클라이언트로 보내는 쪽(SSE 등). 보낼 수 없으면(연결이 닫힘) `false`.
+/// `send` 안에서 음성 세션 유스케이스를 다시 부르면 안 된다(이벤트 잠금을 쥔 채로 불린다).
 pub trait VoiceEventSink: Send + Sync {
     fn send(&self, event: &str, payload: serde_json::Value) -> bool;
 }
