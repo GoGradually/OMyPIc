@@ -49,6 +49,7 @@ pub(crate) fn join_url(base_url: &str, path: &str) -> String {
 /// 상태 코드와 본문. 오류 상태도 그대로 돌려주고 해석은 부르는 쪽이 한다.
 pub(crate) struct HttpReply {
     pub status: u16,
+    pub headers: reqwest::header::HeaderMap,
     pub body: Vec<u8>,
 }
 
@@ -89,6 +90,7 @@ pub(crate) fn send(
         .send()
         .map_err(|err| TransportError::Io(chain(&err)))?;
     let status = response.status().as_u16();
+    let headers = response.headers().clone();
     let mut body = Vec::new();
     match limit {
         Some(limit) => {
@@ -106,7 +108,11 @@ pub(crate) fn send(
                 .map_err(|err| TransportError::Io(chain(&err)))?;
         }
     }
-    Ok(HttpReply { status, body })
+    Ok(HttpReply {
+        status,
+        headers,
+        body,
+    })
 }
 
 /// 오류와 그 원인을 `": "`로 이어 붙인다. 요청 헤더(API 키)는 오류 글에 들어 있지 않다.

@@ -14,7 +14,10 @@ use super::http::{self, join_url, MAX_BODY_BYTES};
 use super::log_formatter::OpenAiLlmLogFormatter;
 use super::parameter_policy::OpenAiModelParameterPolicyResolver;
 use crate::config::OpenAiConfig;
-use crate::llm::{as_text, path, path_index, FeedbackJsonParser, LlmPromptContextRenderer};
+use crate::llm::{
+    as_text, default_message, parse_first_json_value, path, path_index, FeedbackJsonParser,
+    LlmPromptContextRenderer,
+};
 
 const DEFAULT_CHAT_MODEL: &str = "gpt-4o-mini";
 const BOOTSTRAP_INPUT_TEXT: &str =
@@ -646,19 +649,6 @@ fn strip_code_fence(text: &str) -> Result<String, String> {
     Ok(java_trim(body).to_string())
 }
 
-/// 첫 JSON 값만 읽고 뒤에 남은 글자는 무시한다(Jackson `readTree`/`readValue`와 같다).
-/// 비어 있는 입력은 Jackson이 "No content"로 거부하므로 오류다.
-fn parse_first_json_value(text: &str) -> Result<Value, String> {
-    match serde_json::Deserializer::from_str(text)
-        .into_iter::<Value>()
-        .next()
-    {
-        Some(Ok(value)) => Ok(value),
-        Some(Err(error)) => Err(error.to_string()),
-        None => Err("No content to map due to end-of-input".to_string()),
-    }
-}
-
 fn scalar_text(value: Option<&Value>) -> Result<Option<String>, String> {
     match value {
         None | Some(Value::Null) => Ok(None),
@@ -816,14 +806,6 @@ fn resolve_chat_model(model: &str) -> String {
         return DEFAULT_CHAT_MODEL.to_string();
     }
     candidate.to_string()
-}
-
-fn default_message(message: &str) -> String {
-    if java_is_blank(message) {
-        "unknown".to_string()
-    } else {
-        message.to_string()
-    }
 }
 
 #[cfg(test)]

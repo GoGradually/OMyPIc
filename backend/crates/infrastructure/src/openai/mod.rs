@@ -4,7 +4,7 @@
 //! LLM/STT/TTS 어댑터는 `build_http_client()`(연결 제한만) 하나를 나눠 쓰고,
 //! 키 확인 어댑터는 `build_probe_http_client()`(응답 60초)를 쓴다.
 
-mod http;
+pub(crate) mod http;
 mod key_probe;
 mod llm_client;
 mod log_formatter;
