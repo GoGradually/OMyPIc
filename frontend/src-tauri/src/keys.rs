@@ -1,5 +1,6 @@
-//! API 키 보관. Electron(keytar)과 같은 항목(서비스 `OMyPIc`, 계정 `openai`/`anthropic`)을 쓰므로
-//! 이전 버전에서 저장한 키를 그대로 읽는다. 키 값은 로그에 남기지 않는다.
+//! API 키 보관. 서비스 `OMyPIc`, 계정 `openai`/`anthropic` 항목을 쓴다. Windows와 macOS에서는
+//! 이전 데스크톱 앱(0.2.x, keytar)과 같은 항목이라 그때 저장한 키를 그대로 읽는다. Linux(Secret
+//! Service)에서는 keytar와 항목 속성이 달라 이 호환을 보장하지 않는다. 키 값은 로그에 남기지 않는다.
 
 pub const SERVICE: &str = "OMyPIc";
 const OPENAI: &str = "openai";

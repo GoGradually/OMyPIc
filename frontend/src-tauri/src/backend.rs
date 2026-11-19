@@ -72,8 +72,15 @@ impl Backend {
         &self.url
     }
 
-    /// 내장 서버를 끄고(최대 `SHUTDOWN_GRACE + RELEASE_GRACE`) 런타임을 닫는다. 두 번째 호출부터는
-    /// 아무것도 하지 않는다. 비동기 런타임 안에서 부르면 안 된다.
+    /// 백엔드를 띄운 뒤의 시작 단계(`step`, 예: 창 보이기)를 부른다. 실패하면 백엔드를 끄고
+    /// 그 오류를 돌려준다.
+    pub fn finish_startup(&self, step: impl FnOnce() -> anyhow::Result<()>) -> anyhow::Result<()> {
+        step().inspect_err(|_| self.shutdown())
+    }
+
+    /// 내장 서버를 끄고 런타임을 닫는다. 최대 약 7초 걸린다: `SHUTDOWN_GRACE`(5초) +
+    /// `RELEASE_GRACE`(1초) + `RUNTIME_SHUTDOWN_TIMEOUT`(1초). 두 번째 호출부터는 아무것도 하지
+    /// 않는다. 비동기 런타임 안에서 부르면 안 된다.
     pub fn shutdown(&self) {
         let embedded = self
             .embedded
@@ -170,6 +177,50 @@ mod tests {
         backend.shutdown();
 
         assert!(client.get(&health).send().is_err());
+    }
+
+    #[test]
+    fn failed_startup_step_stops_the_backend() {
+        let data = tempfile::tempdir().unwrap();
+        let config = AppConfig {
+            data_dir: data.path().to_string_lossy().into_owned(),
+            ..AppConfig::default()
+        };
+        let backend = Backend::start(config).unwrap();
+        let health = format!("{}/actuator/health", backend.url());
+        let client = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+
+        let err = backend
+            .finish_startup(|| Err(anyhow::anyhow!("cannot show the window")))
+            .unwrap_err();
+
+        assert_eq!("cannot show the window", err.to_string());
+        assert!(client.get(&health).send().is_err());
+    }
+
+    #[test]
+    fn successful_startup_step_keeps_the_backend_running() {
+        let data = tempfile::tempdir().unwrap();
+        let config = AppConfig {
+            data_dir: data.path().to_string_lossy().into_owned(),
+            ..AppConfig::default()
+        };
+        let backend = Backend::start(config).unwrap();
+        let health = format!("{}/actuator/health", backend.url());
+        let client = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+
+        backend.finish_startup(|| Ok(())).unwrap();
+
+        assert!(client.get(&health).send().unwrap().status().is_success());
+        backend.shutdown();
     }
 
     #[test]

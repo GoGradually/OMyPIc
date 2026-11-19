@@ -1,4 +1,4 @@
-//! 데이터 폴더와 번들 임베딩 모델의 위치. `frontend/electron/main.cjs`와 같은 규칙을 따른다.
+//! 데이터 폴더와 번들 임베딩 모델의 위치. 이전 데스크톱 앱(0.2.x)과 같은 규칙을 따른다.
 
 use std::fs;
 use std::path::{Path, PathBuf};

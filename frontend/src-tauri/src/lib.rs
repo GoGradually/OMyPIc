@@ -11,6 +11,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use anyhow::Context;
 use tauri::{AppHandle, Manager, RunEvent, State};
 use tauri_plugin_dialog::{DialogExt, FilePath, MessageDialogKind};
 use tracing_subscriber::layer::SubscriberExt;
@@ -34,8 +35,10 @@ async fn get_api_key(provider: Option<String>) -> Option<String> {
         keys::get_api_key(&KeyringStore, provider.as_deref())
     })
     .await
-    .ok()
-    .flatten()
+    .unwrap_or_else(|err| {
+        tracing::warn!("Reading the API key failed: {err}");
+        None
+    })
 }
 
 #[tauri::command]
@@ -119,13 +122,17 @@ pub fn run() {
             pick_backup_file
         ])
         .setup(|app| {
-            match start_backend(app.handle()) {
+            let started = start_backend(app.handle()).and_then(|backend| {
+                tracing::info!("Backend URL: {}", backend.url());
+                backend.finish_startup(|| match app.get_webview_window(MAIN_WINDOW) {
+                    Some(window) => window.show().context("Failed to show the main window"),
+                    None => Ok(()),
+                })?;
+                Ok(backend)
+            });
+            match started {
                 Ok(backend) => {
-                    tracing::info!("Backend URL: {}", backend.url());
                     app.manage(backend);
-                    if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
-                        window.show()?;
-                    }
                 }
                 Err(err) => {
                     tracing::error!("Startup failed: {err:#}");
@@ -177,8 +184,32 @@ fn start_backend(app: &AppHandle) -> anyhow::Result<Backend> {
     Backend::start(config)
 }
 
-/// 표준 오류와 `<data_dir>/logs/omypic.log`(이어 쓰기, 색 없음)에 로그를 남긴다. 로그 파일을 열 수
-/// 없으면 표준 오류에만 쓴다.
+/// 로그 파일이 이 크기를 넘으면 시작할 때 `omypic.log.1`로 옮기고 새로 쓴다.
+const LOG_ROTATE_BYTES: u64 = 5 * 1024 * 1024;
+
+/// `log_file`이 `limit` 바이트보다 크면 `<log_file>.1`로 옮긴다(이전 `.1`은 덮어쓴다).
+fn rotate_log(log_file: &Path, limit: u64) -> std::io::Result<()> {
+    match fs::metadata(log_file) {
+        Ok(meta) if meta.len() > limit => {
+            let mut rotated = log_file.as_os_str().to_owned();
+            rotated.push(".1");
+            let rotated = PathBuf::from(rotated);
+            // Windows의 rename은 대상이 있으면 실패한다.
+            match fs::remove_file(&rotated) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err),
+            }
+            fs::rename(log_file, rotated)
+        }
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+/// 표준 오류와 `<data_dir>/logs/omypic.log`(이어 쓰기, 색 없음, 5 MB를 넘으면 시작할 때
+/// `omypic.log.1`로 옮김)에 로그를 남긴다. 로그 파일을 열 수 없으면 표준 오류에만 쓴다.
 fn init_logging(data_dir: &Path) {
     let filter = || EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let stderr = fmt::layer()
@@ -186,12 +217,10 @@ fn init_logging(data_dir: &Path) {
         .with_ansi(std::io::stderr().is_terminal())
         .with_filter(filter());
     let log_dir = data_dir.join("logs");
-    let file = fs::create_dir_all(&log_dir).and_then(|()| {
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(log_dir.join("omypic.log"))
-    });
+    let log_file = log_dir.join("omypic.log");
+    let rotate_error = rotate_log(&log_file, LOG_ROTATE_BYTES).err();
+    let file = fs::create_dir_all(&log_dir)
+        .and_then(|()| OpenOptions::new().create(true).append(true).open(&log_file));
     let (file_layer, file_error) = match file {
         Ok(file) => (
             Some(
@@ -208,7 +237,49 @@ fn init_logging(data_dir: &Path) {
         .with(stderr)
         .with(file_layer)
         .try_init();
+    if let Some(err) = rotate_error {
+        tracing::warn!("Cannot rotate the log file {}: {err}", log_file.display());
+    }
     if let Some(err) = file_error {
         tracing::warn!("Cannot write the log file in {}: {err}", log_dir.display());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rotates_a_log_larger_than_the_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("omypic.log");
+        fs::write(&log, "0123456789").unwrap();
+        fs::write(dir.path().join("omypic.log.1"), "older").unwrap();
+
+        rotate_log(&log, 9).unwrap();
+
+        assert!(!log.exists());
+        assert_eq!(
+            "0123456789",
+            fs::read_to_string(dir.path().join("omypic.log.1")).unwrap()
+        );
+    }
+
+    #[test]
+    fn keeps_a_log_within_the_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("omypic.log");
+        fs::write(&log, "0123456789").unwrap();
+
+        rotate_log(&log, 10).unwrap();
+
+        assert_eq!("0123456789", fs::read_to_string(&log).unwrap());
+        assert!(!dir.path().join("omypic.log.1").exists());
+    }
+
+    #[test]
+    fn missing_log_is_not_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        rotate_log(&dir.path().join("logs/omypic.log"), 10).unwrap();
     }
 }
