@@ -2,6 +2,7 @@
 
 mod question;
 mod rulebook;
+mod rulebook_index;
 pub mod schema;
 mod wrongnote;
 
@@ -16,6 +17,7 @@ use omypic_domain::error::{AppError, AppResult};
 
 pub use question::SqliteQuestionGroupAdapter;
 pub use rulebook::SqliteRulebookAdapter;
+pub use rulebook_index::SqliteRulebookIndexAdapter;
 pub use wrongnote::{SqliteWrongNoteAdapter, SqliteWrongNoteRecentQueueAdapter};
 
 /// 연결 하나를 뮤텍스로 공유하는 SQLite 핸들. 복제해도 같은 연결을 쓴다.
