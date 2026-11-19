@@ -3,7 +3,9 @@
 pub mod config;
 pub mod embedding;
 pub mod executor;
+pub mod llm;
 pub mod metrics;
+pub mod openai;
 pub mod session;
 pub mod sqlite;
 pub mod storage;
