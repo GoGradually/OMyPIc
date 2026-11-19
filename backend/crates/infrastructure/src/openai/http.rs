@@ -9,23 +9,32 @@ use reqwest::blocking::{Client, RequestBuilder};
 
 /// 연결 제한 시간. Java 쪽은 지정하지 않아서 Netty 기본값(30초)이 적용됐다.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
-/// 응답을 기다리는 제한 시간. `HttpClient.responseTimeout(Duration.ofSeconds(60))`.
-pub const RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
+/// 키 확인용 클라이언트의 응답 제한 시간. `WebClientConfig`의 `responseTimeout(60s)` 값이다.
+/// LLM, STT, TTS 요청에는 적용하지 않는다(Java에서 그 요청들은 이 제한을 쓰지 않았다).
+pub const PROBE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
 /// `ConnectionProvider.maxConnections(50)`에 대응해 호스트마다 남겨 두는 유휴 연결 수.
 pub const MAX_IDLE_CONNECTIONS_PER_HOST: usize = 50;
 /// `maxInMemorySize(20 * 1024 * 1024)`.
 pub const MAX_BODY_BYTES: usize = 20 * 1024 * 1024;
 
-/// 모든 OpenAI 어댑터가 나눠 쓰는 블로킹 클라이언트.
+/// LLM, STT, TTS 어댑터가 나눠 쓰는 블로킹 클라이언트: 연결 제한 시간만 있고 전체 제한은 없다.
 pub fn build_http_client() -> AppResult<Client> {
-    build_http_client_with_response_timeout(RESPONSE_TIMEOUT)
+    build_http_client_with_limits(CONNECT_TIMEOUT, None)
 }
 
-/// 응답 제한 시간만 다른 클라이언트(Anthropic처럼 더 긴 제한이 필요한 쪽).
+/// 키 확인 어댑터용 클라이언트: 연결 30초에 응답 60초.
 /// reqwest 블로킹 클라이언트에는 읽기 단위 제한이 없어서 요청 하나의 전체 제한 시간으로 건다.
-pub fn build_http_client_with_response_timeout(response_timeout: Duration) -> AppResult<Client> {
+pub fn build_probe_http_client() -> AppResult<Client> {
+    build_http_client_with_limits(CONNECT_TIMEOUT, Some(PROBE_RESPONSE_TIMEOUT))
+}
+
+/// 제한 시간을 직접 정하는 클라이언트(테스트와, 더 긴 제한이 필요한 쪽).
+pub fn build_http_client_with_limits(
+    connect_timeout: Duration,
+    response_timeout: Option<Duration>,
+) -> AppResult<Client> {
     Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
+        .connect_timeout(connect_timeout)
         .timeout(response_timeout)
         .pool_max_idle_per_host(MAX_IDLE_CONNECTIONS_PER_HOST)
         .build()
@@ -130,9 +139,123 @@ mod tests {
 
     #[test]
     fn client_builds_with_configured_limits() {
-        assert_eq!(Duration::from_secs(60), RESPONSE_TIMEOUT);
+        assert_eq!(Duration::from_secs(60), PROBE_RESPONSE_TIMEOUT);
         assert_eq!(20 * 1024 * 1024, MAX_BODY_BYTES);
         assert_eq!(50, MAX_IDLE_CONNECTIONS_PER_HOST);
         assert!(build_http_client().is_ok());
+        assert!(build_probe_http_client().is_ok());
+    }
+
+    use std::io::Write;
+    use std::net::TcpListener;
+
+    /// 요청을 다 읽고 `delay` 뒤에 `body`를 JSON으로 돌려주는 가짜 서버. 연결마다 스레드를 쓴다.
+    fn delayed_server(delay: Duration, body: String) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let body = body.clone();
+                std::thread::spawn(move || {
+                    let mut received = Vec::new();
+                    let mut chunk = [0u8; 4096];
+                    loop {
+                        let Ok(read) = stream.read(&mut chunk) else {
+                            return;
+                        };
+                        if read == 0 {
+                            return;
+                        }
+                        received.extend_from_slice(&chunk[..read]);
+                        let text = String::from_utf8_lossy(&received).into_owned();
+                        if let Some(end) = text.find("\r\n\r\n") {
+                            let length = text[..end]
+                                .lines()
+                                .find_map(|line| {
+                                    line.to_ascii_lowercase()
+                                        .strip_prefix("content-length:")
+                                        .and_then(|v| v.trim().parse::<usize>().ok())
+                                })
+                                .unwrap_or(0);
+                            if received.len() >= end + 4 + length {
+                                break;
+                            }
+                        }
+                    }
+                    std::thread::sleep(delay);
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                });
+            }
+        });
+        format!("http://{address}")
+    }
+
+    fn openai_config(base_url: String) -> crate::config::OpenAiConfig {
+        crate::config::OpenAiConfig {
+            base_url,
+            responses_enabled: true,
+            conversation_rebase_turns: 6,
+            logging: crate::config::OpenAiLoggingConfig {
+                response_preview_chars: 512,
+                full_body: false,
+                log_success_at_fine: true,
+            },
+        }
+    }
+
+    #[test]
+    fn llm_call_has_no_total_deadline_but_the_probe_does() {
+        use omypic_application::apikey::port::ApiKeyProbePort;
+        use omypic_application::feedback::port::LlmClient;
+        use omypic_domain::session::LlmConversationState;
+
+        // 시험용으로 줄인 제한: 응답은 0.9초 뒤에 오고, 키 확인 제한은 0.3초다.
+        let delay = Duration::from_millis(900);
+        let probe_limit = Duration::from_millis(300);
+        let reply = serde_json::json!({
+            "id": "resp-1",
+            "conversation": "conv-1",
+            "output_text": "ok",
+            "choices": [{"message": {"content": "pong"}}]
+        })
+        .to_string();
+        let base_url = delayed_server(delay, reply);
+        let config = openai_config(base_url.clone());
+
+        let llm_http = build_http_client_with_limits(CONNECT_TIMEOUT, None).unwrap();
+        let llm = crate::openai::OpenAiLlmClient::new(llm_http, &config);
+        let state = llm
+            .bootstrap("k", "gpt-4o-mini", "sys", &LlmConversationState::empty())
+            .unwrap();
+        assert_eq!("conv-1", state.conversation_id());
+
+        let probe_http = build_http_client_with_limits(CONNECT_TIMEOUT, Some(probe_limit)).unwrap();
+        let anthropic = crate::config::AnthropicConfig {
+            base_url,
+            max_tokens: 16_000,
+            effort: "high".to_string(),
+            timeout_seconds: 120,
+            max_retries: 0,
+        };
+        let probe = crate::openai::HttpApiKeyProbeAdapter::new(probe_http, &config, &anthropic);
+        let error = probe.probe("openai", "k", None).err().unwrap();
+        let AppError::InvalidState(message) = error else {
+            panic!("expected InvalidState");
+        };
+        assert!(
+            message.starts_with("Verification failed: I/O error on POST request for"),
+            "{message}"
+        );
+
+        // 같은 지연이 제한 없는 클라이언트의 키 확인은 통과한다.
+        let unlimited = build_http_client_with_limits(CONNECT_TIMEOUT, None).unwrap();
+        let probe = crate::openai::HttpApiKeyProbeAdapter::new(unlimited, &config, &anthropic);
+        probe.probe("openai", "k", None).unwrap();
     }
 }

@@ -14,12 +14,14 @@ use crate::config::{AnthropicConfig, OpenAiConfig};
 const OPENAI_DEFAULT_MODEL: &str = "gpt-4o-mini";
 const CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
 const ANTHROPIC_MODELS_PATH: &str = "/v1/models/";
-const ANTHROPIC_VERSION: &str = "2023-06-01";
+/// Anthropic Java SDK 3.3.0(`PrepareRequest.kt`)이 모든 요청에 넣는 기본 헤더 값.
+const ANTHROPIC_VERSION: &str = "2026-10-21";
 const RETRY_BASE_DELAY: Duration = Duration::from_millis(500);
 const RETRY_MAX_DELAY: Duration = Duration::from_secs(8);
 
 /// OpenAI와 Anthropic 키 확인을 모두 맡는다(Java `WebClientApiKeyProbeAdapter`).
 /// OpenAI는 채팅 완성 한 번(`ping`)으로, Anthropic은 모델 조회로 키를 확인한다.
+/// `http`는 `build_probe_http_client()`로 만든 것을 넘긴다(Anthropic 요청은 자기 제한 시간을 따로 건다).
 pub struct HttpApiKeyProbeAdapter {
     http: Client,
     openai_base_url: String,
@@ -99,7 +101,7 @@ impl HttpApiKeyProbeAdapter {
                 .http
                 .get(url)
                 .timeout(self.anthropic_timeout)
-                .header("x-api-key", api_key)
+                .header("Accept", "application/json")
                 .header("anthropic-version", ANTHROPIC_VERSION)
                 .bearer_auth(api_key);
             let outcome = http::send(request, Some(http::MAX_BODY_BYTES));
@@ -195,7 +197,7 @@ mod tests {
     fn adapter_with_retries(server: &MockServer, max_retries: u32) -> HttpApiKeyProbeAdapter {
         let base_url = format!("{}/", server.base_url());
         HttpApiKeyProbeAdapter::new(
-            http::build_http_client().unwrap(),
+            http::build_probe_http_client().unwrap(),
             &OpenAiConfig {
                 base_url: base_url.clone(),
                 responses_enabled: true,
@@ -354,8 +356,13 @@ mod tests {
             when.method(GET)
                 .path("/v1/models/claude-opus-5-5")
                 .header("authorization", "Bearer sk-ant-test")
-                .header("x-api-key", "sk-ant-test")
-                .header("anthropic-version", "2023-06-01");
+                .header("accept", "application/json")
+                .header("anthropic-version", "2026-10-21")
+                .matches(|req| {
+                    !req.headers
+                        .as_ref()
+                        .is_some_and(|h| h.iter().any(|(n, _)| n.eq_ignore_ascii_case("x-api-key")))
+                });
             then.status(200)
                 .header("Content-Type", "application/json")
                 .body(

@@ -23,64 +23,21 @@ const RESPONSES_PATH: &str = "/v1/responses";
 const CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
 const MAX_STRUCTURED_ATTEMPTS: i32 = 2;
 
-/// 구조화 출력 JSON 스키마. Spring AI `BeanOutputConverter`가 `StructuredFeedbackResponse`로
-/// 만들던 것과 같은 모양(Jackson 들여쓰기, 필드 선언 순서, 반복되는 타입은 `$defs`)이다.
+/// 구조화 출력 JSON 스키마. `BeanOutputConverter`(Spring AI 1.0.3)가 victools 4.37.0
+/// (`DRAFT_2020_12`, `PLAIN_JSON`, Jackson 모듈, `FORBIDDEN_ADDITIONAL_PROPERTIES_BY_DEFAULT`)으로
+/// `StructuredFeedbackResponse`에서 만들어 Jackson `DefaultPrettyPrinter`로 찍던 문자열이다.
+/// 속성은 이름순(기본 정렬), 두 번 이상 쓰이는 `CorrectionNode`/`RecommendationNode`만 `$defs`로 빼고
+/// 한 번 쓰이는 `CorrectionsNode`/`RecommendationsNode`는 인라인이며, `$defs`는 `type`보다 앞에 온다.
 const STRUCTURED_SCHEMA: &str = r##"{
   "$schema" : "https://json-schema.org/draft/2020-12/schema",
-  "type" : "object",
-  "properties" : {
-    "summary" : {
-      "type" : "string"
-    },
-    "corrections" : {
-      "type" : "object",
-      "properties" : {
-        "grammar" : {
-          "$ref" : "#/$defs/CorrectionNode"
-        },
-        "expression" : {
-          "$ref" : "#/$defs/CorrectionNode"
-        },
-        "logic" : {
-          "$ref" : "#/$defs/CorrectionNode"
-        }
-      },
-      "additionalProperties" : false
-    },
-    "recommendations" : {
-      "type" : "object",
-      "properties" : {
-        "filler" : {
-          "$ref" : "#/$defs/RecommendationNode"
-        },
-        "adjective" : {
-          "$ref" : "#/$defs/RecommendationNode"
-        },
-        "adverb" : {
-          "$ref" : "#/$defs/RecommendationNode"
-        }
-      },
-      "additionalProperties" : false
-    },
-    "exampleAnswer" : {
-      "type" : "string"
-    },
-    "rulebookEvidence" : {
-      "type" : "array",
-      "items" : {
-        "type" : "string"
-      }
-    }
-  },
-  "additionalProperties" : false,
   "$defs" : {
     "CorrectionNode" : {
       "type" : "object",
       "properties" : {
-        "issue" : {
+        "fix" : {
           "type" : "string"
         },
-        "fix" : {
+        "issue" : {
           "type" : "string"
         }
       },
@@ -98,10 +55,56 @@ const STRUCTURED_SCHEMA: &str = r##"{
       },
       "additionalProperties" : false
     }
-  }
+  },
+  "type" : "object",
+  "properties" : {
+    "corrections" : {
+      "type" : "object",
+      "properties" : {
+        "expression" : {
+          "$ref" : "#/$defs/CorrectionNode"
+        },
+        "grammar" : {
+          "$ref" : "#/$defs/CorrectionNode"
+        },
+        "logic" : {
+          "$ref" : "#/$defs/CorrectionNode"
+        }
+      },
+      "additionalProperties" : false
+    },
+    "exampleAnswer" : {
+      "type" : "string"
+    },
+    "recommendations" : {
+      "type" : "object",
+      "properties" : {
+        "adjective" : {
+          "$ref" : "#/$defs/RecommendationNode"
+        },
+        "adverb" : {
+          "$ref" : "#/$defs/RecommendationNode"
+        },
+        "filler" : {
+          "$ref" : "#/$defs/RecommendationNode"
+        }
+      },
+      "additionalProperties" : false
+    },
+    "rulebookEvidence" : {
+      "type" : "array",
+      "items" : {
+        "type" : "string"
+      }
+    },
+    "summary" : {
+      "type" : "string"
+    }
+  },
+  "additionalProperties" : false
 }"##;
 
-/// `BeanOutputConverter.getFormat()`가 프롬프트 끝에 붙이던 안내문.
+/// `BeanOutputConverter.getFormat()`(Spring AI 1.0.3)가 프롬프트 끝에 붙이던 안내문.
 fn structured_output_format() -> &'static str {
     static FORMAT: OnceLock<String> = OnceLock::new();
     FORMAT.get_or_init(|| {
@@ -109,7 +112,7 @@ fn structured_output_format() -> &'static str {
             "Your response should be in JSON format.\n\
              Do not include any explanations, only provide a RFC8259 compliant JSON response following this format without deviation.\n\
              Do not include markdown code blocks in your response.\n\
-             Remove the ```json markdown surrounding the output including the trailing \"```\".\n\
+             Remove the ```json markdown from the output.\n\
              Here is the JSON Schema instance your output must adhere to:\n\
              ```{STRUCTURED_SCHEMA}```\n"
         )
@@ -1480,6 +1483,24 @@ mod tests {
             json!("#/$defs/CorrectionNode"),
             schema["properties"]["corrections"]["properties"]["logic"]["$ref"]
         );
+    }
+
+    #[test]
+    fn structured_output_format_matches_the_spring_ai_template() {
+        let expected = format!(
+            "Your response should be in JSON format.\n\
+             Do not include any explanations, only provide a RFC8259 compliant JSON response following this format without deviation.\n\
+             Do not include markdown code blocks in your response.\n\
+             Remove the ```json markdown from the output.\n\
+             Here is the JSON Schema instance your output must adhere to:\n\
+             ```{}```\n",
+            STRUCTURED_SCHEMA
+        );
+        assert_eq!(expected, structured_output_format());
+        assert!(STRUCTURED_SCHEMA.starts_with(
+            "{\n  \"$schema\" : \"https://json-schema.org/draft/2020-12/schema\",\n  \"$defs\" : {\n    \"CorrectionNode\" : {"
+        ));
+        assert!(STRUCTURED_SCHEMA.ends_with("  \"additionalProperties\" : false\n}"));
     }
 
     #[test]
