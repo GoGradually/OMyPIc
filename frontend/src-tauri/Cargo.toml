@@ -1,0 +1,42 @@
+[package]
+name = "omypic-desktop"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "omypic_desktop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "OMyPIc"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+omypic-infrastructure = { path = "../../backend/crates/infrastructure" }
+omypic-server = { path = "../../backend/crates/server" }
+tauri = { version = "2", features = [] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-dialog = "2"
+anyhow.workspace = true
+dirs = "6"
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["net"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+reqwest = { workspace = true }

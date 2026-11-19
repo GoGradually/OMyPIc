@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The main window may call only OMyPIc's own commands.",
+  "windows": ["main"],
+  "permissions": [
+    "allow-get-backend-url",
+    "allow-get-api-key",
+    "allow-set-api-key",
+    "allow-save-backup-file",
+    "allow-pick-backup-file"
+  ]
+}
