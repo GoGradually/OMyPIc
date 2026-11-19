@@ -1,0 +1,529 @@
+//! `AppProperties`에 대응하는 설정. 기본값과 `OMYPIC_*` 환경 변수 이름은 `application.yml`과 같다.
+use std::str::FromStr;
+
+use omypic_application::feedback::policy::FeedbackPolicy;
+use omypic_application::rulebook::policy::RagPolicy;
+use omypic_application::shared::policy::DataDirProvider;
+use omypic_application::stt::model::VadSettings;
+use omypic_application::stt::policy::SttPolicy;
+use omypic_application::voice::policy::VoicePolicy;
+use omypic_domain::error::{AppError, AppResult};
+
+use crate::storage::default_data_dir;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AppConfig {
+    /// `OMYPIC_PORT`, 기본 4317. 서버는 항상 `127.0.0.1`에만 바인딩한다.
+    pub port: u16,
+    /// `OMYPIC_DATA_DIR`, 기본 `<홈>/OMyPIc`.
+    pub data_dir: String,
+    pub stt: SttConfig,
+    pub rag: RagConfig,
+    pub feedback: FeedbackConfig,
+    pub voice: VoiceConfig,
+    pub integrations: IntegrationsConfig,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SttConfig {
+    pub max_file_bytes: u64,
+    pub max_duration_seconds: u32,
+    pub retry_max: u32,
+    pub vad: VadConfig,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VadConfig {
+    pub prefix_padding_ms: i32,
+    pub silence_duration_ms: i32,
+    pub threshold: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RagConfig {
+    pub provider: String,
+    pub embedding_dim: usize,
+    pub max_context_chunks: usize,
+    pub model_path: String,
+    pub model_version: String,
+    pub model_sha256: String,
+    pub download_url: String,
+    pub download_timeout_seconds: u64,
+    pub download_retry_max: u32,
+    pub allow_hash_fallback: bool,
+    pub model_max_vocab: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FeedbackConfig {
+    pub summary_max_chars: usize,
+    pub example_min_ratio: f64,
+    pub example_max_ratio: f64,
+    pub wrongnote_summary_max_chars: usize,
+    pub wrongnote_window_size: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VoiceConfig {
+    pub stt_model: String,
+    pub feedback_model: String,
+    pub feedback_language: String,
+    pub tts_model: String,
+    pub tts_voice: String,
+    pub recovery_retention_ms: i64,
+    pub stopped_context_max: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct IntegrationsConfig {
+    pub openai: OpenAiConfig,
+    pub anthropic: AnthropicConfig,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpenAiConfig {
+    pub base_url: String,
+    pub responses_enabled: bool,
+    pub conversation_rebase_turns: u32,
+    pub logging: OpenAiLoggingConfig,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpenAiLoggingConfig {
+    pub response_preview_chars: usize,
+    pub full_body: bool,
+    pub log_success_at_fine: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnthropicConfig {
+    pub base_url: String,
+    pub max_tokens: u64,
+    pub effort: String,
+    pub timeout_seconds: u64,
+    pub max_retries: u32,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            port: 4317,
+            data_dir: default_data_dir(),
+            stt: SttConfig {
+                max_file_bytes: 26_214_400,
+                max_duration_seconds: 180,
+                retry_max: 2,
+                vad: VadConfig {
+                    prefix_padding_ms: 300,
+                    silence_duration_ms: 200,
+                    threshold: 0.5,
+                },
+            },
+            rag: RagConfig {
+                provider: "fasttext".to_string(),
+                embedding_dim: 300,
+                max_context_chunks: 4,
+                model_path: String::new(),
+                model_version: "cc.ko.300.vec.gz".to_string(),
+                model_sha256: "9d71f0ae144e0f89dd233bfa7eca421be26bd1e5dd18e2cc56888a04be982d97"
+                    .to_string(),
+                download_url:
+                    "https://dl.fbaipublicfiles.com/fasttext/vectors-crawl/cc.ko.300.vec.gz"
+                        .to_string(),
+                download_timeout_seconds: 1800,
+                download_retry_max: 2,
+                allow_hash_fallback: false,
+                model_max_vocab: 200_000,
+            },
+            feedback: FeedbackConfig {
+                summary_max_chars: 400,
+                example_min_ratio: 0.8,
+                example_max_ratio: 1.2,
+                wrongnote_summary_max_chars: 255,
+                wrongnote_window_size: 100,
+            },
+            voice: VoiceConfig {
+                stt_model: "gpt-4o-mini-transcribe".to_string(),
+                feedback_model: "gpt-5-nano".to_string(),
+                feedback_language: "ko".to_string(),
+                tts_model: "gpt-4o-mini-tts".to_string(),
+                tts_voice: "alloy".to_string(),
+                recovery_retention_ms: 600_000,
+                stopped_context_max: 1000,
+            },
+            integrations: IntegrationsConfig {
+                openai: OpenAiConfig {
+                    base_url: "https://api.openai.com".to_string(),
+                    responses_enabled: true,
+                    conversation_rebase_turns: 6,
+                    logging: OpenAiLoggingConfig {
+                        response_preview_chars: 1024,
+                        full_body: false,
+                        log_success_at_fine: true,
+                    },
+                },
+                anthropic: AnthropicConfig {
+                    base_url: "https://api.anthropic.com".to_string(),
+                    max_tokens: 16_000,
+                    effort: "low".to_string(),
+                    timeout_seconds: 120,
+                    max_retries: 2,
+                },
+            },
+        }
+    }
+}
+
+impl AppConfig {
+    /// 프로세스 환경 변수에서 읽는다.
+    pub fn from_env() -> AppResult<Self> {
+        Self::from_env_with(|name| std::env::var(name).ok())
+    }
+
+    /// `lookup`으로 환경 변수를 읽는다. 값이 없거나 비어 있으면 기본값을 쓰고,
+    /// 값이 있는데 형식이 틀리면 변수 이름을 담은 `InvalidArgument`로 거절한다.
+    pub fn from_env_with(lookup: impl Fn(&str) -> Option<String>) -> AppResult<Self> {
+        let mut config = Self::default();
+        let env = Env { lookup: &lookup };
+
+        env.set("OMYPIC_PORT", &mut config.port)?;
+        env.set("OMYPIC_DATA_DIR", &mut config.data_dir)?;
+
+        let rag = &mut config.rag;
+        env.set("OMYPIC_RAG_PROVIDER", &mut rag.provider)?;
+        env.set("OMYPIC_RAG_MODEL_PATH", &mut rag.model_path)?;
+        env.set("OMYPIC_RAG_MODEL_VERSION", &mut rag.model_version)?;
+        env.set("OMYPIC_RAG_MODEL_SHA256", &mut rag.model_sha256)?;
+        env.set("OMYPIC_RAG_DOWNLOAD_URL", &mut rag.download_url)?;
+        env.set_bool(
+            "OMYPIC_RAG_ALLOW_HASH_FALLBACK",
+            &mut rag.allow_hash_fallback,
+        )?;
+
+        let openai = &mut config.integrations.openai;
+        env.set("OMYPIC_OPENAI_BASE_URL", &mut openai.base_url)?;
+        env.set_bool(
+            "OMYPIC_OPENAI_RESPONSES_ENABLED",
+            &mut openai.responses_enabled,
+        )?;
+        env.set(
+            "OMYPIC_OPENAI_CONVERSATION_REBASE_TURNS",
+            &mut openai.conversation_rebase_turns,
+        )?;
+        env.set(
+            "OMYPIC_OPENAI_LOG_RESPONSE_PREVIEW_CHARS",
+            &mut openai.logging.response_preview_chars,
+        )?;
+        env.set_bool("OMYPIC_OPENAI_LOG_FULL_BODY", &mut openai.logging.full_body)?;
+        env.set_bool(
+            "OMYPIC_OPENAI_LOG_SUCCESS_AT_FINE",
+            &mut openai.logging.log_success_at_fine,
+        )?;
+
+        let anthropic = &mut config.integrations.anthropic;
+        env.set("OMYPIC_ANTHROPIC_BASE_URL", &mut anthropic.base_url)?;
+        env.set("OMYPIC_ANTHROPIC_MAX_TOKENS", &mut anthropic.max_tokens)?;
+        env.set("OMYPIC_ANTHROPIC_EFFORT", &mut anthropic.effort)?;
+        env.set(
+            "OMYPIC_ANTHROPIC_TIMEOUT_SECONDS",
+            &mut anthropic.timeout_seconds,
+        )?;
+        env.set("OMYPIC_ANTHROPIC_MAX_RETRIES", &mut anthropic.max_retries)?;
+
+        Ok(config)
+    }
+}
+
+struct Env<'a> {
+    lookup: &'a dyn Fn(&str) -> Option<String>,
+}
+
+impl Env<'_> {
+    fn raw(&self, name: &str) -> Option<String> {
+        (self.lookup)(name).filter(|value| !value.is_empty())
+    }
+
+    fn set<T: FromStr>(&self, name: &str, target: &mut T) -> AppResult<()> {
+        if let Some(raw) = self.raw(name) {
+            *target = raw.trim().parse().map_err(|_| invalid(name, &raw))?;
+        }
+        Ok(())
+    }
+
+    fn set_bool(&self, name: &str, target: &mut bool) -> AppResult<()> {
+        if let Some(raw) = self.raw(name) {
+            *target = match raw.trim().to_ascii_lowercase().as_str() {
+                "true" | "1" | "yes" | "on" => true,
+                "false" | "0" | "no" | "off" => false,
+                _ => return Err(invalid(name, &raw)),
+            };
+        }
+        Ok(())
+    }
+}
+
+fn invalid(name: &str, value: &str) -> AppError {
+    AppError::InvalidArgument(format!("Invalid value for {name}: '{value}'"))
+}
+
+impl DataDirProvider for AppConfig {
+    fn get_data_dir(&self) -> String {
+        self.data_dir.clone()
+    }
+}
+
+impl SttPolicy for AppConfig {
+    fn get_max_file_bytes(&self) -> u64 {
+        self.stt.max_file_bytes
+    }
+
+    fn retry_max(&self) -> u32 {
+        self.stt.retry_max
+    }
+
+    fn get_vad_settings(&self) -> VadSettings {
+        VadSettings {
+            prefix_padding_ms: self.stt.vad.prefix_padding_ms,
+            silence_duration_ms: self.stt.vad.silence_duration_ms,
+            threshold: self.stt.vad.threshold,
+        }
+    }
+}
+
+impl RagPolicy for AppConfig {
+    fn get_max_context_chunks(&self) -> usize {
+        self.rag.max_context_chunks
+    }
+}
+
+impl FeedbackPolicy for AppConfig {
+    fn get_summary_max_chars(&self) -> usize {
+        self.feedback.summary_max_chars
+    }
+
+    fn get_example_min_ratio(&self) -> f64 {
+        self.feedback.example_min_ratio
+    }
+
+    fn get_example_max_ratio(&self) -> f64 {
+        self.feedback.example_max_ratio
+    }
+
+    fn get_wrongnote_summary_max_chars(&self) -> usize {
+        self.feedback.wrongnote_summary_max_chars
+    }
+
+    fn get_wrongnote_window_size(&self) -> usize {
+        self.feedback.wrongnote_window_size
+    }
+}
+
+impl VoicePolicy for AppConfig {
+    fn voice_stt_model(&self) -> String {
+        self.voice.stt_model.clone()
+    }
+
+    fn voice_feedback_model(&self) -> String {
+        self.voice.feedback_model.clone()
+    }
+
+    fn voice_feedback_language(&self) -> String {
+        self.voice.feedback_language.clone()
+    }
+
+    fn voice_tts_model(&self) -> String {
+        self.voice.tts_model.clone()
+    }
+
+    fn voice_tts_voice(&self) -> String {
+        self.voice.tts_voice.clone()
+    }
+
+    fn voice_recovery_retention_ms(&self) -> i64 {
+        self.voice.recovery_retention_ms
+    }
+
+    fn voice_stopped_context_max(&self) -> usize {
+        self.voice.stopped_context_max
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    fn from_map(pairs: &[(&str, &str)]) -> AppResult<AppConfig> {
+        let map: HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        AppConfig::from_env_with(|name| map.get(name).cloned())
+    }
+
+    #[test]
+    fn policy_getters_delegate_to_nested_properties() {
+        let mut config = AppConfig {
+            data_dir: "/tmp/omypic".to_string(),
+            ..AppConfig::default()
+        };
+        config.stt.max_file_bytes = 1234;
+        config.stt.retry_max = 7;
+        config.stt.vad.prefix_padding_ms = 111;
+        config.stt.vad.silence_duration_ms = 222;
+        config.stt.vad.threshold = 0.8;
+        config.rag.max_context_chunks = 9;
+        config.feedback.summary_max_chars = 333;
+        config.feedback.example_min_ratio = 0.7;
+        config.feedback.example_max_ratio = 1.5;
+        config.feedback.wrongnote_summary_max_chars = 88;
+        config.feedback.wrongnote_window_size = 33;
+        config.voice.feedback_model = "gpt-4o-mini".to_string();
+
+        assert_eq!("/tmp/omypic", config.get_data_dir());
+        assert_eq!(1234, config.get_max_file_bytes());
+        assert_eq!(7, config.retry_max());
+        let vad = config.get_vad_settings();
+        assert_eq!(111, vad.prefix_padding_ms);
+        assert_eq!(222, vad.silence_duration_ms);
+        assert_eq!(0.8, vad.threshold);
+        assert_eq!(9, config.get_max_context_chunks());
+        assert_eq!(333, config.get_summary_max_chars());
+        assert_eq!(0.7, config.get_example_min_ratio());
+        assert_eq!(1.5, config.get_example_max_ratio());
+        assert_eq!(88, config.get_wrongnote_summary_max_chars());
+        assert_eq!(33, config.get_wrongnote_window_size());
+        assert_eq!("gpt-4o-mini-transcribe", config.voice_stt_model());
+        assert_eq!("gpt-4o-mini", config.voice_feedback_model());
+        assert_eq!("ko", config.voice_feedback_language());
+        assert_eq!("gpt-4o-mini-tts", config.voice_tts_model());
+        assert_eq!("alloy", config.voice_tts_voice());
+        assert_eq!(600_000, config.voice_recovery_retention_ms());
+        assert_eq!(1000, config.voice_stopped_context_max());
+    }
+
+    #[test]
+    fn defaults_match_application_yml() {
+        let config = AppConfig::default();
+
+        assert_eq!(4317, config.port);
+        assert!(config.data_dir.ends_with("OMyPIc"));
+        assert_eq!(26_214_400, config.stt.max_file_bytes);
+        assert_eq!(180, config.stt.max_duration_seconds);
+        assert_eq!(2, config.stt.retry_max);
+        assert_eq!(300, config.stt.vad.prefix_padding_ms);
+        assert_eq!(200, config.stt.vad.silence_duration_ms);
+        assert_eq!(0.5, config.stt.vad.threshold);
+        assert_eq!("fasttext", config.rag.provider);
+        assert_eq!(300, config.rag.embedding_dim);
+        assert_eq!(4, config.rag.max_context_chunks);
+        assert_eq!("", config.rag.model_path);
+        assert_eq!("cc.ko.300.vec.gz", config.rag.model_version);
+        assert_eq!(1800, config.rag.download_timeout_seconds);
+        assert_eq!(2, config.rag.download_retry_max);
+        assert!(!config.rag.allow_hash_fallback);
+        assert_eq!(200_000, config.rag.model_max_vocab);
+        assert_eq!(400, config.feedback.summary_max_chars);
+        assert_eq!(0.8, config.feedback.example_min_ratio);
+        assert_eq!(1.2, config.feedback.example_max_ratio);
+        assert_eq!(255, config.feedback.wrongnote_summary_max_chars);
+        assert_eq!(100, config.feedback.wrongnote_window_size);
+        assert_eq!("gpt-5-nano", config.voice.feedback_model);
+        let openai = &config.integrations.openai;
+        assert_eq!("https://api.openai.com", openai.base_url);
+        assert!(openai.responses_enabled);
+        assert_eq!(6, openai.conversation_rebase_turns);
+        assert_eq!(1024, openai.logging.response_preview_chars);
+        assert!(!openai.logging.full_body);
+        assert!(openai.logging.log_success_at_fine);
+        let anthropic = &config.integrations.anthropic;
+        assert_eq!("https://api.anthropic.com", anthropic.base_url);
+        assert_eq!(16_000, anthropic.max_tokens);
+        assert_eq!("low", anthropic.effort);
+        assert_eq!(120, anthropic.timeout_seconds);
+        assert_eq!(2, anthropic.max_retries);
+    }
+
+    #[test]
+    fn from_env_with_empty_map_returns_defaults() {
+        assert_eq!(AppConfig::default(), from_map(&[]).unwrap());
+    }
+
+    #[test]
+    fn from_env_with_overrides_values() {
+        let config = from_map(&[
+            ("OMYPIC_PORT", "8080"),
+            ("OMYPIC_DATA_DIR", "/data/omypic"),
+            ("OMYPIC_RAG_PROVIDER", "hash"),
+            ("OMYPIC_RAG_MODEL_PATH", "/models/ko.vec.gz"),
+            ("OMYPIC_RAG_MODEL_VERSION", "ko.vec.gz"),
+            ("OMYPIC_RAG_MODEL_SHA256", "abc123"),
+            ("OMYPIC_RAG_DOWNLOAD_URL", "https://example.com/ko.vec.gz"),
+            ("OMYPIC_RAG_ALLOW_HASH_FALLBACK", "true"),
+            ("OMYPIC_OPENAI_BASE_URL", "http://openai.local"),
+            ("OMYPIC_OPENAI_RESPONSES_ENABLED", "false"),
+            ("OMYPIC_OPENAI_CONVERSATION_REBASE_TURNS", "9"),
+            ("OMYPIC_OPENAI_LOG_RESPONSE_PREVIEW_CHARS", "777"),
+            ("OMYPIC_OPENAI_LOG_FULL_BODY", "TRUE"),
+            ("OMYPIC_OPENAI_LOG_SUCCESS_AT_FINE", "false"),
+            ("OMYPIC_ANTHROPIC_BASE_URL", "http://anthropic.local"),
+            ("OMYPIC_ANTHROPIC_MAX_TOKENS", "4000"),
+            ("OMYPIC_ANTHROPIC_EFFORT", "high"),
+            ("OMYPIC_ANTHROPIC_TIMEOUT_SECONDS", "30"),
+            ("OMYPIC_ANTHROPIC_MAX_RETRIES", "5"),
+        ])
+        .unwrap();
+
+        assert_eq!(8080, config.port);
+        assert_eq!("/data/omypic", config.data_dir);
+        assert_eq!("hash", config.rag.provider);
+        assert_eq!("/models/ko.vec.gz", config.rag.model_path);
+        assert_eq!("ko.vec.gz", config.rag.model_version);
+        assert_eq!("abc123", config.rag.model_sha256);
+        assert_eq!("https://example.com/ko.vec.gz", config.rag.download_url);
+        assert!(config.rag.allow_hash_fallback);
+        let openai = &config.integrations.openai;
+        assert_eq!("http://openai.local", openai.base_url);
+        assert!(!openai.responses_enabled);
+        assert_eq!(9, openai.conversation_rebase_turns);
+        assert_eq!(777, openai.logging.response_preview_chars);
+        assert!(openai.logging.full_body);
+        assert!(!openai.logging.log_success_at_fine);
+        let anthropic = &config.integrations.anthropic;
+        assert_eq!("http://anthropic.local", anthropic.base_url);
+        assert_eq!(4000, anthropic.max_tokens);
+        assert_eq!("high", anthropic.effort);
+        assert_eq!(30, anthropic.timeout_seconds);
+        assert_eq!(5, anthropic.max_retries);
+    }
+
+    #[test]
+    fn from_env_with_ignores_empty_values() {
+        let config = from_map(&[("OMYPIC_PORT", ""), ("OMYPIC_RAG_PROVIDER", "")]).unwrap();
+
+        assert_eq!(4317, config.port);
+        assert_eq!("fasttext", config.rag.provider);
+    }
+
+    #[test]
+    fn from_env_with_rejects_malformed_values_naming_the_variable() {
+        for (name, value) in [
+            ("OMYPIC_PORT", "abc"),
+            ("OMYPIC_PORT", "70000"),
+            ("OMYPIC_RAG_ALLOW_HASH_FALLBACK", "maybe"),
+            ("OMYPIC_OPENAI_CONVERSATION_REBASE_TURNS", "-1"),
+            ("OMYPIC_ANTHROPIC_MAX_TOKENS", "1.5"),
+        ] {
+            let error = from_map(&[(name, value)]).unwrap_err();
+
+            match error {
+                AppError::InvalidArgument(message) => {
+                    assert!(message.contains(name), "{message}");
+                    assert!(message.contains(value), "{message}");
+                }
+                other => panic!("expected InvalidArgument, got {other:?}"),
+            }
+        }
+    }
+}

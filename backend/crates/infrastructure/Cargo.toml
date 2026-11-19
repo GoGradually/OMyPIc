@@ -1,0 +1,12 @@
+[package]
+name = "omypic-infrastructure"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+omypic-domain = { path = "../domain" }
+omypic-application = { path = "../application" }
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
