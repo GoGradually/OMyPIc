@@ -396,4 +396,26 @@ mod tests {
         let item_ids: Vec<&str> = all[0].questions().iter().map(|q| q.id().value()).collect();
         assert_eq!(["g5-c", "g5-a", "g5-b"], item_ids.as_slice());
     }
+
+    #[test]
+    fn same_item_id_in_two_groups_is_saved_and_read_back() {
+        let adapter = adapter();
+        adapter
+            .save(group("g1", "A", &[], vec![item("q1", "from a", None)]))
+            .unwrap();
+        adapter
+            .save(group(
+                "g2",
+                "B",
+                &[],
+                vec![item("q1", "from b", Some("habit"))],
+            ))
+            .unwrap();
+
+        let all = adapter.find_all().unwrap();
+        assert_eq!(2, all.len());
+        assert_eq!("from a", all[0].questions()[0].text());
+        assert_eq!("from b", all[1].questions()[0].text());
+        assert_eq!("q1", all[1].questions()[0].id().value());
+    }
 }
