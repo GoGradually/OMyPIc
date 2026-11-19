@@ -225,32 +225,84 @@ pub struct BootstrapCall {
     pub conversation_state: LlmConversationState,
 }
 
-/// 대본의 결과를 차례로 돌려주는 LLM 클라이언트. `bootstrap`은 정해 둔 상태를 돌려준다.
-#[derive(Debug)]
+type GenerateResponder = Box<dyn Fn(&GenerateCall) -> AppResult<LlmGenerateResult> + Send + Sync>;
+type BootstrapResponder =
+    Box<dyn Fn(&BootstrapCall) -> AppResult<LlmConversationState> + Send + Sync>;
+
+enum GenerateSource {
+    /// 대본의 결과를 차례로 돌려주고, 끝나면 마지막 결과를 반복한다.
+    Script(Mutex<Vec<AppResult<LlmGenerateResult>>>),
+    /// 호출 인자로 결과를 만든다 (Mockito의 `thenAnswer`).
+    Responder(GenerateResponder),
+}
+
+/// 대본의 결과를 차례로 돌려주거나(`new`) 호출 인자로 결과를 만드는(`with_responder`) LLM
+/// 클라이언트. `bootstrap`은 정해 둔 상태(`set_bootstrap_result`)나 응답 함수
+/// (`set_bootstrap_responder`)의 결과를 돌려준다. 기본은 빈 대화 상태다.
 pub struct ScriptedLlmClient {
     provider: String,
     stateless: bool,
-    bootstrap_state: Mutex<AppResult<LlmConversationState>>,
-    script: Mutex<Vec<AppResult<LlmGenerateResult>>>,
+    bootstrap: Mutex<BootstrapResponder>,
+    generate: GenerateSource,
     bootstrap_calls: Mutex<Vec<BootstrapCall>>,
     generate_calls: Mutex<Vec<GenerateCall>>,
+}
+
+impl std::fmt::Debug for ScriptedLlmClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScriptedLlmClient")
+            .field("provider", &self.provider)
+            .field("stateless", &self.stateless)
+            .field("bootstrap_calls", &self.bootstrap_calls)
+            .field("generate_calls", &self.generate_calls)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ScriptedLlmClient {
     pub fn new(provider: &str, stateless: bool, script: Vec<AppResult<LlmGenerateResult>>) -> Self {
         assert!(!script.is_empty(), "script must have at least one result");
+        Self::with_source(
+            provider,
+            stateless,
+            GenerateSource::Script(Mutex::new(script)),
+        )
+    }
+
+    /// `generate`마다 `responder`가 호출 인자로 결과를 만든다.
+    pub fn with_responder(
+        provider: &str,
+        stateless: bool,
+        responder: impl Fn(&GenerateCall) -> AppResult<LlmGenerateResult> + Send + Sync + 'static,
+    ) -> Self {
+        Self::with_source(
+            provider,
+            stateless,
+            GenerateSource::Responder(Box::new(responder)),
+        )
+    }
+
+    fn with_source(provider: &str, stateless: bool, generate: GenerateSource) -> Self {
         Self {
             provider: provider.to_string(),
             stateless,
-            bootstrap_state: Mutex::new(Ok(LlmConversationState::empty())),
-            script: Mutex::new(script),
+            bootstrap: Mutex::new(Box::new(|_| Ok(LlmConversationState::empty()))),
+            generate,
             bootstrap_calls: Mutex::new(Vec::new()),
             generate_calls: Mutex::new(Vec::new()),
         }
     }
 
     pub fn set_bootstrap_result(&self, result: AppResult<LlmConversationState>) {
-        *lock(&self.bootstrap_state) = result;
+        *lock(&self.bootstrap) = Box::new(move |_| result.clone());
+    }
+
+    /// 이후 `bootstrap`마다 `responder`가 호출 인자로 결과를 만든다.
+    pub fn set_bootstrap_responder(
+        &self,
+        responder: impl Fn(&BootstrapCall) -> AppResult<LlmConversationState> + Send + Sync + 'static,
+    ) {
+        *lock(&self.bootstrap) = Box::new(responder);
     }
 
     pub fn bootstrap_calls(&self) -> Vec<BootstrapCall> {
@@ -278,13 +330,14 @@ impl LlmClient for ScriptedLlmClient {
         system_prompt: &str,
         conversation_state: &LlmConversationState,
     ) -> AppResult<LlmConversationState> {
-        lock(&self.bootstrap_calls).push(BootstrapCall {
+        let call = BootstrapCall {
             api_key: api_key.to_string(),
             model: model.to_string(),
             system_prompt: system_prompt.to_string(),
             conversation_state: conversation_state.clone(),
-        });
-        lock(&self.bootstrap_state).clone()
+        };
+        lock(&self.bootstrap_calls).push(call.clone());
+        (lock(&self.bootstrap))(&call)
     }
 
     fn generate(
@@ -296,14 +349,18 @@ impl LlmClient for ScriptedLlmClient {
         conversation_state: &LlmConversationState,
         prompt_context: &LlmPromptContext,
     ) -> AppResult<LlmGenerateResult> {
-        lock(&self.generate_calls).push(GenerateCall {
+        let call = GenerateCall {
             api_key: api_key.to_string(),
             model: model.to_string(),
             system_prompt: system_prompt.to_string(),
             user_prompt: user_prompt.to_string(),
             conversation_state: conversation_state.clone(),
             prompt_context: prompt_context.clone(),
-        });
-        next_scripted(&self.script)
+        };
+        lock(&self.generate_calls).push(call.clone());
+        match &self.generate {
+            GenerateSource::Script(script) => next_scripted(script),
+            GenerateSource::Responder(responder) => responder(&call),
+        }
     }
 }
