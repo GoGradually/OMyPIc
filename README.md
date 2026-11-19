@@ -118,6 +118,9 @@ Intel Mac용 DMG는 워크플로에 포함되어 있지 않습니다. 필요하�
   - 기본값: fastText 공식 배포 URL (`cc.ko.300.vec.gz`)
 - `OMYPIC_RAG_ALLOW_HASH_FALLBACK`
   - 기본값: `false`
+- `OMYPIC_OPENAI_TIMEOUT_SECONDS`
+  - 기본값: `300` (최소 `1`)
+  - OpenAI LLM/STT/TTS 요청 하나의 전체 제한 시간(초). 넘기면 연결 실패와 같은 오류로 처리합니다.
 - `OMYPIC_ALLOWED_ORIGINS`
   - 기본값: `http://localhost:5173,http://127.0.0.1:5173,tauri://localhost,http://tauri.localhost,https://tauri.localhost`
   - Backend가 요청을 받아 주는 브라우저 origin(쉼표로 구분). 지정하면 기본 목록을 대신하며, 목록에 없는 `Origin`이 붙은 요청은 403입니다.

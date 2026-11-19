@@ -65,7 +65,7 @@ pub fn build_state(config: &AppConfig) -> anyhow::Result<AppState> {
 
     let openai = &config.integrations.openai;
     let anthropic = &config.integrations.anthropic;
-    let openai_http = build_http_client()?;
+    let openai_http = build_http_client(openai.request_timeout())?;
     let llm_clients: Vec<Arc<dyn LlmClient>> = vec![
         Arc::new(OpenAiLlmClient::new(openai_http.clone(), openai)),
         Arc::new(AnthropicLlmClient::new(

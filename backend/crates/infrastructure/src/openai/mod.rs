@@ -1,7 +1,7 @@
 //! OpenAI 연동: `/v1/responses`와 `/v1/chat/completions` LLM 클라이언트, STT, TTS, 키 확인.
 //!
 //! 이 어댑터들은 블로킹 스레드에서만 부른다(HTTP 계층이 `spawn_blocking`으로 부른다).
-//! LLM/STT/TTS 어댑터는 `build_http_client()`(연결 제한만) 하나를 나눠 쓰고,
+//! LLM/STT/TTS 어댑터는 `build_http_client(..)`(요청 하나의 전체 제한은 설정값) 하나를 나눠 쓰고,
 //! 키 확인 어댑터는 `build_probe_http_client()`(응답 60초)를 쓴다.
 
 pub(crate) mod http;

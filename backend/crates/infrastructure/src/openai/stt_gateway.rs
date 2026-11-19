@@ -97,11 +97,12 @@ mod tests {
 
     fn gateway(server: &MockServer) -> OpenAiSttGateway {
         OpenAiSttGateway::new(
-            http::build_http_client().unwrap(),
+            http::build_http_client(std::time::Duration::from_secs(300)).unwrap(),
             &OpenAiConfig {
                 base_url: format!("{}/", server.base_url()),
                 responses_enabled: true,
                 conversation_rebase_turns: 6,
+                timeout_seconds: 300,
                 logging: OpenAiLoggingConfig {
                     response_preview_chars: 512,
                     full_body: false,

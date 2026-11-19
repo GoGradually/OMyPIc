@@ -202,6 +202,7 @@ mod tests {
                 base_url: base_url.clone(),
                 responses_enabled: true,
                 conversation_rebase_turns: 6,
+                timeout_seconds: 300,
                 logging: OpenAiLoggingConfig {
                     response_preview_chars: 512,
                     full_body: false,

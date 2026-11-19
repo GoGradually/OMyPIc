@@ -10,16 +10,18 @@ use reqwest::blocking::{Client, RequestBuilder};
 /// 연결 제한 시간. Java 쪽은 지정하지 않아서 Netty 기본값(30초)이 적용됐다.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// 키 확인용 클라이언트의 응답 제한 시간. `WebClientConfig`의 `responseTimeout(60s)` 값이다.
-/// LLM, STT, TTS 요청에는 적용하지 않는다(Java에서 그 요청들은 이 제한을 쓰지 않았다).
+/// LLM, STT, TTS 요청은 설정(`integrations.openai.timeout-seconds`)의 전체 제한을 쓴다.
 pub const PROBE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
 /// `ConnectionProvider.maxConnections(50)`에 대응해 호스트마다 남겨 두는 유휴 연결 수.
 pub const MAX_IDLE_CONNECTIONS_PER_HOST: usize = 50;
 /// `maxInMemorySize(20 * 1024 * 1024)`.
 pub const MAX_BODY_BYTES: usize = 20 * 1024 * 1024;
 
-/// LLM, STT, TTS 어댑터가 나눠 쓰는 블로킹 클라이언트: 연결 제한 시간만 있고 전체 제한은 없다.
-pub fn build_http_client() -> AppResult<Client> {
-    build_http_client_with_limits(CONNECT_TIMEOUT, None)
+/// LLM, STT, TTS 어댑터가 나눠 쓰는 블로킹 클라이언트. 연결 30초에, 요청 하나(응답 본문을
+/// 다 읽을 때까지)의 전체 제한이 `request_timeout`이다. 제한을 넘기면 연결 실패와 같은
+/// 전송 오류가 된다. 멈춘 연결 하나가 음성 세션을 영영 붙잡지 않게 하려는 것이다.
+pub fn build_http_client(request_timeout: Duration) -> AppResult<Client> {
+    build_http_client_with_limits(CONNECT_TIMEOUT, Some(request_timeout))
 }
 
 /// 키 확인 어댑터용 클라이언트: 연결 30초에 응답 60초.
@@ -148,7 +150,7 @@ mod tests {
         assert_eq!(Duration::from_secs(60), PROBE_RESPONSE_TIMEOUT);
         assert_eq!(20 * 1024 * 1024, MAX_BODY_BYTES);
         assert_eq!(50, MAX_IDLE_CONNECTIONS_PER_HOST);
-        assert!(build_http_client().is_ok());
+        assert!(build_http_client(Duration::from_secs(300)).is_ok());
         assert!(build_probe_http_client().is_ok());
     }
 
@@ -207,6 +209,7 @@ mod tests {
             base_url,
             responses_enabled: true,
             conversation_rebase_turns: 6,
+            timeout_seconds: 300,
             logging: crate::config::OpenAiLoggingConfig {
                 response_preview_chars: 512,
                 full_body: false,
@@ -216,32 +219,74 @@ mod tests {
     }
 
     #[test]
-    fn llm_call_has_no_total_deadline_but_the_probe_does() {
-        use omypic_application::apikey::port::ApiKeyProbePort;
+    fn llm_stt_and_tts_calls_stop_at_the_total_deadline_like_a_transport_failure() {
         use omypic_application::feedback::port::LlmClient;
+        use omypic_application::stt::model::VadSettings;
+        use omypic_application::stt::port::SttGateway;
+        use omypic_application::voice::port::TtsGateway;
         use omypic_domain::session::LlmConversationState;
 
-        // 시험용으로 줄인 제한: 응답은 0.9초 뒤에 오고, 키 확인 제한은 0.3초다.
+        // 시험용으로 줄인 제한: 응답은 0.9초 뒤에 오고, 제한은 0.3초다.
         let delay = Duration::from_millis(900);
-        let probe_limit = Duration::from_millis(300);
         let reply = serde_json::json!({
             "id": "resp-1",
             "conversation": "conv-1",
             "output_text": "ok",
+            "text": "hello",
             "choices": [{"message": {"content": "pong"}}]
         })
         .to_string();
         let base_url = delayed_server(delay, reply);
         let config = openai_config(base_url.clone());
+        let short = build_http_client(Duration::from_millis(300)).unwrap();
 
-        let llm_http = build_http_client_with_limits(CONNECT_TIMEOUT, None).unwrap();
-        let llm = crate::openai::OpenAiLlmClient::new(llm_http, &config);
-        let state = llm
+        let started = std::time::Instant::now();
+        let llm = crate::openai::OpenAiLlmClient::new(short.clone(), &config)
+            .bootstrap("k", "gpt-4o-mini", "sys", &LlmConversationState::empty())
+            .unwrap_err();
+        assert!(started.elapsed() < delay, "{:?}", started.elapsed());
+        let AppError::Internal(message) = llm else {
+            panic!("expected the transport error path, got {llm:?}");
+        };
+        assert!(message.contains("timed out"), "{message}");
+
+        let vad = VadSettings {
+            prefix_padding_ms: 300,
+            silence_duration_ms: 200,
+            threshold: 0.5,
+        };
+        let stt = crate::openai::OpenAiSttGateway::new(short.clone(), &config)
+            .transcribe(&[1, 2, 3], "gpt-4o-mini-transcribe", "k", false, &vad)
+            .unwrap_err();
+        assert!(
+            matches!(stt, AppError::Internal(ref m) if m.contains("timed out")),
+            "{stt:?}"
+        );
+
+        let tts = crate::openai::OpenAiTtsGateway::new(short, &config)
+            .synthesize("k", "gpt-4o-mini-tts", "alloy", "hello")
+            .unwrap_err();
+        assert!(
+            matches!(tts, AppError::Internal(ref m) if m.contains("timed out")),
+            "{tts:?}"
+        );
+
+        // 제한이 지연보다 길면 같은 요청이 통과한다.
+        let long = build_http_client(Duration::from_secs(10)).unwrap();
+        let state = crate::openai::OpenAiLlmClient::new(long, &config)
             .bootstrap("k", "gpt-4o-mini", "sys", &LlmConversationState::empty())
             .unwrap();
         assert_eq!("conv-1", state.conversation_id());
+    }
 
-        let probe_http = build_http_client_with_limits(CONNECT_TIMEOUT, Some(probe_limit)).unwrap();
+    #[test]
+    fn probe_keeps_its_own_sixty_second_deadline() {
+        use omypic_application::apikey::port::ApiKeyProbePort;
+
+        assert_eq!(Duration::from_secs(60), PROBE_RESPONSE_TIMEOUT);
+        let delay = Duration::from_millis(900);
+        let base_url = delayed_server(delay, "{}".to_string());
+        let config = openai_config(base_url.clone());
         let anthropic = crate::config::AnthropicConfig {
             base_url,
             max_tokens: 16_000,
@@ -249,6 +294,11 @@ mod tests {
             timeout_seconds: 120,
             max_retries: 0,
         };
+
+        // 시험용으로 줄인 키 확인 제한(0.3초)은 0.9초 지연에서 실패한다.
+        let probe_http =
+            build_http_client_with_limits(CONNECT_TIMEOUT, Some(Duration::from_millis(300)))
+                .unwrap();
         let probe = crate::openai::HttpApiKeyProbeAdapter::new(probe_http, &config, &anthropic);
         let error = probe.probe("openai", "k", None).err().unwrap();
         let AppError::InvalidState(message) = error else {
@@ -259,9 +309,12 @@ mod tests {
             "{message}"
         );
 
-        // 같은 지연이 제한 없는 클라이언트의 키 확인은 통과한다.
-        let unlimited = build_http_client_with_limits(CONNECT_TIMEOUT, None).unwrap();
-        let probe = crate::openai::HttpApiKeyProbeAdapter::new(unlimited, &config, &anthropic);
+        // 실제 키 확인 클라이언트(60초)는 같은 지연을 통과한다.
+        let probe = crate::openai::HttpApiKeyProbeAdapter::new(
+            build_probe_http_client().unwrap(),
+            &config,
+            &anthropic,
+        );
         probe.probe("openai", "k", None).unwrap();
     }
 }

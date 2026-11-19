@@ -821,6 +821,7 @@ mod tests {
             base_url: format!("{}/", server.base_url()),
             responses_enabled,
             conversation_rebase_turns: 6,
+            timeout_seconds: 300,
             logging: OpenAiLoggingConfig {
                 response_preview_chars: 512,
                 full_body: false,
@@ -830,7 +831,10 @@ mod tests {
     }
 
     fn client(server: &MockServer) -> OpenAiLlmClient {
-        OpenAiLlmClient::new(http::build_http_client().unwrap(), &config(server, true))
+        OpenAiLlmClient::new(
+            http::build_http_client(std::time::Duration::from_secs(300)).unwrap(),
+            &config(server, true),
+        )
     }
 
     fn responses_body(output_text: &str, response_id: &str, conversation_id: &str) -> String {
@@ -1164,8 +1168,10 @@ mod tests {
                 .to_string(),
             );
         });
-        let client =
-            OpenAiLlmClient::new(http::build_http_client().unwrap(), &config(&server, false));
+        let client = OpenAiLlmClient::new(
+            http::build_http_client(std::time::Duration::from_secs(300)).unwrap(),
+            &config(&server, false),
+        );
 
         let result = client
             .generate(
@@ -1337,13 +1343,17 @@ mod tests {
             base_url: format!("http://127.0.0.1:{port}"),
             responses_enabled: true,
             conversation_rebase_turns: 6,
+            timeout_seconds: 300,
             logging: OpenAiLoggingConfig {
                 response_preview_chars: 512,
                 full_body: false,
                 log_success_at_fine: true,
             },
         };
-        let client = OpenAiLlmClient::new(http::build_http_client().unwrap(), &config);
+        let client = OpenAiLlmClient::new(
+            http::build_http_client(std::time::Duration::from_secs(300)).unwrap(),
+            &config,
+        );
 
         let error = client
             .generate(

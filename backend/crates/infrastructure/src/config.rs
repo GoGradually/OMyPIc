@@ -88,7 +88,17 @@ pub struct OpenAiConfig {
     pub base_url: String,
     pub responses_enabled: bool,
     pub conversation_rebase_turns: u32,
+    /// `integrations.openai.timeout-seconds`(`OMYPIC_OPENAI_TIMEOUT_SECONDS`, 기본 300).
+    /// LLM, STT, TTS 요청 하나의 전체 제한 시간. 1보다 작으면 1초로 본다.
+    pub timeout_seconds: u64,
     pub logging: OpenAiLoggingConfig,
+}
+
+impl OpenAiConfig {
+    /// 요청 하나의 전체 제한 시간(최소 1초).
+    pub fn request_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.timeout_seconds.max(1))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -172,6 +182,7 @@ impl Default for AppConfig {
                     base_url: "https://api.openai.com".to_string(),
                     responses_enabled: true,
                     conversation_rebase_turns: 6,
+                    timeout_seconds: 300,
                     logging: OpenAiLoggingConfig {
                         response_preview_chars: 1024,
                         full_body: false,
@@ -234,6 +245,7 @@ impl AppConfig {
             "OMYPIC_OPENAI_CONVERSATION_REBASE_TURNS",
             &mut openai.conversation_rebase_turns,
         )?;
+        env.set("OMYPIC_OPENAI_TIMEOUT_SECONDS", &mut openai.timeout_seconds)?;
         env.set(
             "OMYPIC_OPENAI_LOG_RESPONSE_PREVIEW_CHARS",
             &mut openai.logging.response_preview_chars,
@@ -425,6 +437,30 @@ mod tests {
         assert_eq!("alloy", config.voice_tts_voice());
         assert_eq!(600_000, config.voice_recovery_retention_ms());
         assert_eq!(1000, config.voice_stopped_context_max());
+    }
+
+    #[test]
+    fn openai_request_timeout_defaults_to_300_seconds_and_is_at_least_one_second() {
+        let config = AppConfig::default();
+        assert_eq!(300, config.integrations.openai.timeout_seconds);
+        assert_eq!(
+            std::time::Duration::from_secs(300),
+            config.integrations.openai.request_timeout()
+        );
+
+        let config = from_map(&[("OMYPIC_OPENAI_TIMEOUT_SECONDS", "45")]).unwrap();
+        assert_eq!(
+            std::time::Duration::from_secs(45),
+            config.integrations.openai.request_timeout()
+        );
+
+        let config = from_map(&[("OMYPIC_OPENAI_TIMEOUT_SECONDS", "0")]).unwrap();
+        assert_eq!(
+            std::time::Duration::from_secs(1),
+            config.integrations.openai.request_timeout()
+        );
+
+        assert!(from_map(&[("OMYPIC_OPENAI_TIMEOUT_SECONDS", "soon")]).is_err());
     }
 
     #[test]
