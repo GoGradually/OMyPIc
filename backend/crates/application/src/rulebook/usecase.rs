@@ -193,7 +193,12 @@ impl RulebookUseCase {
             return Ok(Vec::new());
         }
         match self.index_port.search(query, limit, ids) {
-            Err(AppError::Internal(_)) => Ok(Vec::new()),
+            Err(AppError::Internal(message)) => {
+                tracing::warn!(
+                    "Rulebook search failed; continuing without rulebook context: {message}"
+                );
+                Ok(Vec::new())
+            }
             other => other,
         }
     }
@@ -487,6 +492,48 @@ mod tests {
         assert_eq!(1, calls.len());
         assert_eq!("grammar", calls[0].query);
         assert_eq!(3, calls[0].top_k);
+    }
+
+    /// `f`를 실행하는 동안 이 스레드에서 남긴 로그를 모은다.
+    fn capture_logs(f: impl FnOnce()) -> String {
+        use std::sync::Mutex;
+
+        #[derive(Clone, Default)]
+        struct Buffer(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Buffer {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let buffer = Buffer::default();
+        let writer = buffer.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::with_default(subscriber, f);
+        let bytes = buffer.0.lock().unwrap().clone();
+        String::from_utf8(bytes).unwrap()
+    }
+
+    #[test]
+    fn search_contexts_logs_a_warning_when_index_search_fails() {
+        let enabled = rulebook("r1", "rulebook.md", RulebookScope::Main, None, true);
+        let f = fixture(vec![enabled]);
+        f.index
+            .fail_search_with(AppError::Internal("index error".to_string()));
+
+        let logs = capture_logs(|| {
+            assert!(f.use_case.search_contexts("grammar").unwrap().is_empty());
+        });
+
+        assert!(logs.contains("WARN"), "{logs}");
+        assert!(logs.contains("index error"), "{logs}");
     }
 
     #[test]
