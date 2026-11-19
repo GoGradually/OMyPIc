@@ -1,0 +1,21 @@
+[package]
+name = "omypic-server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+omypic-domain = { path = "../domain" }
+omypic-application = { path = "../application" }
+omypic-infrastructure = { path = "../infrastructure" }
+omypic-presentation = { path = "../presentation" }
+anyhow.workspace = true
+axum.workspace = true
+futures-util.workspace = true
+tokio = { workspace = true, features = ["net", "signal"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+reqwest = { workspace = true, features = ["multipart", "json"] }
+serde_json.workspace = true
+tempfile.workspace = true
