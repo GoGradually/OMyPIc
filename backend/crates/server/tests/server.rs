@@ -455,3 +455,59 @@ async fn configured_origins_are_allowed_and_others_are_forbidden() {
     );
     server.shutdown().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shutdown_returns_within_the_grace_period_while_a_request_is_blocked() {
+    use std::sync::{Arc, Mutex};
+
+    // 연결을 받고 아무것도 보내지 않는 모델 서버. 시험 끝에 연결을 닫아 멈춘 다운로드를 끝낸다.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let model_addr = listener.local_addr().unwrap();
+    let held: Arc<Mutex<Vec<std::net::TcpStream>>> = Arc::new(Mutex::new(Vec::new()));
+    let held_by_server = held.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            held_by_server.lock().unwrap().push(stream);
+        }
+    });
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = hash_config(dir.path());
+    config.rag.provider = "fasttext".to_string();
+    config.rag.download_url = format!("http://{model_addr}/cc.ko.300.vec.gz");
+    config.rag.download_retry_max = 0;
+    let server = start(config, ephemeral()).await.unwrap();
+    let upload_url = url(&server, "/api/rulebooks");
+    let upload = tokio::spawn(async move {
+        let form = Form::new().part(
+            "file",
+            Part::bytes(b"# rules".to_vec()).file_name("rules.md".to_string()),
+        );
+        reqwest::Client::new()
+            .post(upload_url)
+            .multipart(form)
+            .send()
+            .await
+    });
+    let waiting = Instant::now();
+    while held.lock().unwrap().is_empty() {
+        assert!(
+            waiting.elapsed() < Duration::from_secs(10),
+            "upload never blocked"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let started = Instant::now();
+    server.shutdown().await.unwrap();
+    let took = started.elapsed();
+    // 멈춘 다운로드를 끝내서 시험 런타임이 블로킹 작업을 기다리지 않게 한다.
+    held.lock().unwrap().clear();
+
+    assert!(
+        took < omypic_server::SHUTDOWN_GRACE + Duration::from_secs(2),
+        "shutdown took {took:?}"
+    );
+    assert_eq!(Duration::from_secs(5), omypic_server::SHUTDOWN_GRACE);
+    let _ = upload.await;
+}

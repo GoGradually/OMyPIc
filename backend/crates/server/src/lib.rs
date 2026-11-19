@@ -18,8 +18,14 @@ use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-/// 종료 신호 뒤 진행 중인 요청을 기다리는 최대 시간(Spring 기본 `timeout-per-shutdown-phase`).
-pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
+/// 종료 신호 뒤 진행 중인(SSE가 아닌) 요청을 기다리는 최대 시간. 넘기면 그 요청은 버린다.
+pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+/// 조립한 객체를 놓는 데 기다리는 최대 시간.
+pub const RELEASE_GRACE: Duration = Duration::from_secs(1);
+/// 런타임을 끝낼 때 남은 블로킹 작업(멈춘 요청)을 기다리는 최대 시간. 런타임을 가진 쪽(실행
+/// 파일, 데스크톱 셸)이 `Runtime::shutdown_timeout`에 넘긴다. 그러지 않고 런타임을 그냥 놓으면
+/// 블로킹 작업이 끝날 때까지 프로세스가 끝나지 않는다.
+pub const RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// 실행 중인 서버. `shutdown`으로 끈다. 그냥 버리면 종료 신호만 보낸다.
 pub struct RunningServer {
@@ -33,7 +39,9 @@ pub struct RunningServer {
 
 impl RunningServer {
     /// 새 연결을 받지 않고, 열린 SSE 스트림을 끝내고, 진행 중인 요청이 끝나기를
-    /// (최대 `SHUTDOWN_GRACE`) 기다린 뒤 종료한다.
+    /// (최대 `SHUTDOWN_GRACE`) 기다린 뒤 종료한다. 블로킹 작업 안에서 멈춘 요청은 기다리지
+    /// 않으므로 `SHUTDOWN_GRACE + RELEASE_GRACE` 안에 돌아온다. 그런 작업의 스레드는 남으니
+    /// 런타임을 가진 쪽은 `RUNTIME_SHUTDOWN_TIMEOUT`으로 런타임을 끝낸다.
     pub async fn shutdown(mut self) -> anyhow::Result<()> {
         let _ = self.shutdown_tx.send(true);
         let result = match self.serve.take() {
@@ -128,8 +136,11 @@ async fn end_event_streams_on_shutdown(
 
 async fn release_off_async_workers(state: Option<AppState>) {
     if let Some(state) = state {
-        if let Err(err) = tokio::task::spawn_blocking(move || drop(state)).await {
-            tracing::error!("Releasing server resources failed: {err}");
+        let release = tokio::task::spawn_blocking(move || drop(state));
+        match tokio::time::timeout(RELEASE_GRACE, release).await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => tracing::error!("Releasing server resources failed: {err}"),
+            Err(_) => tracing::warn!("Releasing server resources is taking long; not waiting"),
         }
     }
 }
