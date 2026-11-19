@@ -21,16 +21,17 @@ pub fn allow_navigation(url: &Url, dev_url: Option<&Url>) -> bool {
     is_app_origin(url, dev_url)
 }
 
-/// 권한 요청에 대한 답. Linux의 WebKitGTK는 처리하는 쪽이 없으면 묻지 않고 거부하므로, 앱 페이지가
-/// 요청한 마이크만 허용한다. 나머지는 플랫폼 기본 동작(`Default`)이다.
+/// 권한 요청에 대한 답. 앱 페이지가 요청한 마이크는 모든 데스크톱 OS에서 허용한다. 처리기를
+/// 등록하면 `Default`는 Linux(WebKitGTK)에서 거부, macOS(WKWebView)에서 실행할 때마다 묻는
+/// WebKit 창, Windows(WebView2)에서 답을 기억하는 웹뷰 창이 되기 때문이다. 시스템의 마이크
+/// 권한(macOS TCC, Windows 개인 정보 설정)은 그대로 적용된다. 나머지는 `Default`다.
 pub fn permission_for(
-    is_linux: bool,
     url: Option<&Url>,
     dev_url: Option<&Url>,
     kind: PermissionKind,
 ) -> PermissionResponse {
     let app_page = url.is_some_and(|url| is_app_origin(url, dev_url));
-    if is_linux && app_page && matches!(kind, PermissionKind::Microphone) {
+    if app_page && matches!(kind, PermissionKind::Microphone) {
         PermissionResponse::Allow
     } else {
         PermissionResponse::Default
@@ -54,10 +55,9 @@ mod tests {
     }
 
     #[test]
-    fn app_page_gets_the_microphone_on_linux() {
+    fn app_page_gets_the_microphone() {
         let page = url("tauri://localhost/index.html");
         assert!(allowed(permission_for(
-            true,
             Some(&page),
             None,
             PermissionKind::Microphone
@@ -68,7 +68,6 @@ mod tests {
     fn foreign_page_does_not_get_the_microphone() {
         let page = url("https://evil.example/");
         assert!(is_default(permission_for(
-            true,
             Some(&page),
             None,
             PermissionKind::Microphone
@@ -79,7 +78,6 @@ mod tests {
     fn backend_origin_does_not_get_the_microphone() {
         let page = url("http://127.0.0.1:38869/api/meta/models");
         assert!(is_default(permission_for(
-            true,
             Some(&page),
             None,
             PermissionKind::Microphone
@@ -90,7 +88,6 @@ mod tests {
     fn app_page_does_not_get_the_camera() {
         let page = url("tauri://localhost/");
         assert!(is_default(permission_for(
-            true,
             Some(&page),
             None,
             PermissionKind::Camera
@@ -98,20 +95,26 @@ mod tests {
     }
 
     #[test]
-    fn other_platforms_keep_their_prompt() {
-        let page = url("tauri://localhost/");
-        assert!(is_default(permission_for(
-            false,
-            Some(&page),
-            None,
-            PermissionKind::Microphone
-        )));
+    fn app_page_gets_the_microphone_on_every_desktop_origin() {
+        // Windows WebView2 serves the app from http(s)://tauri.localhost.
+        for page in [
+            "http://tauri.localhost/",
+            "https://tauri.localhost/index.html",
+        ] {
+            assert!(
+                allowed(permission_for(
+                    Some(&url(page)),
+                    None,
+                    PermissionKind::Microphone
+                )),
+                "{page}"
+            );
+        }
     }
 
     #[test]
     fn missing_url_gets_nothing() {
         assert!(is_default(permission_for(
-            true,
             None,
             None,
             PermissionKind::Microphone
@@ -123,13 +126,11 @@ mod tests {
         let dev = url("http://localhost:5173");
         let page = url("http://localhost:5173/");
         assert!(allowed(permission_for(
-            true,
             Some(&page),
             Some(&dev),
             PermissionKind::Microphone
         )));
         assert!(is_default(permission_for(
-            true,
             Some(&page),
             None,
             PermissionKind::Microphone

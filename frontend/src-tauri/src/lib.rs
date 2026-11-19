@@ -138,7 +138,6 @@ pub fn run() {
         )
         .on_permission_request(|webview, kind| {
             app_origin::permission_for(
-                cfg!(target_os = "linux"),
                 webview.url().ok().as_ref(),
                 dev_url(&webview).as_ref(),
                 kind,
