@@ -4,21 +4,22 @@
 
 ## 1) 구성
 
-- Backend: Spring Boot (`backend/`)
+- Backend: Rust(axum) 서버 `omypic-server` (`backend/crates/`)
+- 데이터 저장: SQLite 파일 하나(`<데이터 폴더>/omypic.db`)
 - Frontend: React + Vite (`frontend/`)
 - Desktop: Electron (`frontend/electron/`)
 - 번들 리소스: Backend JAR + MongoDB + JRE17 (`frontend/electron/resources/`)
 
 ## 2) 개발 실행
 
-개발 모드에서는 Electron이 Vite dev 서버를 띄우며, Backend/MongoDB는 외부 실행을 기본으로 가정합니다.
+개발 모드에서는 Electron이 Vite dev 서버를 띄우며, Backend는 외부 실행을 기본으로 가정합니다. 별도 DB 서버는 필요 없습니다.
 
 - Node.js 버전: `>= 20.19.0` (프로젝트 루트 `.nvmrc` 참고)
+- Rust 버전: 프로젝트 루트 `rust-toolchain.toml` 참고(rustup이 자동으로 맞춥니다)
 
 ```bash
-# terminal 1
-cd backend
-./gradlew bootRun
+# terminal 1 (저장소 루트에서)
+cargo run -p omypic-server
 
 # terminal 2
 cd frontend
@@ -26,10 +27,13 @@ npm install
 npm run dev
 ```
 
-- Backend 기본 포트: `4317`
+- Backend 기본 주소: `http://127.0.0.1:4317` (`127.0.0.1`에만 바인딩, 포트는 `OMYPIC_PORT`로 변경)
+- Backend 테스트: `cargo test --workspace`
 - Vite dev 서버: `http://localhost:5173`
 
 ## 3) 배포 패키징
+
+> 설치본 빌드는 새 데스크톱 셸로 옮기는 중이라 그때까지 동작하지 않습니다. 아래 내용은 기존 Electron 패키징 설명입니다.
 
 `electron:prep` 단계에서 아래 작업이 자동 수행됩니다.
 
@@ -95,15 +99,16 @@ Intel Mac용 DMG는 워크플로에 포함되어 있지 않습니다. 필요하�
 
 - `OMYPIC_BACKEND_URL`
   - 기본값: `http://localhost:4317`
-- `OMYPIC_MONGODB_URI`
-  - 기본값: `mongodb://127.0.0.1:27017/omypic`
+- `OMYPIC_PORT`
+  - 기본값: `4317` (Backend가 `127.0.0.1:<port>`에 리슨)
 - `OMYPIC_DATA_DIR`
-  - 기본값: Electron userData 하위 `omypic-data`
+  - 기본값: 단독 실행은 `<홈>/OMyPIc`, Electron은 userData 하위 `omypic-data`
+  - SQLite 파일(`omypic.db`), 룰북 파일, 임베딩 모델이 이 폴더에 저장됩니다.
 - `OMYPIC_RAG_MODEL_PATH`
   - 기본값: 미지정
   - 패키지 앱에서 번들 모델이 있으면 Electron이 자동 주입
 - `OMYPIC_RAG_PROVIDER`
-  - 기본값: `fasttext`
+  - 기본값: `fasttext` (`hash`면 모델 없이 해시 임베딩)
 - `OMYPIC_RAG_MODEL_VERSION`
   - 기본값: `cc.ko.300.vec.gz`
 - `OMYPIC_RAG_MODEL_SHA256`
@@ -114,8 +119,11 @@ Intel Mac용 DMG는 워크플로에 포함되어 있지 않습니다. 필요하�
 - `OMYPIC_RAG_ALLOW_HASH_FALLBACK`
   - 기본값: `false`
 
-별도 설정이 없으면 첫 실행 시 모델이 자동 다운로드됩니다.
-모델 파일이 크기 때문에(약 1.27GB) 네트워크 환경에 따라 초기 기동 시간이 길어질 수 있습니다.
+- `RUST_LOG`
+  - Backend 로그 수준. 기본값: `info` (로그는 stderr로 출력)
+
+별도 설정이 없으면 룰북 검색에 처음 쓸 때 모델이 자동 다운로드됩니다.
+모델 파일이 크기 때문에(약 1.27GB) 네트워크 환경에 따라 첫 사용 때 시간이 걸릴 수 있습니다.
 
 ### 기동 Override
 
@@ -171,7 +179,7 @@ Intel Mac용 DMG는 워크플로에 포함되어 있지 않습니다. 필요하�
 - 기본 설정(`gpt-5-nano`) 기준 세션 1회당 비용은 약 50원 수준이며, 실제 비용은 발화 길이/선택 모델에 따라 달라질 수 있습니다.
 - 비용 정책상 `gpt-5-mini`보다 상위 GPT-5 계열(`gpt-5`, `gpt-5.1`, `gpt-5.2`, `gpt-5-pro`)은 지원 대상에서 제외됩니다.
 - Claude 호출 방식:
-  - 공식 Anthropic Java SDK로 Messages API를 호출하고, 응답 형식은 structured outputs(JSON Schema)로 고정합니다.
+  - Backend가 Messages API(`POST /v1/messages`)를 직접 호출하고, 응답 형식은 structured outputs(JSON Schema)로 고정합니다.
   - Claude는 서버에 대화를 보관하지 않으므로 매 턴 시스템 프롬프트를 함께 보내고, 세션 기억(요약/최근 턴/추천 표현)은 사용자 프롬프트에 붙입니다.
   - `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-fable-5-2`는 거절 응답에 대비해 서버 측 fallback(`fallbacks: "default"`)을 켭니다.
   - 음성 턴이 이 호출을 기다리므로 effort 기본값은 `low`입니다. 아래 환경 변수로 바꿀 수 있습니다.
