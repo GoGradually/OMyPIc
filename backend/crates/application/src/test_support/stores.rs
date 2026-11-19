@@ -152,6 +152,7 @@ impl SessionStorePort for InMemorySessionStorePort {
 #[derive(Debug, Default)]
 pub struct InMemoryRulebookPort {
     rulebooks: Mutex<Vec<Rulebook>>,
+    save_error: Mutex<Option<AppError>>,
     save_calls: Mutex<usize>,
     deleted_ids: Mutex<Vec<String>>,
     call_log: Mutex<Vec<&'static str>>,
@@ -170,6 +171,11 @@ impl InMemoryRulebookPort {
 
     pub fn rulebooks(&self) -> Vec<Rulebook> {
         lock(&self.rulebooks).clone()
+    }
+
+    /// 이후 모든 `save`가 이 오류로 실패한다(아무것도 저장하지 않는다).
+    pub fn fail_save_with(&self, error: AppError) {
+        *lock(&self.save_error) = Some(error);
     }
 
     pub fn save_calls(&self) -> usize {
@@ -202,6 +208,9 @@ impl RulebookPort for InMemoryRulebookPort {
     fn save(&self, rulebook: Rulebook) -> AppResult<Rulebook> {
         *lock(&self.save_calls) += 1;
         lock(&self.call_log).push("save");
+        if let Some(error) = lock(&self.save_error).clone() {
+            return Err(error);
+        }
         upsert(&mut lock(&self.rulebooks), rulebook.clone(), |r| {
             r.id().clone()
         });
@@ -419,6 +428,7 @@ pub struct InMemoryRulebookIndexPort {
     indexed: Mutex<Vec<(RulebookId, String, Vec<String>)>>,
     stubs: Mutex<Vec<SearchStub>>,
     search_error: Mutex<Option<AppError>>,
+    index_error: Mutex<Option<AppError>>,
     search_calls: Mutex<Vec<SearchCall>>,
     reset_calls: Mutex<usize>,
 }
@@ -442,6 +452,11 @@ impl InMemoryRulebookIndexPort {
         *lock(&self.search_error) = Some(error);
     }
 
+    /// 이후 모든 `index_rulebook_chunks`가 이 오류로 실패한다(아무것도 색인하지 않는다).
+    pub fn fail_index_with(&self, error: AppError) {
+        *lock(&self.index_error) = Some(error);
+    }
+
     /// 색인된 `(룰북 id, 파일 이름, 조각들)`.
     pub fn indexed(&self) -> Vec<(RulebookId, String, Vec<String>)> {
         lock(&self.indexed).clone()
@@ -463,6 +478,9 @@ impl RulebookIndexPort for InMemoryRulebookIndexPort {
         filename: &str,
         chunks: &[String],
     ) -> AppResult<()> {
+        if let Some(error) = lock(&self.index_error).clone() {
+            return Err(error);
+        }
         lock(&self.indexed).push((rulebook_id.clone(), filename.to_string(), chunks.to_vec()));
         Ok(())
     }
@@ -486,6 +504,11 @@ impl RulebookIndexPort for InMemoryRulebookIndexPort {
             .find(|(k, ids, _)| *k == top_k && ids == enabled_rulebook_ids)
             .map(|(_, _, contexts)| contexts.clone())
             .unwrap_or_default())
+    }
+
+    fn delete_rulebook_chunks(&self, rulebook_id: &RulebookId) -> AppResult<()> {
+        lock(&self.indexed).retain(|(id, _, _)| id != rulebook_id);
+        Ok(())
     }
 
     fn reset(&self) -> AppResult<()> {

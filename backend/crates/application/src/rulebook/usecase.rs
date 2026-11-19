@@ -48,33 +48,55 @@ impl RulebookUseCase {
     ) -> AppResult<Rulebook> {
         let start = Instant::now();
         let filename = validate_markdown_filename(filename)?;
-        let saved = self.store_rulebook(filename, bytes, scope, question_group)?;
-        self.index_rulebook(&saved, filename)?;
-        self.metrics.record_rulebook_upload_latency(start.elapsed());
-        Ok(saved)
-    }
-
-    fn store_rulebook(
-        &self,
-        filename: &str,
-        bytes: &[u8],
-        scope: Option<RulebookScope>,
-        question_group: Option<&str>,
-    ) -> AppResult<Rulebook> {
+        if std::str::from_utf8(bytes).is_err() {
+            return Err(AppError::InvalidArgument(
+                "Rulebook must be UTF-8 text".to_string(),
+            ));
+        }
         let scope = scope.unwrap_or(RulebookScope::Main);
         let question_group = QuestionGroup::from_nullable(question_group);
         // 파일을 쓰기 전에 범위와 질문 그룹 조합을 검증한다.
         Rulebook::create(filename, "", scope, question_group.clone(), Utc::now())?;
         let stored = self.file_store.store(filename, bytes)?;
-        let rulebook = Rulebook::create(filename, &stored.path, scope, question_group, Utc::now())?;
-        self.repository.save(rulebook)
+        // 파일, 색인, 행 순서로 쓰고, 실패하면 앞에서 쓴 것을 지운다. 행이 없는 조각은
+        // 검색에 쓰이지 않는다(검색은 활성 룰북 행의 id로 거른다).
+        let rulebook =
+            match Rulebook::create(filename, &stored.path, scope, question_group, Utc::now()) {
+                Ok(rulebook) => rulebook,
+                Err(error) => return Err(self.discard_file(&stored.path, error)),
+            };
+        if let Err(error) = self.index_rulebook(&rulebook, filename) {
+            return Err(self.discard_file(&stored.path, error));
+        }
+        let saved = match self.repository.save(rulebook.clone()) {
+            Ok(saved) => saved,
+            Err(error) => {
+                if let Err(cleanup) = self.index_port.delete_rulebook_chunks(rulebook.id()) {
+                    tracing::warn!(
+                        "Failed to remove chunks of rulebook {} after failed upload: {cleanup}",
+                        rulebook.id().value()
+                    );
+                }
+                return Err(self.discard_file(&stored.path, error));
+            }
+        };
+        self.metrics.record_rulebook_upload_latency(start.elapsed());
+        Ok(saved)
     }
 
-    fn index_rulebook(&self, saved: &Rulebook, filename: &str) -> AppResult<()> {
-        let text = self.file_store.read_text(saved.path())?;
+    fn index_rulebook(&self, rulebook: &Rulebook, filename: &str) -> AppResult<()> {
+        let text = self.file_store.read_text(rulebook.path())?;
         let chunks = split_chunks(Some(&text), CHUNK_SIZE);
         self.index_port
-            .index_rulebook_chunks(saved.id(), filename, &chunks)
+            .index_rulebook_chunks(rulebook.id(), filename, &chunks)
+    }
+
+    /// 실패한 업로드가 저장한 파일을 지우고 원래 오류를 돌려준다.
+    fn discard_file(&self, path: &str, error: AppError) -> AppError {
+        if let Err(cleanup) = self.file_store.delete(path) {
+            tracing::warn!("Failed to remove rulebook file {path} after failed upload: {cleanup}");
+        }
+        error
     }
 
     pub fn list(&self) -> AppResult<Vec<Rulebook>> {
@@ -371,6 +393,61 @@ mod tests {
         assert_eq!(1, stored.len());
         assert_eq!(saved.id(), stored[0].id());
         assert_eq!(1, f.metrics.count("record_rulebook_upload_latency"));
+    }
+
+    fn assert_nothing_left_behind(f: &Fixture) {
+        assert!(f.repository.rulebooks().is_empty());
+        assert!(f.file_store.files().is_empty());
+        assert!(f.index.indexed().is_empty());
+    }
+
+    #[test]
+    fn upload_rejects_non_utf8_markdown_and_leaves_nothing_behind() {
+        let f = fixture(vec![]);
+
+        // CP949로 저장한 "규칙"
+        let error = f
+            .use_case
+            .upload(Some("rules.md"), &[0xb1, 0xd4, 0xc4, 0xa2], None, None)
+            .unwrap_err();
+
+        assert_eq!(
+            AppError::InvalidArgument("Rulebook must be UTF-8 text".to_string()),
+            error
+        );
+        assert_nothing_left_behind(&f);
+    }
+
+    #[test]
+    fn upload_that_fails_to_index_leaves_nothing_behind() {
+        let f = fixture(vec![]);
+        let failure =
+            AppError::InvalidArgument("Failed to download FastText model after retries".into());
+        f.index.fail_index_with(failure.clone());
+
+        let error = f
+            .use_case
+            .upload(Some("rules.md"), b"# rules", None, None)
+            .unwrap_err();
+
+        assert_eq!(failure, error);
+        assert_nothing_left_behind(&f);
+        assert_eq!(0, f.metrics.count("record_rulebook_upload_latency"));
+    }
+
+    #[test]
+    fn upload_that_fails_to_save_the_row_leaves_nothing_behind() {
+        let f = fixture(vec![]);
+        let failure = AppError::Internal("database is locked".to_string());
+        f.repository.fail_save_with(failure.clone());
+
+        let error = f
+            .use_case
+            .upload(Some("rules.md"), b"# rules", None, None)
+            .unwrap_err();
+
+        assert_eq!(failure, error);
+        assert_nothing_left_behind(&f);
     }
 
     #[test]

@@ -257,6 +257,17 @@ impl RulebookIndexPort for SqliteRulebookIndexAdapter {
         })
     }
 
+    fn delete_rulebook_chunks(&self, rulebook_id: &RulebookId) -> AppResult<()> {
+        self.db.with_conn(|conn| {
+            conn.execute(
+                "DELETE FROM rulebook_chunks WHERE rulebook_id = ?1",
+                params![rulebook_id.value()],
+            )
+            .map(|_| ())
+            .map_err(db_err)
+        })
+    }
+
     fn reset(&self) -> AppResult<()> {
         let metadata = self.expected_metadata();
         self.db.with_conn(|conn| {
@@ -610,5 +621,22 @@ mod tests {
             .search("query", 3, &enabled(&["r1"]))
             .unwrap();
         assert_eq!(vec!["near"], texts(&result));
+    }
+
+    #[test]
+    fn delete_rulebook_chunks_removes_only_that_rulebook() {
+        let db = Database::open_in_memory().unwrap();
+        let adapter = adapter(&db, three_dim());
+        for id in ["r1", "r2"] {
+            adapter
+                .index_rulebook_chunks(&rid(id), "x.md", &["near".to_string()])
+                .unwrap();
+        }
+
+        adapter.delete_rulebook_chunks(&rid("r1")).unwrap();
+
+        let result = adapter.search("query", 3, &enabled(&["r1", "r2"])).unwrap();
+        assert_eq!(1, result.len());
+        assert_eq!("r2", result[0].rulebook_id().value());
     }
 }

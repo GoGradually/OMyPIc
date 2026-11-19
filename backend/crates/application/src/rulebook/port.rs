@@ -40,6 +40,8 @@ pub trait RulebookIndexPort: Send + Sync {
         top_k: usize,
         enabled_rulebook_ids: &HashSet<RulebookId>,
     ) -> AppResult<Vec<RulebookContext>>;
+    /// 룰북 하나의 조각을 모두 지운다. 조각이 없으면 아무것도 하지 않는다.
+    fn delete_rulebook_chunks(&self, rulebook_id: &RulebookId) -> AppResult<()>;
     fn reset(&self) -> AppResult<()>;
 }
 

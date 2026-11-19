@@ -644,6 +644,32 @@ async fn upload_rejects_unknown_scope() {
 }
 
 #[tokio::test]
+async fn upload_of_non_utf8_markdown_is_bad_request_and_stores_nothing() {
+    let fixture = Fixture::new();
+    let reply = send(
+        &fixture.router(),
+        multipart(
+            Method::POST,
+            "/api/rulebooks",
+            &[Part::File {
+                name: "file",
+                filename: "rules.md",
+                bytes: &[0xb1, 0xd4, 0xc4, 0xa2],
+            }],
+        ),
+    )
+    .await;
+
+    assert_eq!(StatusCode::BAD_REQUEST, reply.status);
+    assert_eq!(
+        serde_json::json!({"message": "Rulebook must be UTF-8 text"}),
+        reply.json()
+    );
+    assert!(fixture.rulebooks.rulebooks().is_empty());
+    assert!(fixture.files.files().is_empty());
+}
+
+#[tokio::test]
 async fn toggle_updates_enabled_flag() {
     let fixture = Fixture::new();
     fixture.add_rulebook(rulebook("r3", RulebookScope::Main, true));
