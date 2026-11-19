@@ -32,6 +32,22 @@ const WRONG_NOTE_QUEUE_PATH: &str = "data/wrong-note-queue.json";
 const RULEBOOK_FILE_PREFIX: &str = "files/rulebooks/";
 const CHUNK_SIZE: usize = 800;
 
+/// 가져오는 zip의 압축 해제 한도. 헤더에 적힌 크기는 믿지 않고 풀면서 센다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ZipLimits {
+    pub max_entries: usize,
+    pub max_entry_bytes: u64,
+    pub max_total_bytes: u64,
+}
+
+impl ZipLimits {
+    pub(crate) const IMPORT: ZipLimits = ZipLimits {
+        max_entries: 10_000,
+        max_entry_bytes: 64 * 1024 * 1024,
+        max_total_bytes: 512 * 1024 * 1024,
+    };
+}
+
 pub struct DataTransferUseCase {
     question_group_port: Arc<dyn QuestionGroupPort>,
     rulebook_port: Arc<dyn RulebookPort>,
@@ -119,7 +135,7 @@ impl DataTransferUseCase {
         if zip_bytes.is_empty() {
             return Err(invalid("Import file is empty"));
         }
-        let entries = read_zip_entries(zip_bytes)?;
+        let entries = read_zip_entries(zip_bytes, &ZipLimits::IMPORT)?;
         for path in [
             MANIFEST_PATH,
             QUESTION_GROUPS_PATH,
@@ -265,12 +281,22 @@ fn read_json<T: DeserializeOwned>(bytes: &[u8]) -> AppResult<T> {
     serde_json::from_slice(bytes).map_err(|e| invalid(&format!("Backup payload is invalid: {e}")))
 }
 
-fn read_zip_entries(zip_bytes: &[u8]) -> AppResult<HashMap<String, Vec<u8>>> {
+pub(crate) fn read_zip_entries(
+    zip_bytes: &[u8],
+    limits: &ZipLimits,
+) -> AppResult<HashMap<String, Vec<u8>>> {
     let mut archive = ZipArchive::new(Cursor::new(zip_bytes))
         .map_err(|e| invalid(&format!("Import file is not a valid zip: {e}")))?;
+    if archive.len() > limits.max_entries {
+        return Err(invalid(&format!(
+            "Backup has too many entries (limit {})",
+            limits.max_entries
+        )));
+    }
     let mut entries = HashMap::new();
+    let mut total: u64 = 0;
     for index in 0..archive.len() {
-        let mut file = archive
+        let file = archive
             .by_index(index)
             .map_err(|e| invalid(&format!("Import file is not a valid zip: {e}")))?;
         if file.is_dir() {
@@ -278,13 +304,41 @@ fn read_zip_entries(zip_bytes: &[u8]) -> AppResult<HashMap<String, Vec<u8>>> {
         }
         let name = file.name().to_string();
         validate_entry_name(&name)?;
+        // 헤더의 크기 대신 실제로 풀린 바이트를 센다. 한도 + 1바이트까지만 읽는다.
+        let remaining_total = limits.max_total_bytes - total;
+        let cap = limits.max_entry_bytes.min(remaining_total);
         let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes).map_err(io_error)?;
+        file.take(cap + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| invalid(&format!("Import file is not a valid zip: {e}")))?;
+        let read = bytes.len() as u64;
+        if read > limits.max_entry_bytes {
+            return Err(invalid(&format!(
+                "Backup entry is too large when decompressed: {name} (limit {})",
+                describe_bytes(limits.max_entry_bytes)
+            )));
+        }
+        if read > remaining_total {
+            return Err(invalid(&format!(
+                "Backup is too large when decompressed (limit {})",
+                describe_bytes(limits.max_total_bytes)
+            )));
+        }
+        total += read;
         if entries.insert(name.clone(), bytes).is_some() {
             return Err(invalid(&format!("Duplicated entry in backup file: {name}")));
         }
     }
     Ok(entries)
+}
+
+fn describe_bytes(bytes: u64) -> String {
+    const MB: u64 = 1024 * 1024;
+    if bytes >= MB && bytes.is_multiple_of(MB) {
+        format!("{} MB", bytes / MB)
+    } else {
+        format!("{bytes} bytes")
+    }
 }
 
 fn validate_entry_name(name: &str) -> AppResult<()> {

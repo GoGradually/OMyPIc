@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
 
-use super::usecase::DataTransferUseCase;
+use super::usecase::{read_zip_entries, DataTransferUseCase, ZipLimits};
 use crate::rulebook::port::{RulebookFileStore, RulebookPort};
 use crate::test_support::{
     InMemoryQuestionGroupPort, InMemoryRulebookFileStore, InMemoryRulebookIndexPort,
@@ -617,4 +617,111 @@ fn import_rejects_parent_segments_and_absolute_entry_names() {
             "{name}"
         );
     }
+}
+
+fn deflated_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+    for (name, bytes) in entries {
+        zip.start_file(*name, options).unwrap();
+        zip.write_all(bytes).unwrap();
+    }
+    zip.finish().unwrap().into_inner()
+}
+
+fn small_limits() -> ZipLimits {
+    ZipLimits {
+        max_entries: 8,
+        max_entry_bytes: 1_000,
+        max_total_bytes: 2_500,
+    }
+}
+
+#[test]
+fn zip_reader_rejects_entry_larger_than_entry_limit() {
+    let zip = deflated_zip(&[("a.bin", &[0u8; 1_001])]);
+
+    let result = read_zip_entries(&zip, &small_limits());
+
+    assert_eq!(
+        Err(AppError::InvalidArgument(
+            "Backup entry is too large when decompressed: a.bin (limit 1000 bytes)".to_string()
+        )),
+        result.map(|_| ())
+    );
+}
+
+#[test]
+fn zip_reader_rejects_total_larger_than_total_limit() {
+    let block = [0u8; 900];
+    let zip = deflated_zip(&[("a.bin", &block), ("b.bin", &block), ("c.bin", &block)]);
+
+    let result = read_zip_entries(&zip, &small_limits());
+
+    assert_eq!(
+        Err(AppError::InvalidArgument(
+            "Backup is too large when decompressed (limit 2500 bytes)".to_string()
+        )),
+        result.map(|_| ())
+    );
+}
+
+#[test]
+fn zip_reader_rejects_too_many_entries() {
+    let names: Vec<String> = (0..9).map(|n| format!("e{n}.txt")).collect();
+    let entries: Vec<(&str, &[u8])> = names.iter().map(|n| (n.as_str(), &b"x"[..])).collect();
+    let zip = deflated_zip(&entries);
+
+    let result = read_zip_entries(&zip, &small_limits());
+
+    assert_eq!(
+        Err(AppError::InvalidArgument(
+            "Backup has too many entries (limit 8)".to_string()
+        )),
+        result.map(|_| ())
+    );
+}
+
+#[test]
+fn zip_reader_accepts_entries_within_limits() {
+    let block = [7u8; 1_000];
+    let zip = deflated_zip(&[("a.bin", &block), ("b.bin", &block)]);
+
+    let entries = read_zip_entries(&zip, &small_limits()).unwrap();
+
+    assert_eq!(block.to_vec(), entries["a.bin"]);
+    assert_eq!(block.to_vec(), entries["b.bin"]);
+}
+
+#[test]
+fn import_limits_are_512_mb_total_64_mb_per_entry_and_10000_entries() {
+    assert_eq!(
+        ZipLimits {
+            max_entries: 10_000,
+            max_entry_bytes: 64 * 1024 * 1024,
+            max_total_bytes: 512 * 1024 * 1024,
+        },
+        ZipLimits::IMPORT
+    );
+}
+
+#[test]
+fn import_rejects_oversized_entry_before_touching_data() {
+    let f = fixture();
+    let mut entries = backup_entries(1, iso());
+    entries.push(("files/rulebooks/huge.md", vec![b'a'; 64 * 1024 * 1024 + 1]));
+    let entries: Vec<(&str, &[u8])> = entries.iter().map(|(n, b)| (*n, b.as_slice())).collect();
+    let zip = deflated_zip(&entries);
+    assert!(zip.len() < 1024 * 1024);
+
+    let result = f.use_case.import_zip(&zip);
+
+    assert_eq!(
+        Err(AppError::InvalidArgument(
+            "Backup entry is too large when decompressed: files/rulebooks/huge.md (limit 64 MB)"
+                .to_string()
+        )),
+        result
+    );
+    assert_eq!(0, f.groups.delete_all_calls());
 }
