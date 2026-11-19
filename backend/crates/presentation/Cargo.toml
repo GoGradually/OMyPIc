@@ -1,0 +1,23 @@
+[package]
+name = "omypic-presentation"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+omypic-domain = { path = "../domain" }
+omypic-application = { path = "../application" }
+axum.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+futures-core.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+omypic-application = { path = "../application", features = ["test-support"] }
+omypic-infrastructure = { path = "../infrastructure" }
+tower.workspace = true
+http-body-util.workspace = true
+zip.workspace = true

@@ -21,3 +21,9 @@ flate2 = "1"
 sha2 = "0.10"
 regex = "1"
 httpmock = "0.7"
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "multipart", "query", "tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tower-http = { version = "0.6", default-features = false, features = ["cors"] }
+tower = { version = "0.5", features = ["util"] }
+futures-core = "0.3"
+http-body-util = "0.1"
