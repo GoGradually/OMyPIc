@@ -4,4 +4,5 @@ pub mod config;
 pub mod executor;
 pub mod metrics;
 pub mod session;
+pub mod sqlite;
 pub mod storage;

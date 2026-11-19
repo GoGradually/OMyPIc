@@ -7,6 +7,9 @@ edition.workspace = true
 omypic-domain = { path = "../domain" }
 omypic-application = { path = "../application" }
 tracing.workspace = true
+chrono.workspace = true
+rusqlite.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
