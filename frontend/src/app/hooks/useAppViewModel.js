@@ -334,7 +334,12 @@ export function useAppViewModel() {
     const saveAndVerifyKey = useCallback(async (provider, key) => {
         const label = getProviderLabel(provider)
         const trimmedKey = (key || '').trim()
-        await setApiKey(trimmedKey, provider)
+        try {
+            await setApiKey(trimmedKey, provider)
+        } catch (error) {
+            // e.g. the OS keychain is unavailable: tell the learner instead of failing silently.
+            return `${label} API Key 저장 실패: ${error.message}`
+        }
         if (!trimmedKey) {
             return `${label} API Key를 비웠습니다.`
         }
@@ -356,7 +361,9 @@ export function useAppViewModel() {
         if (claudeKeyInput.trim() || claudeKeyNeeded) {
             messages.push(await saveAndVerifyKey(ANTHROPIC_PROVIDER, claudeKeyInput))
         } else {
-            await setApiKey('', ANTHROPIC_PROVIDER)
+            await setApiKey('', ANTHROPIC_PROVIDER).catch((error) => {
+                messages.push(`${getProviderLabel(ANTHROPIC_PROVIDER)} API Key 삭제 실패: ${error.message}`)
+            })
         }
         setStatusMessage(messages.join(' '))
     }, [apiKeyInput, claudeKeyInput, feedbackProvider, saveAndVerifyKey])

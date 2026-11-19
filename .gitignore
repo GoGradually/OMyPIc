@@ -1,7 +1,7 @@
 .idea
 frontend/node_modules
 frontend/dist
-frontend/.cache
-frontend/electron/resources
+frontend/src-tauri/gen/schemas
+frontend/src-tauri/resources/models/
 frontend/.DS_Store
 target/
