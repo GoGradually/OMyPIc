@@ -291,10 +291,19 @@ fn validate_entry_name(name: &str) -> AppResult<()> {
     if java_is_blank(name) {
         return Err(invalid("Backup entry name is invalid"));
     }
-    if name.starts_with('/') || name.contains("..") {
+    if is_unsafe_entry_name(name) {
         return Err(invalid(&format!("Backup entry name is unsafe: {name}")));
     }
     Ok(())
+}
+
+/// 절대 경로(`/`, `\`, 드라이브 문자)이거나 `..`인 경로 구성 요소가 있는 이름.
+/// `my..rules.md`처럼 이름 안에 점이 둘 있는 것은 괜찮다.
+fn is_unsafe_entry_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    let absolute = name.starts_with(['/', '\\'])
+        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':');
+    absolute || name.split(['/', '\\']).any(|segment| segment == "..")
 }
 
 fn validate_rulebook_entries(

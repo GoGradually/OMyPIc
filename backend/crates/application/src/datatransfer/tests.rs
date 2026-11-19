@@ -543,3 +543,78 @@ fn import_rejects_invalid_rulebook_before_deleting_existing_data() {
     );
     assert_eq!(0, f.groups.delete_all_calls());
 }
+
+#[test]
+fn export_then_import_round_trips_filename_with_double_dots() {
+    let source = fixture();
+    source.files.put("/tmp/my..rules.md", b"# dots");
+    let rulebook = Rulebook::rehydrate(
+        RulebookId::of("r1").unwrap(),
+        "my..rules.md",
+        "/tmp/my..rules.md",
+        Some(RulebookScope::Main),
+        None,
+        true,
+        Some(fixed_time()),
+        Some(fixed_time()),
+    )
+    .unwrap();
+    source.rulebooks.save(rulebook).unwrap();
+
+    let exported = source.use_case.export_zip().unwrap();
+    assert!(unzip_entries(&exported).contains_key("files/rulebooks/r1_my..rules.md"));
+
+    let target = fixture();
+    target.use_case.import_zip(&exported).unwrap();
+
+    let imported = &target.rulebooks.rulebooks()[0];
+    assert_eq!("my..rules.md", imported.filename());
+    assert_eq!("# dots", target.files.read_text(imported.path()).unwrap());
+}
+
+#[test]
+fn import_accepts_java_backup_entry_with_double_dots_in_name() {
+    let f = fixture();
+    let mut entries = backup_entries(1, iso());
+    replace_entry(
+        &mut entries,
+        "data/rulebooks.json",
+        json!([{"id": "r1", "filename": "v1..final.md", "scope": "MAIN", "enabled": true,
+            "createdAt": iso(), "updatedAt": iso(),
+            "fileEntry": "files/rulebooks/r1_v1..final.md"}]),
+    );
+    entries.retain(|(name, _)| *name != "files/rulebooks/r1_rules.md");
+    entries.push(("files/rulebooks/r1_v1..final.md", b"# final".to_vec()));
+
+    let result = f.use_case.import_zip(&to_zip(&entries)).unwrap();
+
+    assert_eq!(1, result.rulebook_count);
+    assert_eq!("v1..final.md", f.rulebooks.rulebooks()[0].filename());
+}
+
+#[test]
+fn import_rejects_parent_segments_and_absolute_entry_names() {
+    for name in [
+        "files/rulebooks/../../evil.md",
+        "../evil.md",
+        "files/rulebooks/..",
+        "files\\rulebooks\\..\\evil.md",
+        "/etc/passwd",
+        "\\evil.md",
+        "C:/evil.md",
+    ] {
+        let f = fixture();
+        let mut entries = backup_entries(1, iso());
+        entries.push((name, b"evil".to_vec()));
+
+        let result = f.use_case.import_zip(&to_zip(&entries));
+
+        assert_eq!(
+            Err(AppError::InvalidArgument(format!(
+                "Backup entry name is unsafe: {name}"
+            ))),
+            result,
+            "{name}"
+        );
+    }
+}
