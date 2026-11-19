@@ -1,9 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window may call only OMyPIc's own commands.",
+  "description": "The main window may call only OMyPIc's own commands, plus the dialog plugin's message box that backs window.confirm.",
   "windows": ["main"],
   "permissions": [
+    "dialog:allow-message",
     "allow-get-backend-url",
     "allow-get-api-key",
     "allow-set-api-key",

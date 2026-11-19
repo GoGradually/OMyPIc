@@ -21,6 +21,7 @@ import {
 } from '../../shared/constants/models.js'
 import {readPreference, writePreference} from '../../shared/utils/preferences.js'
 import {copyText} from '../../shared/utils/clipboard.js'
+import {confirmAction} from '../../shared/desktop/confirmAction.js'
 import {getCurrentQuestionLabel} from '../../shared/utils/mode.js'
 import {useSessionId} from '../providers/session.js'
 import {useVoiceSession} from '../../features/voice/hooks/useVoiceSession.js'
@@ -389,7 +390,7 @@ export function useAppViewModel() {
     }, [])
 
     const handleImportData = useCallback(async () => {
-        const confirmed = window.confirm('데이터 가져오기를 진행하면 현재 저장 데이터가 전체 교체됩니다. 계속하시겠습니까?')
+        const confirmed = await confirmAction('데이터 가져오기를 진행하면 현재 저장 데이터가 전체 교체됩니다. 계속하시겠습니까?')
         if (!confirmed) {
             return
         }
