@@ -2,7 +2,8 @@
 //!
 //! 캐시 위치는 `<데이터 폴더>/local-models/<org>/<name>/<revision>/<file>`이다. 없는 파일은
 //! 같은 폴더의 `*.part`에 받고, 다 받은 뒤에만 이름을 바꿔 넣으므로 일부만 받은 파일은 서빙되지
-//! 않는다. 같은 파일을 동시에 요청하면 한 번만 받고 나머지는 그 결과를 기다린다.
+//! 않는다. 같은 파일을 동시에 요청하면 한 번만 받고 나머지는 그 결과를 기다린다. 앱이 받는
+//! 도중에 끝나 남은 임시 파일(`.download-*.part`)은 캐시를 만들 때 지운다.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -21,6 +22,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const HEADER_TIMEOUT: Duration = Duration::from_secs(60);
 const STALL_TIMEOUT: Duration = Duration::from_secs(30);
 const PART_SUFFIX: &str = ".part";
+const PART_PREFIX: &str = ".download-";
 
 pub struct LocalModelCache {
     upstream: String,
@@ -39,10 +41,12 @@ struct Flight {
 
 impl LocalModelCache {
     pub fn new(config: &LocalModelsConfig, data_dir: &Path) -> Self {
+        let root = data_dir.join(LOCAL_MODELS_DIR);
+        remove_stale_downloads(&root);
         Self {
             upstream: config.upstream.trim_end_matches('/').to_string(),
             allowed_repos: config.allowed_repos.clone(),
-            root: data_dir.join(LOCAL_MODELS_DIR),
+            root,
             header_timeout: HEADER_TIMEOUT,
             stall_timeout: STALL_TIMEOUT,
             in_flight: Mutex::new(HashMap::new()),
@@ -231,6 +235,37 @@ impl Drop for Leader<'_> {
     }
 }
 
+/// `dir` 아래(하위 폴더 포함)에서 받다 만 임시 파일(`.download-*.part`)을 지운다. 다 받은 파일은
+/// 이 이름을 가질 수 없다(`check_segment`가 `*.part`를 거부한다). 실패는 경고만 남긴다.
+fn remove_stale_downloads(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_dir() {
+            remove_stale_downloads(&path);
+            continue;
+        }
+        let stale = kind.is_file()
+            && entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with(PART_PREFIX) && name.ends_with(PART_SUFFIX));
+        if stale {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {
+                    tracing::info!("Removed an unfinished model download: {}", path.display())
+                }
+                Err(err) => tracing::warn!("Cannot remove {}: {err}", path.display()),
+            }
+        }
+    }
+}
+
 fn internal(message: impl Into<String>) -> LocalModelError {
     LocalModelError::Internal(message.into())
 }
@@ -307,7 +342,7 @@ impl DownloadJob {
 
         let dir = self.target.parent().unwrap_or_else(|| Path::new("."));
         let mut temp = tempfile::Builder::new()
-            .prefix(".download-")
+            .prefix(PART_PREFIX)
             .suffix(PART_SUFFIX)
             .tempfile_in(dir)
             .map_err(|err| internal(format!("Failed to create temporary file: {err}")))?;
@@ -408,6 +443,46 @@ mod tests {
         );
         assert_eq!(b"model-bytes".to_vec(), std::fs::read(&first.path).unwrap());
         assert_eq!(1, files_under(dir.path()).len(), "임시 파일이 남지 않는다");
+    }
+
+    #[test]
+    fn creating_the_cache_removes_stale_downloads_and_keeps_finished_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_dir = dir.path().join("local-models/Xenova/whisper-base.en/main");
+        std::fs::create_dir_all(repo_dir.join("onnx")).unwrap();
+        // 앱이 받는 도중에 끝나면 `.download-*.part`가 남는다(`process::exit`는 임시 파일을 지우지 않는다).
+        let stale = [
+            repo_dir.join(".download-a1B2c3.part"),
+            repo_dir.join("onnx/.download-Zz9.part"),
+        ];
+        let kept = [
+            repo_dir.join("config.json"),
+            repo_dir.join("onnx/encoder.onnx"),
+            // 이름이 비슷해도 받기 임시 파일 규칙이 아니면 건드리지 않는다.
+            repo_dir.join("download-x.part"),
+            repo_dir.join(".download-notes.txt"),
+        ];
+        for path in stale.iter().chain(&kept) {
+            std::fs::write(path, "x").unwrap();
+        }
+        let outside = dir.path().join(".download-other.part");
+        std::fs::write(&outside, "x").unwrap();
+
+        let _cache = cache("http://127.0.0.1:9", dir.path());
+
+        for path in &stale {
+            assert!(!path.exists(), "{} should be removed", path.display());
+        }
+        for path in kept.iter().chain([&outside]) {
+            assert!(path.exists(), "{} should be kept", path.display());
+        }
+    }
+
+    #[test]
+    fn creating_the_cache_without_a_cache_folder_is_fine() {
+        let dir = tempfile::tempdir().unwrap();
+        let _cache = cache("http://127.0.0.1:9", dir.path());
+        assert!(files_under(dir.path()).is_empty());
     }
 
     #[test]
