@@ -23,6 +23,7 @@ regex = "1"
 httpmock = "0.7"
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "multipart", "query", "tokio"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio-util = { version = "0.7", default-features = false, features = ["io"] }
 tower-http = { version = "0.6", default-features = false, features = ["cors"] }
 tower = { version = "0.5", features = ["util"] }
 futures-core = "0.3"

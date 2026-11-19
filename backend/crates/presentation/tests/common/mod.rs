@@ -16,6 +16,7 @@ use omypic_application::question::usecase::QuestionUseCase;
 use omypic_application::rulebook::port::RulebookPort;
 use omypic_application::rulebook::usecase::RulebookUseCase;
 use omypic_application::session::usecase::SessionUseCase;
+use omypic_application::shared::local_model::{CachedModelFile, LocalModelError, LocalModelFiles};
 use omypic_application::stt::usecase::SttUseCase;
 use omypic_application::test_support::{
     FakeApiKeyProbePort, FakeFeedbackPolicy, FakeRagPolicy, FakeSttPolicy, FakeTtsGateway,
@@ -46,6 +47,17 @@ pub const DEFAULT_ALLOWED_ORIGINS: [&str; 5] = [
     "http://tauri.localhost",
     "https://tauri.localhost",
 ];
+
+/// 모델 파일을 하나도 갖고 있지 않은 저장소. 모델 경로를 시험하는 쪽이 `state.local_models`를 바꾼다.
+struct NoLocalModels;
+
+impl LocalModelFiles for NoLocalModels {
+    fn fetch(&self, repo: &str, _: &str, _: &str) -> Result<CachedModelFile, LocalModelError> {
+        Err(LocalModelError::NotAllowed(format!(
+            "Repository '{repo}' is not allowed"
+        )))
+    }
+}
 
 pub struct Fixture {
     pub state: AppState,
@@ -164,6 +176,7 @@ impl Fixture {
             wrong_note,
             voice_policy,
             metrics: metrics.clone(),
+            local_models: Arc::new(NoLocalModels),
             allowed_origins: Arc::new(
                 DEFAULT_ALLOWED_ORIGINS
                     .iter()

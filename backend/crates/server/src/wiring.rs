@@ -22,6 +22,7 @@ use omypic_infrastructure::anthropic::{build_anthropic_http_client, AnthropicLlm
 use omypic_infrastructure::config::AppConfig;
 use omypic_infrastructure::embedding::{FastTextEmbeddingAdapter, LocalHashEmbeddingAdapter};
 use omypic_infrastructure::executor::ThreadPoolExecutor;
+use omypic_infrastructure::local_models::LocalModelCache;
 use omypic_infrastructure::metrics::InMemoryMetrics;
 use omypic_infrastructure::openai::{
     build_http_client, build_probe_http_client, HttpApiKeyProbeAdapter, OpenAiLlmClient,
@@ -146,6 +147,7 @@ pub fn build_state(config: &AppConfig) -> anyhow::Result<AppState> {
         wrong_note,
         voice_policy: config_arc,
         metrics,
+        local_models: Arc::new(LocalModelCache::new(&config.local_models, data_dir)),
         allowed_origins: Arc::new(config.allowed_origins.clone()),
     })
 }

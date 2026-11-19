@@ -2,15 +2,23 @@
 // so questions are read in a native voice even when the OS has no English voice. No API is called.
 import {env} from '@huggingface/transformers'
 import {KokoroTTS} from 'kokoro-js'
+import {redirectHuggingFaceFetch} from './backendModelHost.js'
 // Same bundled ONNX Runtime binary as the speech recognizer (see localSttWorker.js).
 import ortFactoryUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.mjs?url'
 import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url'
 
 let ttsPromise = null
 
-function configure({modelHost, modelPathTemplate}) {
+function configure({modelHost, modelPathTemplate, backendHosted}) {
     env.allowLocalModels = false
-    if (modelHost) {
+    if (backendHosted) {
+        // The backend serves the files from Hugging Face's own path layout and keeps them on disk,
+        // so only the host changes and the browser needs no second copy.
+        env.remoteHost = modelHost
+        env.useBrowserCache = false
+        // kokoro-js fetches voices/*.bin from a fixed Hugging Face address; send that to the backend too.
+        redirectHuggingFaceFetch(self, modelHost)
+    } else if (modelHost) {
         env.remoteHost = modelHost
         env.remotePathTemplate = modelPathTemplate || '{model}/'
     }

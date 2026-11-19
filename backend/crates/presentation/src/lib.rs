@@ -7,7 +7,7 @@ pub mod sse;
 pub mod state;
 
 use axum::extract::DefaultBodyLimit;
-use axum::http::{HeaderValue, Method, StatusCode};
+use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::middleware;
 use axum::Router;
 use tower_http::cors::{AllowHeaders, AllowOrigin, CorsLayer};
@@ -38,7 +38,9 @@ pub fn router(state: AppState) -> Router {
             Method::HEAD,
             Method::OPTIONS,
         ])
-        .allow_headers(AllowHeaders::mirror_request());
+        .allow_headers(AllowHeaders::mirror_request())
+        // 모델 파일 구간 요청(`Range`)의 응답 헤더를 다른 origin의 화면 코드가 읽을 수 있게 한다.
+        .expose_headers([header::CONTENT_RANGE, header::ACCEPT_RANGES]);
     let guard = middleware::from_fn_with_state(
         state.allowed_origins.clone(),
         request_guard::reject_foreign_requests,

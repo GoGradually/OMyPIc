@@ -124,6 +124,12 @@ Intel Mac용 DMG는 워크플로에 포함되어 있지 않습니다. 필요하�
 - `OMYPIC_ALLOWED_ORIGINS`
   - 기본값: `http://localhost:5173,http://127.0.0.1:5173,tauri://localhost,http://tauri.localhost,https://tauri.localhost`
   - Backend가 요청을 받아 주는 브라우저 origin(쉼표로 구분). 지정하면 기본 목록을 대신하며, 목록에 없는 `Origin`이 붙은 요청은 403입니다.
+- `OMYPIC_LOCAL_MODEL_UPSTREAM`
+  - 기본값: `https://huggingface.co`
+  - 로컬 Whisper/Kokoro 모델 파일을 내려받는 상위 서버(`{주소}/{org}/{name}/resolve/{revision}/{file}`).
+- `OMYPIC_LOCAL_MODEL_REPOS`
+  - 기본값: `Xenova/whisper-base.en,onnx-community/Kokoro-82M-v1.0-ONNX`
+  - Backend가 내려받아 줄 모델 저장소(`org/name`, 쉼표로 구분, 대소문자 구분). 목록에 없는 저장소는 403입니다.
 
 - `RUST_LOG`
   - Backend 로그 수준. 기본값: `info` (로그는 stderr로 출력)
@@ -164,6 +170,7 @@ Intel Mac용 DMG는 워크플로에 포함되어 있지 않습니다. 필요하�
 - 키가 필요 없는 조합:
   - AI를 끈 세션: 키가 전혀 필요 없습니다.
   - Claude 피드백 + 로컬 Whisper(STT) + 기기 내장 음성 또는 로컬 Kokoro(TTS): Claude 키만 필요합니다.
+- 로컬 Whisper와 Kokoro 모델 파일은 처음 쓸 때 Backend가 내려받아 `<데이터 폴더>/local-models`에 보관합니다.
 - 설정 화면의 `저장 + 검증`은 두 키를 각각 해당 공급자에 확인합니다. Claude 키는 모델 조회(`GET /v1/models/{id}`)로 확인하므로 토큰을 쓰지 않습니다.
 
 ## 8) 피드백 모델 지원 범위

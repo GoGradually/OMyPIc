@@ -5,6 +5,7 @@ pub mod config;
 pub mod embedding;
 pub mod executor;
 pub mod llm;
+pub mod local_models;
 pub mod metrics;
 pub mod openai;
 pub mod session;

@@ -1,4 +1,5 @@
 // Client for the on-device speech recognizer (localSttWorker.js).
+import {getBackendUrl} from '../../../shared/api/http.js'
 
 const WHISPER_SAMPLE_RATE = 16000
 const DEFAULT_MODEL = 'Xenova/whisper-base.en'
@@ -13,11 +14,15 @@ function readEnv(name) {
     return (import.meta.env && import.meta.env[name]) || ''
 }
 
-function buildConfig() {
+// Without an override the backend downloads the model files and keeps them on disk, so the
+// worker turns off the library's browser cache for those loads (backendHosted).
+async function buildConfig() {
+    const hostOverride = readEnv('VITE_OMYPIC_LOCAL_STT_HOST')
     return {
         model: readEnv('VITE_OMYPIC_LOCAL_STT_MODEL') || DEFAULT_MODEL,
-        modelHost: readEnv('VITE_OMYPIC_LOCAL_STT_HOST'),
-        modelPathTemplate: readEnv('VITE_OMYPIC_LOCAL_STT_PATH_TEMPLATE')
+        modelHost: hostOverride || `${await getBackendUrl()}/api/local-models/`,
+        modelPathTemplate: readEnv('VITE_OMYPIC_LOCAL_STT_PATH_TEMPLATE'),
+        backendHosted: !hostOverride
     }
 }
 
@@ -82,7 +87,7 @@ export function loadLocalStt(onProgress) {
         progressListeners.add(onProgress)
     }
     if (!loadPromise) {
-        loadPromise = request('load', {config: buildConfig()}).catch((error) => {
+        loadPromise = buildConfig().then((config) => request('load', {config})).catch((error) => {
             loadPromise = null
             throw error
         })
@@ -121,6 +126,6 @@ export async function transcribePcm16(pcm16Bytes, sampleRate) {
     if (!samples.length) {
         return ''
     }
-    const result = await request('transcribe', {config: buildConfig(), samples}, [samples.buffer])
+    const result = await request('transcribe', {config: await buildConfig(), samples}, [samples.buffer])
     return result.text || ''
 }

@@ -1,4 +1,5 @@
 // Client for the on-device English speech synthesizer (localTtsWorker.js).
+import {getBackendUrl} from '../../../shared/api/http.js'
 
 const DEFAULT_MODEL = 'onnx-community/Kokoro-82M-v1.0-ONNX'
 const DEFAULT_VOICE = 'af_heart'
@@ -13,12 +14,16 @@ function readEnv(name) {
     return (import.meta.env && import.meta.env[name]) || ''
 }
 
-function buildConfig() {
+// Without an override the backend downloads the model files and keeps them on disk, so the
+// worker turns off the library's browser cache for those loads (backendHosted).
+async function buildConfig() {
+    const hostOverride = readEnv('VITE_OMYPIC_LOCAL_TTS_HOST')
     return {
         model: readEnv('VITE_OMYPIC_LOCAL_TTS_MODEL') || DEFAULT_MODEL,
         voice: readEnv('VITE_OMYPIC_LOCAL_TTS_VOICE') || DEFAULT_VOICE,
-        modelHost: readEnv('VITE_OMYPIC_LOCAL_TTS_HOST'),
-        modelPathTemplate: readEnv('VITE_OMYPIC_LOCAL_TTS_PATH_TEMPLATE')
+        modelHost: hostOverride || `${await getBackendUrl()}/api/local-models/`,
+        modelPathTemplate: readEnv('VITE_OMYPIC_LOCAL_TTS_PATH_TEMPLATE'),
+        backendHosted: !hostOverride
     }
 }
 
@@ -83,7 +88,7 @@ export function loadLocalTts(onProgress) {
         progressListeners.add(onProgress)
     }
     if (!loadPromise) {
-        loadPromise = request('load', {config: buildConfig()}).catch((error) => {
+        loadPromise = buildConfig().then((config) => request('load', {config})).catch((error) => {
             loadPromise = null
             throw error
         })
@@ -98,6 +103,6 @@ export function loadLocalTts(onProgress) {
 /** Returns {samples: Float32Array, sampleRate} for one English sentence. */
 export async function synthesizeEnglish(text) {
     await loadLocalTts()
-    const result = await request('synthesize', {config: buildConfig(), text})
+    const result = await request('synthesize', {config: await buildConfig(), text})
     return {samples: result.samples, sampleRate: result.sampleRate}
 }

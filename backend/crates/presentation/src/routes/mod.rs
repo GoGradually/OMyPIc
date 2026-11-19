@@ -1,6 +1,7 @@
 mod actuator;
 mod apikey;
 mod datatransfer;
+mod local_models;
 mod meta;
 mod mode;
 mod question;
@@ -17,6 +18,7 @@ pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .merge(apikey::routes())
         .merge(datatransfer::routes())
+        .merge(local_models::routes())
         .merge(meta::routes())
         .merge(mode::routes())
         .merge(question::routes())

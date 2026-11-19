@@ -10,9 +10,14 @@ import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url
 const WHISPER_SAMPLE_RATE = 16000
 let transcriberPromise = null
 
-function configure({modelHost, modelPathTemplate}) {
+function configure({modelHost, modelPathTemplate, backendHosted}) {
     env.allowLocalModels = false
-    if (modelHost) {
+    if (backendHosted) {
+        // The backend serves the files from Hugging Face's own path layout and keeps them on disk,
+        // so only the host changes and the browser needs no second copy.
+        env.remoteHost = modelHost
+        env.useBrowserCache = false
+    } else if (modelHost) {
         // A mirror or a bundled copy of the model, laid out like the Hugging Face repository.
         env.remoteHost = modelHost
         env.remotePathTemplate = modelPathTemplate || '{model}/'

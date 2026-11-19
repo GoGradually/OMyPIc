@@ -5,6 +5,7 @@ use omypic_application::datatransfer::usecase::DataTransferUseCase;
 use omypic_application::question::usecase::QuestionUseCase;
 use omypic_application::rulebook::usecase::RulebookUseCase;
 use omypic_application::session::usecase::SessionUseCase;
+use omypic_application::shared::local_model::LocalModelFiles;
 use omypic_application::shared::port::MetricsReader;
 use omypic_application::voice::policy::VoicePolicy;
 use omypic_application::voice::usecase::VoiceSessionUseCase;
@@ -24,6 +25,8 @@ pub struct AppState {
     pub voice_policy: Arc<dyn VoicePolicy>,
     /// `/actuator/metrics`가 읽는다.
     pub metrics: Arc<dyn MetricsReader>,
+    /// `/api/local-models/...`가 서빙하는 온디바이스 음성 모델 파일.
+    pub local_models: Arc<dyn LocalModelFiles>,
     /// 요청을 받아 주는 `Origin` 값(정확히 같은 문자열). 목록에 없는 `Origin`이 붙은 요청은 403이다.
     pub allowed_origins: Arc<Vec<String>>,
 }

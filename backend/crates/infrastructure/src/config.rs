@@ -25,6 +25,16 @@ pub struct AppConfig {
     pub feedback: FeedbackConfig,
     pub voice: VoiceConfig,
     pub integrations: IntegrationsConfig,
+    pub local_models: LocalModelsConfig,
+}
+
+/// 온디바이스 음성 모델 파일을 받아 오는 곳과 받을 수 있는 저장소.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocalModelsConfig {
+    /// `OMYPIC_LOCAL_MODEL_UPSTREAM`, 기본 `https://huggingface.co`.
+    pub upstream: String,
+    /// `OMYPIC_LOCAL_MODEL_REPOS`(쉼표로 구분, 기본 목록을 대신한다). `org/name` 꼴이고 대소문자를 가린다.
+    pub allowed_repos: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -126,6 +136,12 @@ pub const DEFAULT_ALLOWED_ORIGINS: [&str; 5] = [
     "https://tauri.localhost",
 ];
 
+/// `OMYPIC_LOCAL_MODEL_REPOS`가 없을 때 받아 주는 저장소.
+pub const DEFAULT_LOCAL_MODEL_REPOS: [&str; 2] = [
+    "Xenova/whisper-base.en",
+    "onnx-community/Kokoro-82M-v1.0-ONNX",
+];
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -135,6 +151,13 @@ impl Default for AppConfig {
                 .iter()
                 .map(|origin| origin.to_string())
                 .collect(),
+            local_models: LocalModelsConfig {
+                upstream: "https://huggingface.co".to_string(),
+                allowed_repos: DEFAULT_LOCAL_MODEL_REPOS
+                    .iter()
+                    .map(|repo| repo.to_string())
+                    .collect(),
+            },
             stt: SttConfig {
                 max_file_bytes: 26_214_400,
                 max_duration_seconds: 180,
@@ -230,6 +253,25 @@ impl AppConfig {
                 .collect::<AppResult<_>>()?;
         }
 
+        env.set(
+            "OMYPIC_LOCAL_MODEL_UPSTREAM",
+            &mut config.local_models.upstream,
+        )?;
+        if let Some(raw) = env.raw("OMYPIC_LOCAL_MODEL_REPOS") {
+            config.local_models.allowed_repos = raw
+                .split(',')
+                .map(str::trim)
+                .filter(|repo| !repo.is_empty())
+                .map(|repo| {
+                    if is_repo(repo) {
+                        Ok(repo.to_string())
+                    } else {
+                        Err(invalid("OMYPIC_LOCAL_MODEL_REPOS", repo))
+                    }
+                })
+                .collect::<AppResult<_>>()?;
+        }
+
         let rag = &mut config.rag;
         env.set("OMYPIC_RAG_PROVIDER", &mut rag.provider)?;
         env.set("OMYPIC_RAG_MODEL_PATH", &mut rag.model_path)?;
@@ -306,6 +348,20 @@ impl Env<'_> {
 
 fn invalid(name: &str, value: &str) -> AppError {
     AppError::InvalidArgument(format!("Invalid value for {name}: '{value}'"))
+}
+
+/// `org/name` 꼴의 저장소 이름인지 본다(두 조각 모두 `[A-Za-z0-9._-]+`, `.`과 `..`은 안 된다).
+fn is_repo(text: &str) -> bool {
+    let mut parts = text.split('/');
+    let (Some(org), Some(name), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    [org, name].iter().all(|part| {
+        !matches!(*part, "" | "." | "..")
+            && part
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    })
 }
 
 /// `scheme://host[:port]` 꼴의 origin인지 본다. 와일드카드, 경로, 쿼리, 끝의 `/`는 받지 않는다.
@@ -566,6 +622,41 @@ mod tests {
             match error {
                 AppError::InvalidArgument(message) => {
                     assert!(message.contains("OMYPIC_ALLOWED_ORIGINS"), "{message}");
+                }
+                other => panic!("expected InvalidArgument for {value}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn local_model_settings_default_and_can_be_overridden() {
+        let config = AppConfig::default();
+        assert_eq!("https://huggingface.co", config.local_models.upstream);
+        assert_eq!(
+            vec![
+                "Xenova/whisper-base.en",
+                "onnx-community/Kokoro-82M-v1.0-ONNX"
+            ],
+            config.local_models.allowed_repos
+        );
+
+        let config = from_map(&[
+            ("OMYPIC_LOCAL_MODEL_UPSTREAM", "http://mirror.local:9000"),
+            ("OMYPIC_LOCAL_MODEL_REPOS", " a/b , c/d.e,, "),
+        ])
+        .unwrap();
+        assert_eq!("http://mirror.local:9000", config.local_models.upstream);
+        assert_eq!(vec!["a/b", "c/d.e"], config.local_models.allowed_repos);
+    }
+
+    #[test]
+    fn local_model_repos_must_be_org_slash_name() {
+        for value in ["justname", "a/b/c", "a/..", "/b", "a/b c", "*", "a/b,x"] {
+            let error = from_map(&[("OMYPIC_LOCAL_MODEL_REPOS", value)]).unwrap_err();
+
+            match error {
+                AppError::InvalidArgument(message) => {
+                    assert!(message.contains("OMYPIC_LOCAL_MODEL_REPOS"), "{message}");
                 }
                 other => panic!("expected InvalidArgument for {value}, got {other:?}"),
             }

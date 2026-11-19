@@ -1,6 +1,10 @@
 /** @vitest-environment jsdom */
-import {describe, expect, it} from 'vitest'
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import {pcm16ToFloat32} from './localStt.js'
+
+vi.mock('../../../shared/api/http.js', () => ({
+    getBackendUrl: vi.fn(async () => 'http://localhost:4317')
+}))
 
 function pcm16(values) {
     return new Uint8Array(new Int16Array(values).buffer)
@@ -26,5 +30,54 @@ describe('local stt audio conversion', () => {
         const bytes = new Uint8Array([0, 64, 7])
 
         expect(pcm16ToFloat32(bytes, 16000).length).toBe(1)
+    })
+})
+
+describe('local stt model host', () => {
+    let posted
+
+    beforeEach(() => {
+        posted = []
+        vi.resetModules()
+        vi.stubGlobal('Worker', class {
+            postMessage(message) {
+                posted.push(message)
+                queueMicrotask(() => this.onmessage({data: {id: message.id, ok: true}}))
+            }
+
+            terminate() {}
+        })
+    })
+
+    afterEach(() => {
+        vi.unstubAllEnvs()
+        vi.unstubAllGlobals()
+    })
+
+    it('uses the backend model cache when no host override is set', async () => {
+        const {loadLocalStt} = await import('./localStt.js')
+
+        await loadLocalStt()
+
+        expect(posted).toHaveLength(1)
+        expect(posted[0].payload.config).toMatchObject({
+            model: 'Xenova/whisper-base.en',
+            modelHost: 'http://localhost:4317/api/local-models/',
+            backendHosted: true
+        })
+    })
+
+    it('keeps the configured host and path template when an override is set', async () => {
+        vi.stubEnv('VITE_OMYPIC_LOCAL_STT_HOST', 'https://mirror.example/models/')
+        vi.stubEnv('VITE_OMYPIC_LOCAL_STT_PATH_TEMPLATE', '{model}/main/')
+        const {loadLocalStt} = await import('./localStt.js')
+
+        await loadLocalStt()
+
+        expect(posted[0].payload.config).toMatchObject({
+            modelHost: 'https://mirror.example/models/',
+            modelPathTemplate: '{model}/main/',
+            backendHosted: false
+        })
     })
 })
