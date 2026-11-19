@@ -354,12 +354,79 @@ fn service_exception_message(reply: &HttpReply) -> String {
     let body = if reply.body.is_empty() {
         "Unknown".to_string()
     } else {
-        match serde_json::from_slice::<Value>(&reply.body) {
-            Ok(value) => value.to_string(),
+        match serde_json::from_slice::<CompactJson>(&reply.body) {
+            Ok(CompactJson(compact)) => compact,
             Err(_) => Value::String(reply.text()).to_string(),
         }
     };
     format!("{}: {body}", reply.status)
+}
+
+/// JSON을 키 순서 그대로, 공백 없이 다시 쓴다(Jackson `writeValueAsString`이 서버가 보낸 순서를 지키는 것과 같다).
+/// `serde_json::Value`는 키를 이름순으로 정렬하므로 거치지 않는다. 끝에 다른 글자가 남아 있으면 읽기 오류다.
+struct CompactJson(String);
+
+impl<'de> serde::Deserialize<'de> for CompactJson {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Writer;
+
+        impl<'de> serde::de::Visitor<'de> for Writer {
+            type Value = String;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("any JSON value")
+            }
+
+            fn visit_bool<E>(self, value: bool) -> Result<String, E> {
+                Ok(value.to_string())
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<String, E> {
+                Ok(value.to_string())
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<String, E> {
+                Ok(value.to_string())
+            }
+
+            fn visit_f64<E>(self, value: f64) -> Result<String, E> {
+                Ok(serde_json::Number::from_f64(value)
+                    .map_or_else(|| "null".to_string(), |number| number.to_string()))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<String, E> {
+                Ok(Value::String(value.to_string()).to_string())
+            }
+
+            fn visit_unit<E>(self) -> Result<String, E> {
+                Ok("null".to_string())
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<String, A::Error> {
+                let mut items = Vec::new();
+                while let Some(CompactJson(item)) = seq.next_element()? {
+                    items.push(item);
+                }
+                Ok(format!("[{}]", items.join(",")))
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<String, A::Error> {
+                let mut members = Vec::new();
+                while let Some((key, CompactJson(value))) = map.next_entry::<String, _>()? {
+                    members.push(format!("{}:{value}", Value::String(key)));
+                }
+                Ok(format!("{{{}}}", members.join(",")))
+            }
+        }
+
+        deserializer.deserialize_any(Writer).map(CompactJson)
+    }
 }
 
 /// `x-should-retry`가 우선하고, 없으면 408, 409, 429, 5xx.
@@ -1228,6 +1295,33 @@ mod tests {
             let client = client(&server, "low");
             assert_eq!(
                 expected,
+                invalid_state(generate_simple(&client, "claude-haiku-5-5"))
+            );
+        }
+    }
+
+    #[test]
+    fn error_body_keeps_server_key_order_and_is_compacted() {
+        let pretty = "{\n  \"type\": \"error\",\n  \"error\": {\n    \"type\": \"overloaded_error\",\n    \"message\": \"Overloaded\"\n  },\n  \"list\": [ 2, 1.5, true, null, \"z\\n\" ]\n}";
+        let server = serve(vec![reply(529, pretty)]);
+        let client = client(&server, "low");
+
+        assert_eq!(
+            r#"Claude request failed: HTTP 529 529: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"list":[2,1.5,true,null,"z\n"]}"#,
+            invalid_state(generate_simple(&client, "claude-haiku-5-5"))
+        );
+    }
+
+    #[test]
+    fn error_body_that_is_not_json_or_has_trailing_text_is_quoted() {
+        for (body, expected) in [
+            ("bad gateway", r#""bad gateway""#),
+            (r#"{"b":1} tail"#, r#""{\"b\":1} tail""#),
+        ] {
+            let server = serve(vec![reply(502, body)]);
+            let client = client(&server, "low");
+            assert_eq!(
+                format!("Claude request failed: HTTP 502 502: {expected}"),
                 invalid_state(generate_simple(&client, "claude-haiku-5-5"))
             );
         }
