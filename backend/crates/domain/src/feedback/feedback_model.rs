@@ -639,6 +639,19 @@ mod tests {
     }
 
     #[test]
+    fn normalized_treats_control_character_summary_as_empty_like_java_trim() {
+        let language = FeedbackLanguage::of("ko");
+        let blank = Feedback::of_correction_points("", &three_points(), "example", &[]);
+        let control =
+            Feedback::of_correction_points("\u{0001} \u{0002}", &three_points(), "example", &[]);
+
+        let expected = blank.normalized(&constraints(), "answer", &language, &[]);
+        let actual = control.normalized(&constraints(), "answer", &language, &[]);
+
+        assert_eq!(expected.summary(), actual.summary());
+    }
+
+    #[test]
     fn normalized_trims_example_when_ratio_is_too_large() {
         let feedback =
             Feedback::of_correction_points("summary", &three_points(), &"x".repeat(30), &[]);

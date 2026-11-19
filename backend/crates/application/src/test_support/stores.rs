@@ -22,12 +22,17 @@ fn upsert<T, K: PartialEq>(items: &mut Vec<T>, item: T, key: impl Fn(&T) -> K) {
     }
 }
 
+fn count_calls(log: &Mutex<Vec<&'static str>>, name: &str) -> usize {
+    lock(log).iter().filter(|call| **call == name).count()
+}
+
 #[derive(Debug, Default)]
 pub struct InMemoryQuestionGroupPort {
     groups: Mutex<Vec<QuestionGroupAggregate>>,
     find_all_calls: Mutex<usize>,
     save_calls: Mutex<usize>,
     deleted_ids: Mutex<Vec<String>>,
+    call_log: Mutex<Vec<&'static str>>,
 }
 
 impl InMemoryQuestionGroupPort {
@@ -57,6 +62,15 @@ impl InMemoryQuestionGroupPort {
     pub fn deleted_ids(&self) -> Vec<String> {
         lock(&self.deleted_ids).clone()
     }
+
+    pub fn delete_all_calls(&self) -> usize {
+        count_calls(&self.call_log, "delete_all")
+    }
+
+    /// 변경 호출(`save`, `delete_by_id`, `delete_all`)의 메서드 이름을 부른 순서대로.
+    pub fn call_log(&self) -> Vec<&'static str> {
+        lock(&self.call_log).clone()
+    }
 }
 
 impl QuestionGroupPort for InMemoryQuestionGroupPort {
@@ -82,17 +96,20 @@ impl QuestionGroupPort for InMemoryQuestionGroupPort {
 
     fn save(&self, group: QuestionGroupAggregate) -> AppResult<QuestionGroupAggregate> {
         *lock(&self.save_calls) += 1;
+        lock(&self.call_log).push("save");
         upsert(&mut lock(&self.groups), group.clone(), |g| g.id().clone());
         Ok(group)
     }
 
     fn delete_by_id(&self, id: &QuestionGroupId) -> AppResult<()> {
         lock(&self.deleted_ids).push(id.value().to_string());
+        lock(&self.call_log).push("delete_by_id");
         lock(&self.groups).retain(|group| group.id() != id);
         Ok(())
     }
 
     fn delete_all(&self) -> AppResult<()> {
+        lock(&self.call_log).push("delete_all");
         lock(&self.groups).clear();
         Ok(())
     }
@@ -136,6 +153,7 @@ pub struct InMemoryRulebookPort {
     rulebooks: Mutex<Vec<Rulebook>>,
     save_calls: Mutex<usize>,
     deleted_ids: Mutex<Vec<String>>,
+    call_log: Mutex<Vec<&'static str>>,
 }
 
 impl InMemoryRulebookPort {
@@ -160,6 +178,15 @@ impl InMemoryRulebookPort {
     pub fn deleted_ids(&self) -> Vec<String> {
         lock(&self.deleted_ids).clone()
     }
+
+    pub fn delete_all_calls(&self) -> usize {
+        count_calls(&self.call_log, "delete_all")
+    }
+
+    /// 변경 호출(`save`, `delete_by_id`, `delete_all`)의 메서드 이름을 부른 순서대로.
+    pub fn call_log(&self) -> Vec<&'static str> {
+        lock(&self.call_log).clone()
+    }
 }
 
 impl RulebookPort for InMemoryRulebookPort {
@@ -173,6 +200,7 @@ impl RulebookPort for InMemoryRulebookPort {
 
     fn save(&self, rulebook: Rulebook) -> AppResult<Rulebook> {
         *lock(&self.save_calls) += 1;
+        lock(&self.call_log).push("save");
         upsert(&mut lock(&self.rulebooks), rulebook.clone(), |r| {
             r.id().clone()
         });
@@ -181,11 +209,13 @@ impl RulebookPort for InMemoryRulebookPort {
 
     fn delete_by_id(&self, id: &RulebookId) -> AppResult<()> {
         lock(&self.deleted_ids).push(id.value().to_string());
+        lock(&self.call_log).push("delete_by_id");
         lock(&self.rulebooks).retain(|r| r.id() != id);
         Ok(())
     }
 
     fn delete_all(&self) -> AppResult<()> {
+        lock(&self.call_log).push("delete_all");
         lock(&self.rulebooks).clear();
         Ok(())
     }
@@ -371,6 +401,7 @@ impl RulebookIndexPort for InMemoryRulebookIndexPort {
 #[derive(Debug, Default)]
 pub struct InMemoryWrongNotePort {
     notes: Mutex<Vec<WrongNote>>,
+    call_log: Mutex<Vec<&'static str>>,
 }
 
 impl InMemoryWrongNotePort {
@@ -394,6 +425,19 @@ impl InMemoryWrongNotePort {
             .find(|n| n.pattern() == pattern)
             .cloned()
     }
+
+    pub fn save_calls(&self) -> usize {
+        count_calls(&self.call_log, "save")
+    }
+
+    pub fn delete_all_calls(&self) -> usize {
+        count_calls(&self.call_log, "delete_all")
+    }
+
+    /// 변경 호출(`save`, `delete_by_id`, `delete_all`)의 메서드 이름을 부른 순서대로.
+    pub fn call_log(&self) -> Vec<&'static str> {
+        lock(&self.call_log).clone()
+    }
 }
 
 impl WrongNotePort for InMemoryWrongNotePort {
@@ -406,16 +450,19 @@ impl WrongNotePort for InMemoryWrongNotePort {
     }
 
     fn save(&self, note: WrongNote) -> AppResult<WrongNote> {
+        lock(&self.call_log).push("save");
         upsert(&mut lock(&self.notes), note.clone(), |n| n.id().clone());
         Ok(note)
     }
 
     fn delete_by_id(&self, id: &WrongNoteId) -> AppResult<()> {
+        lock(&self.call_log).push("delete_by_id");
         lock(&self.notes).retain(|n| n.id() != id);
         Ok(())
     }
 
     fn delete_all(&self) -> AppResult<()> {
+        lock(&self.call_log).push("delete_all");
         lock(&self.notes).clear();
         Ok(())
     }
@@ -425,6 +472,7 @@ impl WrongNotePort for InMemoryWrongNotePort {
 pub struct InMemoryWrongNoteRecentQueuePort {
     queue: Mutex<Vec<String>>,
     save_calls: Mutex<usize>,
+    call_log: Mutex<Vec<&'static str>>,
 }
 
 impl InMemoryWrongNoteRecentQueuePort {
@@ -445,6 +493,15 @@ impl InMemoryWrongNoteRecentQueuePort {
     pub fn save_calls(&self) -> usize {
         *lock(&self.save_calls)
     }
+
+    pub fn clear_calls(&self) -> usize {
+        count_calls(&self.call_log, "clear_global_queue")
+    }
+
+    /// 변경 호출(`save_global_queue`, `clear_global_queue`)의 메서드 이름을 부른 순서대로.
+    pub fn call_log(&self) -> Vec<&'static str> {
+        lock(&self.call_log).clone()
+    }
 }
 
 impl WrongNoteRecentQueuePort for InMemoryWrongNoteRecentQueuePort {
@@ -454,11 +511,13 @@ impl WrongNoteRecentQueuePort for InMemoryWrongNoteRecentQueuePort {
 
     fn save_global_queue(&self, patterns: &[String]) -> AppResult<()> {
         *lock(&self.save_calls) += 1;
+        lock(&self.call_log).push("save_global_queue");
         *lock(&self.queue) = patterns.to_vec();
         Ok(())
     }
 
     fn clear_global_queue(&self) -> AppResult<()> {
+        lock(&self.call_log).push("clear_global_queue");
         lock(&self.queue).clear();
         Ok(())
     }

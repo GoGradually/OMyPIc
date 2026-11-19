@@ -86,4 +86,37 @@ mod tests {
         assert_eq!("안녕", store.read_text(&stored.path).unwrap());
         assert!(store.read_bytes("/missing").is_err());
     }
+
+    #[test]
+    fn stores_record_delete_all_and_clear_in_call_order() {
+        use crate::question::port::QuestionGroupPort;
+        use crate::rulebook::port::RulebookPort;
+        use crate::wrongnote::port::{WrongNotePort, WrongNoteRecentQueuePort};
+        use omypic_domain::wrongnote::WrongNote;
+
+        let groups = InMemoryQuestionGroupPort::new();
+        let rulebooks = InMemoryRulebookPort::new();
+        let notes = InMemoryWrongNotePort::new();
+        let queue = InMemoryWrongNoteRecentQueuePort::new();
+
+        groups.delete_all().unwrap();
+        rulebooks.delete_all().unwrap();
+        notes.delete_all().unwrap();
+        notes
+            .save(WrongNote::create_new("p", chrono::Utc::now()))
+            .unwrap();
+        queue.clear_global_queue().unwrap();
+        queue.save_global_queue(&["p".to_string()]).unwrap();
+
+        assert_eq!(1, groups.delete_all_calls());
+        assert_eq!(1, rulebooks.delete_all_calls());
+        assert_eq!(1, notes.delete_all_calls());
+        assert_eq!(1, notes.save_calls());
+        assert_eq!(vec!["delete_all", "save"], notes.call_log());
+        assert_eq!(1, queue.clear_calls());
+        assert_eq!(
+            vec!["clear_global_queue", "save_global_queue"],
+            queue.call_log()
+        );
+    }
 }
