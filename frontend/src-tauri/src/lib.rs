@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
+use tauri::webview::{PermissionKind, PermissionResponse};
 use tauri::{AppHandle, Manager, RunEvent, State};
 use tauri_plugin_dialog::{DialogExt, FilePath, MessageDialogKind};
 use tracing_subscriber::layer::SubscriberExt;
@@ -93,6 +94,15 @@ fn zip_dialog(app: &AppHandle) -> tauri_plugin_dialog::FileDialogBuilder<tauri::
     }
 }
 
+/// 웹뷰의 권한 요청에 대한 답. Linux의 WebKitGTK는 묻는 창 없이 거부하므로 연습에 필요한
+/// 마이크만 허용한다. 다른 플랫폼은 운영체제/웹뷰의 기본 확인을 그대로 쓴다.
+fn webview_permission(kind: PermissionKind) -> PermissionResponse {
+    match kind {
+        PermissionKind::Microphone if cfg!(target_os = "linux") => PermissionResponse::Allow,
+        _ => PermissionResponse::Default,
+    }
+}
+
 fn chosen_path(path: Option<FilePath>) -> Result<Option<PathBuf>, String> {
     path.map(|path| path.into_path().map_err(|err| err.to_string()))
         .transpose()
@@ -114,6 +124,7 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
+        .on_permission_request(|_, kind| webview_permission(kind))
         .invoke_handler(tauri::generate_handler![
             get_backend_url,
             get_api_key,
@@ -248,6 +259,24 @@ fn init_logging(data_dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn microphone_is_granted_on_linux_only() {
+        let expected = if cfg!(target_os = "linux") {
+            PermissionResponse::Allow
+        } else {
+            PermissionResponse::Default
+        };
+        assert!(matches!(
+            (webview_permission(PermissionKind::Microphone), expected),
+            (PermissionResponse::Allow, PermissionResponse::Allow)
+                | (PermissionResponse::Default, PermissionResponse::Default)
+        ));
+        assert!(matches!(
+            webview_permission(PermissionKind::Camera),
+            PermissionResponse::Default
+        ));
+    }
 
     #[test]
     fn rotates_a_log_larger_than_the_limit() {
