@@ -1,4 +1,5 @@
 use super::QuestionItemId;
+use crate::shared::text_utils::{java_is_blank, java_trim};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuestionItem {
@@ -38,10 +39,29 @@ impl QuestionItem {
 }
 
 fn normalize_question_type(question_type: Option<&str>) -> Option<String> {
-    let normalized = question_type?.trim();
-    if normalized.is_empty() {
+    let normalized = java_trim(question_type?);
+    if java_is_blank(normalized) {
         None
     } else {
         Some(normalized.to_string())
+    }
+}
+
+#[cfg(test)]
+mod java_whitespace_tests {
+    use super::*;
+
+    #[test]
+    fn question_type_keeps_leading_ideographic_space() {
+        let item = QuestionItem::create("q", Some("\u{3000}habit"));
+
+        assert_eq!(Some("\u{3000}habit"), item.question_type());
+    }
+
+    #[test]
+    fn question_type_of_ideographic_space_only_is_none() {
+        let item = QuestionItem::create("q", Some("\u{3000}"));
+
+        assert_eq!(None, item.question_type());
     }
 }

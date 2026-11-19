@@ -6,7 +6,7 @@ macro_rules! string_id {
 
         impl $name {
             pub fn of(value: &str) -> $crate::error::AppResult<Self> {
-                if value.trim().is_empty() {
+                if $crate::shared::text_utils::java_is_blank(value) {
                     return Err($crate::error::AppError::InvalidArgument(
                         $required_message.to_string(),
                     ));
@@ -29,4 +29,22 @@ macro_rules! string_id {
             }
         }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::question::QuestionGroupId;
+
+    #[test]
+    fn of_accepts_no_break_space_id_like_java() {
+        // Java String.isBlank()는 U+00A0을 공백으로 보지 않는다.
+        let id = QuestionGroupId::of("\u{00A0}").unwrap();
+
+        assert_eq!("\u{00A0}", id.value());
+    }
+
+    #[test]
+    fn of_rejects_ideographic_space_id_like_java() {
+        assert!(QuestionGroupId::of("\u{3000}").is_err());
+    }
 }

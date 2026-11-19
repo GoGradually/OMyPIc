@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 
 use crate::error::{AppError, AppResult};
+use crate::shared::text_utils::java_is_blank;
 
 #[derive(Debug, Clone)]
 pub struct WrongNoteWindow {
@@ -21,7 +22,7 @@ impl WrongNoteWindow {
         }
         let mut queue: VecDeque<String> = initial_patterns
             .into_iter()
-            .filter(|p| !p.as_ref().trim().is_empty())
+            .filter(|p| !java_is_blank(p.as_ref()))
             .map(|p| p.as_ref().to_string())
             .collect();
         while queue.len() > capacity {
@@ -32,7 +33,7 @@ impl WrongNoteWindow {
 
     /// 패턴을 추가하고, 용량을 넘어 밀려난 가장 오래된 패턴을 돌려준다.
     pub fn append(&mut self, pattern: &str) -> Option<String> {
-        if pattern.trim().is_empty() {
+        if java_is_blank(pattern) {
             return None;
         }
         self.queue.push_back(pattern.to_string());
@@ -69,5 +70,20 @@ mod tests {
 
         assert_eq!(None, evicted);
         assert_eq!(vec!["a", "b"], window.snapshot());
+    }
+}
+
+#[cfg(test)]
+mod java_whitespace_tests {
+    use super::*;
+
+    #[test]
+    fn append_ignores_ideographic_space_pattern_but_keeps_no_break_space() {
+        let mut window = WrongNoteWindow::from(Vec::<String>::new(), 3).unwrap();
+
+        window.append("\u{3000}");
+        window.append("\u{00A0}");
+
+        assert_eq!(vec!["\u{00A0}"], window.snapshot());
     }
 }

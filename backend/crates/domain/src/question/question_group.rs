@@ -1,4 +1,5 @@
 use crate::error::{AppError, AppResult};
+use crate::shared::text_utils::{java_is_blank, java_trim};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct QuestionGroup {
@@ -7,8 +8,8 @@ pub struct QuestionGroup {
 
 impl QuestionGroup {
     pub fn of(raw: &str) -> AppResult<Self> {
-        let normalized = raw.trim();
-        if normalized.is_empty() {
+        let normalized = java_trim(raw);
+        if java_is_blank(normalized) {
             return Err(AppError::InvalidArgument(
                 "questionGroup must not be blank".to_string(),
             ));
@@ -20,7 +21,7 @@ impl QuestionGroup {
 
     pub fn from_nullable(raw: Option<&str>) -> Option<Self> {
         let raw = raw?;
-        if raw.trim().is_empty() {
+        if java_is_blank(java_trim(raw)) {
             return None;
         }
         Self::of(raw).ok()
@@ -77,5 +78,22 @@ mod tests {
 
         assert_eq!(left, right);
         assert_eq!(hash_of(&left), hash_of(&right));
+    }
+}
+
+#[cfg(test)]
+mod java_whitespace_tests {
+    use super::*;
+
+    #[test]
+    fn of_keeps_leading_ideographic_space_like_java_trim() {
+        let group = QuestionGroup::of("\u{3000}home").unwrap();
+
+        assert_eq!("\u{3000}home", group.value());
+    }
+
+    #[test]
+    fn from_nullable_returns_none_for_ideographic_space_only() {
+        assert!(QuestionGroup::from_nullable(Some("\u{3000}")).is_none());
     }
 }

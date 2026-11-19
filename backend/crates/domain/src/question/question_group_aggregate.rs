@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 
 use super::{QuestionGroupId, QuestionItem, QuestionItemId};
 use crate::error::{AppError, AppResult};
+use crate::shared::text_utils::{java_is_blank, java_trim};
 
 const MAX_QUESTIONS_PER_GROUP: usize = 3;
 const MAX_QUESTIONS_MESSAGE: &str = "Question group can contain up to 3 questions";
@@ -25,7 +26,7 @@ impl QuestionGroupAggregate {
     ) -> Self {
         Self {
             id: QuestionGroupId::new_id(),
-            name: name.trim().to_string(),
+            name: java_trim(name).to_string(),
             tags: normalize_tags(tags),
             questions: Vec::new(),
             created_at: now,
@@ -47,7 +48,7 @@ impl QuestionGroupAggregate {
         let created_at = created_at.unwrap_or_else(Utc::now);
         Ok(Self {
             id,
-            name: name.trim().to_string(),
+            name: java_trim(name).to_string(),
             tags: normalize_tags(tags),
             questions,
             created_at,
@@ -56,7 +57,7 @@ impl QuestionGroupAggregate {
     }
 
     pub fn rename(&mut self, name: &str, now: DateTime<Utc>) {
-        self.name = name.trim().to_string();
+        self.name = java_trim(name).to_string();
         self.updated_at = now;
     }
 
@@ -142,7 +143,7 @@ pub fn normalize_tags<S: AsRef<str>>(raw_tags: impl IntoIterator<Item = S>) -> V
     let mut normalized: Vec<String> = Vec::new();
     for raw in raw_tags {
         let tag = normalize_tag(Some(raw.as_ref()));
-        if !tag.is_empty() && !normalized.contains(&tag) {
+        if !java_is_blank(&tag) && !normalized.contains(&tag) {
             normalized.push(tag);
         }
     }
@@ -150,7 +151,9 @@ pub fn normalize_tags<S: AsRef<str>>(raw_tags: impl IntoIterator<Item = S>) -> V
 }
 
 pub fn normalize_tag(raw_tag: Option<&str>) -> String {
-    raw_tag.map(|t| t.trim().to_lowercase()).unwrap_or_default()
+    raw_tag
+        .map(|t| java_trim(t).to_lowercase())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -216,5 +219,28 @@ mod tests {
 
         assert!(group.has_any_tag(set(&["travel"])));
         assert!(!group.has_any_tag(set(&["habit"])));
+    }
+}
+
+#[cfg(test)]
+mod java_whitespace_tests {
+    use super::*;
+
+    #[test]
+    fn normalize_tags_keeps_leading_ideographic_space_and_drops_blank_tag() {
+        let tags = normalize_tags(["\u{3000}Home", "\u{3000}", "\u{00A0}"]);
+
+        assert_eq!(vec!["\u{3000}home", "\u{00A0}"], tags);
+    }
+
+    #[test]
+    fn create_keeps_leading_ideographic_space_in_name() {
+        let group = QuestionGroupAggregate::create(
+            "\u{3000}name \u{0001}",
+            Vec::<String>::new(),
+            chrono::Utc::now(),
+        );
+
+        assert_eq!("\u{3000}name", group.name());
     }
 }
