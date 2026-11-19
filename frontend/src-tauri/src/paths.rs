@@ -10,7 +10,12 @@ use serde::Deserialize;
 const MODELS_DIR: &str = "models";
 const MANIFEST_FILE: &str = "manifest.json";
 
-/// 데이터 폴더: `env`(`OMYPIC_DATA_DIR`)가 있으면 그 값, 없으면 `<config_dir>/OMyPIc/omypic-data`.
+/// 이전 데스크톱 앱(0.2.x, Electron)의 설정 폴더 이름. Electron은 패키지된 `package.json`의
+/// `name`(`omypic-frontend`)으로 userData 폴더를 만들었다. 이 이름을 그대로 써야 0.2.x가 받아 둔
+/// 임베딩 모델(`models/`)을 다시 받지 않는다.
+const APP_DIR: &str = "omypic-frontend";
+
+/// 데이터 폴더: `env`(`OMYPIC_DATA_DIR`)가 있으면 그 값, 없으면 `<config_dir>/omypic-frontend/omypic-data`.
 /// 설정 폴더를 모르면 현재 폴더 아래에 둔다.
 pub fn resolve_data_dir(env: Option<String>, config_dir: Option<PathBuf>) -> PathBuf {
     if let Some(dir) = env.filter(|value| !value.trim().is_empty()) {
@@ -18,7 +23,7 @@ pub fn resolve_data_dir(env: Option<String>, config_dir: Option<PathBuf>) -> Pat
     }
     config_dir
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("OMyPIc")
+        .join(APP_DIR)
         .join("omypic-data")
 }
 
@@ -101,13 +106,13 @@ mod tests {
     }
 
     #[test]
-    fn data_dir_defaults_to_config_dir_omypic() {
+    fn data_dir_defaults_to_config_dir_omypic_frontend() {
         assert_eq!(
-            PathBuf::from("/c/OMyPIc/omypic-data"),
+            PathBuf::from("/c/omypic-frontend/omypic-data"),
             resolve_data_dir(None, Some(PathBuf::from("/c")))
         );
         assert_eq!(
-            PathBuf::from("/c/OMyPIc/omypic-data"),
+            PathBuf::from("/c/omypic-frontend/omypic-data"),
             resolve_data_dir(Some("  ".into()), Some(PathBuf::from("/c")))
         );
     }
@@ -115,7 +120,7 @@ mod tests {
     #[test]
     fn data_dir_falls_back_to_current_dir_when_no_config_dir() {
         assert_eq!(
-            PathBuf::from("./OMyPIc/omypic-data"),
+            PathBuf::from("./omypic-frontend/omypic-data"),
             resolve_data_dir(None, None)
         );
     }

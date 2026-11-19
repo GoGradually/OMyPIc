@@ -142,11 +142,11 @@ npm run build:desktop
 
 ### 데이터 위치
 
-설치본의 데이터 폴더는 0.2.x와 같은 곳입니다(`OMYPIC_DATA_DIR`로 바꿀 수 있습니다).
+설치본의 데이터 폴더는 0.2.x와 같은 곳입니다(`OMYPIC_DATA_DIR`로 바꿀 수 있습니다). 폴더 이름은 이전 버전이 쓰던 `omypic-frontend`를 그대로 씁니다. 그래서 0.2.x가 받아 둔 임베딩 모델(`models/`)을 다시 받지 않습니다.
 
-- Windows: `%APPDATA%\OMyPIc\omypic-data`
-- macOS: `~/Library/Application Support/OMyPIc/omypic-data`
-- Linux: `~/.config/OMyPIc/omypic-data`
+- Windows: `%APPDATA%\omypic-frontend\omypic-data`
+- macOS: `~/Library/Application Support/omypic-frontend/omypic-data`
+- Linux: `~/.config/omypic-frontend/omypic-data`
 
 폴더 안에는 아래가 생깁니다.
 
@@ -161,7 +161,7 @@ npm run build:desktop
 
 1. 0.2.x를 업데이트하기 전에 설정 > 내보내기로 백업 파일을 저장합니다.
 2. 0.3.0을 설치하고 설정 > 가져오기로 그 백업을 불러옵니다.
-3. 이미 업데이트했다면 0.2.x를 다시 설치해 내보내기를 하세요. 예전 데이터베이스 폴더는 건드리지 않으므로 그대로 남아 있습니다.
+3. 이미 업데이트했다면 0.2.x를 다시 설치해 내보내기를 하세요. 예전 MongoDB 폴더(같은 위치의 `omypic-frontend/db`)는 건드리지 않으므로 그대로 남아 있습니다.
 4. API Key는 다시 입력해야 할 수 있습니다. 0.3.0은 0.2.x와 같은 OS 보안 저장소 항목을 읽도록 만들었지만 Windows와 macOS에서 확인하지는 못했습니다.
 5. 룰북 파일이 UTF-8이 아닌 백업은 가져오기가 거부되고, 메시지에 해당 파일 이름이 나옵니다. 그 룰북을 UTF-8로 저장해 다시 내보내거나 가져오세요.
 
@@ -175,7 +175,7 @@ npm run build:desktop
   - 기본값: `4317` (단독 `omypic-server`가 `127.0.0.1:<port>`에 리슨)
   - 데스크톱 앱의 내장 Backend는 이 값을 쓰지 않고 빈 포트를 골라 프런트엔드에 알려 줍니다.
 - `OMYPIC_DATA_DIR`
-  - 기본값: 단독 실행은 `<홈>/OMyPIc`, 데스크톱 앱은 `<OS 설정 폴더>/OMyPIc/omypic-data`
+  - 기본값: 단독 실행은 `<홈>/OMyPIc`, 데스크톱 앱은 `<OS 설정 폴더>/omypic-frontend/omypic-data`
   - SQLite 파일(`omypic.db`), 룰북 파일, 임베딩 모델, `local-models/`, `logs/`가 이 폴더에 저장됩니다.
 - `OMYPIC_RAG_MODEL_PATH`
   - 기본값: 미지정

@@ -143,7 +143,7 @@ SQLite 파일 하나(`<데이터 폴더>/omypic.db`)에 저장한다.
 - 룰북 검색은 활성화된 룰북의 청크 전체와 질의 벡터를 직접 비교해 상위 N개를 고른다. 유사도 함수는 지금 Lucene이 쓰는 것(유클리드 거리)과 같게 한다. 사용자가 올리는 룰북은 양이 적어서 근사 검색 인덱스가 필요 없고, 전수 비교는 근사 검색보다 결과가 정확하다. 임베딩 제공자, 모델 버전, 차원이 바뀌면 인덱스를 비우는 지금 동작도 유지한다.
 - 음성 세션 상태는 지금처럼 메모리에만 둔다.
 
-**기존 사용자 데이터.** 새 앱은 MongoDB 데이터 파일을 읽지 못한다(mongod 없이는 읽을 수 없다). 이전 경로는 이미 있는 백업 기능이다. 0.2.x에서 설정 화면의 내보내기로 zip을 만들고, 0.3.0에서 가져온다. 그래서 백업 zip 형식(`schemaVersion` 1, 파일 경로, JSON 필드 이름)은 그대로 유지하고, 0.2.x가 만든 zip을 테스트 자료로 넣어 가져오기를 검증한다. README와 릴리스 노트에 "업데이트 전에 내보내기"를 적는다. 내보내지 않고 업데이트한 사용자는 빈 앱을 보게 된다. MongoDB 데이터 파일은 원래 폴더(`<사용자 앱 데이터>/OMyPIc/db`)에 그대로 남으므로 0.2.x를 다시 설치하면 내보낼 수 있다. 앱 안에서 따로 알리는 화면은 만들지 않는다. (작성자의 판단)
+**기존 사용자 데이터.** 새 앱은 MongoDB 데이터 파일을 읽지 못한다(mongod 없이는 읽을 수 없다). 이전 경로는 이미 있는 백업 기능이다. 0.2.x에서 설정 화면의 내보내기로 zip을 만들고, 0.3.0에서 가져온다. 그래서 백업 zip 형식(`schemaVersion` 1, 파일 경로, JSON 필드 이름)은 그대로 유지하고, 0.2.x가 만든 zip을 테스트 자료로 넣어 가져오기를 검증한다. README와 릴리스 노트에 "업데이트 전에 내보내기"를 적는다. 내보내지 않고 업데이트한 사용자는 빈 앱을 보게 된다. MongoDB 데이터 파일은 원래 폴더(`<사용자 앱 데이터>/omypic-frontend/db`)에 그대로 남으므로 0.2.x를 다시 설치하면 내보낼 수 있다. 앱 안에서 따로 알리는 화면은 만들지 않는다. (작성자의 판단)
 
 ### 5.5 지표
 
@@ -155,7 +155,7 @@ SQLite 파일 하나(`<데이터 폴더>/omypic.db`)에 저장한다.
 - 화면은 지금처럼 `fetch`와 `EventSource`로 `http://127.0.0.1:<포트>`를 호출한다. 그래서 브라우저에서 `vite`만 띄우고 `cargo run` 백엔드에 붙는 개발 방식도 그대로 된다.
 - `window.omypic` 인터페이스(`getBackendUrl`, `getApiKey`, `setApiKey`, `saveBackupFile`, `pickBackupFile`)는 이름과 동작을 유지한다. Electron preload 대신 Tauri 명령을 부르는 작은 연결 모듈이 이 객체를 만든다. 화면 코드의 나머지는 건드리지 않는다.
 - API 키는 `keyring` crate로 운영체제 보관소(Windows 자격 증명 관리자, macOS 키체인)에 저장한다. 서비스 이름 `OMyPIc`와 계정 이름(`openai`, `anthropic`)은 지금과 같게 한다. 0.2.x가 저장한 키를 읽을 수 있도록 맞추되, 읽지 못하면 사용자가 키를 다시 입력한다.
-- 데이터 폴더는 `OMYPIC_DATA_DIR`가 있으면 그 값, 없으면 0.2.x와 같은 위치(`<사용자 앱 데이터>/OMyPIc/omypic-data`. Windows는 `%APPDATA%`, macOS는 `~/Library/Application Support`)다. Tauri 기본 폴더(`com.omypic.app`)를 쓰지 않는 이유는 0.2.x가 이미 받아 둔 fastText 모델(약 1.2GB)을 다시 받지 않기 위해서다. SQLite 파일도 이 폴더에 둔다. (작성자의 판단)
+- 데이터 폴더는 `OMYPIC_DATA_DIR`가 있으면 그 값, 없으면 0.2.x와 같은 위치(`<사용자 앱 데이터>/omypic-frontend/omypic-data`. Windows는 `%APPDATA%`, macOS는 `~/Library/Application Support`)다. Tauri 기본 폴더(`com.omypic.app`)를 쓰지 않는 이유는 0.2.x가 이미 받아 둔 fastText 모델(약 1.2GB)을 다시 받지 않기 위해서다. 폴더 이름 `omypic-frontend`는 0.2.x(Electron)가 패키지 `package.json`의 `name`에서 만든 userData 폴더 이름이다(`productName`은 electron-builder 설정 안에만 있어 쓰이지 않았다). SQLite 파일도 이 폴더에 둔다. (작성자의 판단)
 - 앱 식별자는 지금과 같은 `com.omypic.app`, 제품 이름은 `OMyPIc`다.
 - macOS에는 마이크 사용 설명(`NSMicrophoneUsageDescription`)을 넣는다.
 - `frontend/electron/`, `scripts/prepare-resources.mjs`, `electron`, `electron-builder`, `keytar` 관련 설정은 삭제한다.

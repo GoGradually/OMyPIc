@@ -2,7 +2,7 @@ name: Release
 
 # Builds the desktop installers on the OS each one targets and attaches them to a draft
 # GitHub Release. The draft is published by hand.
-#   - Push a version tag (for example v0.2.0), or
+#   - Push a version tag (for example v0.3.0), or
 #   - run it manually with a version: the tag is then created when the draft is published.
 on:
   push:
@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to draft a release for, for example 0.2.0. Leave empty to only build the installers.'
+        description: 'Version to draft a release for, for example 0.3.0. Leave empty to only build the installers.'
         required: false
         default: ''
 
@@ -116,7 +116,7 @@ jobs:
           else
             # Manual run: the tag does not exist yet. Publishing the draft creates it on this commit.
             if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
-              echo "version must look like 0.2.0 or 0.2.0-rc.1" >&2
+              echo "version must look like 0.3.0 or 0.3.0-rc.1" >&2
               exit 1
             fi
             tag="v$VERSION"

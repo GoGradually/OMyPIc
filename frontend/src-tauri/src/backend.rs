@@ -12,7 +12,7 @@ use omypic_server::{RunningServer, RUNTIME_SHUTDOWN_TIMEOUT};
 use crate::paths;
 
 /// 환경 변수(`lookup`)로 설정을 읽고, 데이터 폴더(`OMYPIC_DATA_DIR`가 없으면
-/// `<config_dir>/OMyPIc/omypic-data`)와 번들 임베딩 모델을 채운다.
+/// `<config_dir>/omypic-frontend/omypic-data`)와 번들 임베딩 모델을 채운다.
 pub fn build_config(
     lookup: impl Fn(&str) -> Option<String>,
     config_dir: Option<PathBuf>,
@@ -127,7 +127,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            PathBuf::from("/c/OMyPIc/omypic-data").to_string_lossy(),
+            PathBuf::from("/c/omypic-frontend/omypic-data").to_string_lossy(),
             config.data_dir
         );
         assert_eq!(
