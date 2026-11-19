@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -19,6 +20,7 @@ use super::{is_blank, is_regex_space, normalize, LocalHashEmbeddingAdapter};
 use crate::config::RagConfig;
 
 const PROVIDER_NAME: &str = "fasttext";
+const DOWNLOAD_STALL_SECONDS: u64 = 60;
 const EMBED_CACHE_MAX_ENTRIES: usize = 1000;
 
 type Vectors = HashMap<String, Vec<f32>>;
@@ -35,6 +37,8 @@ pub struct FastTextEmbeddingAdapter {
     hash_fallback: LocalHashEmbeddingAdapter,
     cache: Mutex<EmbedCache>,
     state: Mutex<ModelState>,
+    /// 본문이 이만큼 한 바이트도 안 오면 내려받기를 실패로 본다.
+    stall_timeout: Duration,
 }
 
 impl FastTextEmbeddingAdapter {
@@ -46,7 +50,14 @@ impl FastTextEmbeddingAdapter {
             hash_fallback,
             cache: Mutex::new(EmbedCache::default()),
             state: Mutex::new(ModelState::Pending),
+            stall_timeout: Duration::from_secs(DOWNLOAD_STALL_SECONDS),
         }
+    }
+
+    #[cfg(test)]
+    fn with_stall_timeout(mut self, stall_timeout: Duration) -> Self {
+        self.stall_timeout = stall_timeout;
+        self
     }
 
     fn dim(&self) -> usize {
@@ -190,53 +201,51 @@ impl FastTextEmbeddingAdapter {
     }
 
     /// 같은 디렉터리의 임시 파일에 받고, 체크섬이 맞을 때만 이름을 바꿔 넣는다.
+    ///
+    /// `download-timeout-seconds`는 연결과 응답 헤더를 기다리는 시간만 제한한다(Java와 같다).
+    /// 본문은 느려도 계속 오는 한 끊지 않고, `stall_timeout` 동안 한 바이트도 안 오면 실패한다.
+    /// reqwest 블로킹 클라이언트에는 읽기 제한 시간이 없어서 받는 일을 별도 스레드에서 하고
+    /// 이 스레드가 진행 신호를 기다린다. 시간이 지나면 취소 표시를 남기고 포기한다.
     fn download_model(
         &self,
         model_path: &Path,
         url: &str,
         expected: &str,
     ) -> Result<(), DownloadError> {
-        let transfer = |err: &dyn std::fmt::Display| {
-            DownloadError::Transfer(format!("Model download failed: {err}"))
+        let header_timeout = Duration::from_secs(self.rag.download_timeout_seconds.max(1));
+        let stall_timeout = self.stall_timeout;
+        let (sender, receiver) = std::sync::mpsc::channel::<DownloadEvent>();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let job = DownloadJob {
+            url: url.to_string(),
+            model_path: model_path.to_path_buf(),
+            expected: expected.to_string(),
+            connect_timeout: header_timeout,
+            cancel: cancel.clone(),
         };
-        let timeout = Duration::from_secs(self.rag.download_timeout_seconds.max(1));
-        let client = reqwest::blocking::Client::builder()
-            .connect_timeout(timeout)
-            .timeout(timeout)
-            .build()
-            .map_err(|err| transfer(&err))?;
-        let mut response = client.get(url).send().map_err(|err| transfer(&err))?;
-        if !response.status().is_success() {
-            return Err(DownloadError::Transfer(format!(
-                "Model download failed with status {}",
-                response.status().as_u16()
-            )));
-        }
+        std::thread::spawn(move || {
+            let done = job.run(&sender);
+            let _ = sender.send(DownloadEvent::Done(done));
+        });
 
-        let dir = model_path.parent().unwrap_or_else(|| Path::new("."));
-        let mut temp = tempfile::Builder::new()
-            .prefix(".model-download-")
-            .suffix(".part")
-            .tempfile_in(dir)
-            .map_err(|err| transfer(&err))?;
-        let mut hasher = Sha256::new();
-        let mut buffer = [0_u8; 64 * 1024];
+        let mut wait = header_timeout;
         loop {
-            let read = response.read(&mut buffer).map_err(|err| transfer(&err))?;
-            if read == 0 {
-                break;
+            match receiver.recv_timeout(wait) {
+                Ok(DownloadEvent::Started) | Ok(DownloadEvent::Progress) => wait = stall_timeout,
+                Ok(DownloadEvent::Done(result)) => return result,
+                Err(_) => {
+                    cancel.store(true, Ordering::SeqCst);
+                    let what = if wait == header_timeout {
+                        "timed out waiting for response headers"
+                    } else {
+                        "stalled: no data received"
+                    };
+                    return Err(DownloadError::Transfer(format!(
+                        "Model download failed: {what}"
+                    )));
+                }
             }
-            hasher.update(&buffer[..read]);
-            temp.write_all(&buffer[..read])
-                .map_err(|err| transfer(&err))?;
         }
-        temp.flush().map_err(|err| transfer(&err))?;
-
-        check_sha256(expected, &to_hex(&hasher.finalize()), model_path)
-            .map_err(DownloadError::Fatal)?;
-        temp.persist(model_path)
-            .map_err(|err| transfer(&err.error))?;
-        Ok(())
     }
 
     fn load_vectors(&self, model_path: &Path) -> AppResult<Vectors> {
@@ -347,6 +356,84 @@ impl FastTextEmbeddingAdapter {
         self.cache
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+enum DownloadEvent {
+    /// 응답 헤더를 받았다.
+    Started,
+    /// 본문 조각을 받았다.
+    Progress,
+    Done(Result<(), DownloadError>),
+}
+
+struct DownloadJob {
+    url: String,
+    model_path: PathBuf,
+    expected: String,
+    connect_timeout: Duration,
+    cancel: Arc<AtomicBool>,
+}
+
+impl DownloadJob {
+    fn run(&self, events: &std::sync::mpsc::Sender<DownloadEvent>) -> Result<(), DownloadError> {
+        let transfer = |err: &dyn std::fmt::Display| {
+            DownloadError::Transfer(format!("Model download failed: {err}"))
+        };
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(self.connect_timeout)
+            .timeout(None)
+            .tcp_keepalive(Some(Duration::from_secs(30)))
+            .build()
+            .map_err(|err| transfer(&err))?;
+        let mut response = client.get(&self.url).send().map_err(|err| transfer(&err))?;
+        if !response.status().is_success() {
+            return Err(DownloadError::Transfer(format!(
+                "Model download failed with status {}",
+                response.status().as_u16()
+            )));
+        }
+        let _ = events.send(DownloadEvent::Started);
+
+        let dir = self.model_path.parent().unwrap_or_else(|| Path::new("."));
+        let mut temp = tempfile::Builder::new()
+            .prefix(".model-download-")
+            .suffix(".part")
+            .tempfile_in(dir)
+            .map_err(|err| transfer(&err))?;
+        let mut hasher = Sha256::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            if self.cancel.load(Ordering::SeqCst) {
+                return Err(DownloadError::Transfer(
+                    "Model download cancelled".to_string(),
+                ));
+            }
+            let read = response.read(&mut buffer).map_err(|err| transfer(&err))?;
+            if read == 0 {
+                break;
+            }
+            let _ = events.send(DownloadEvent::Progress);
+            hasher.update(&buffer[..read]);
+            temp.write_all(&buffer[..read])
+                .map_err(|err| transfer(&err))?;
+        }
+        temp.flush().map_err(|err| transfer(&err))?;
+
+        check_sha256(
+            &self.expected,
+            &to_hex(&hasher.finalize()),
+            &self.model_path,
+        )
+        .map_err(DownloadError::Fatal)?;
+        if self.cancel.load(Ordering::SeqCst) {
+            return Err(DownloadError::Transfer(
+                "Model download cancelled".to_string(),
+            ));
+        }
+        temp.persist(&self.model_path)
+            .map_err(|err| transfer(&err.error))?;
+        Ok(())
     }
 }
 
@@ -831,6 +918,84 @@ mod tests {
 
         assert!(matches!(err, AppError::InvalidState(m) if m.contains("sha256 mismatch")));
         assert!(!path.exists());
+        assert!(dir_is_empty(dir.path()));
+    }
+
+    /// 헤더는 바로 보내고 본문을 조금씩 흘리는 서버. `stall_after_bytes`가 있으면 그 뒤로는 멈춘다.
+    fn dribble_server(
+        body: &'static [u8],
+        stall_after_bytes: Option<usize>,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/ko.vec", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 2048];
+            let _ = stream.read(&mut request);
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(head.as_bytes()).unwrap();
+            for (sent, chunk) in body.chunks(2).enumerate() {
+                if stall_after_bytes.is_some_and(|limit| sent * 2 >= limit) {
+                    std::thread::sleep(Duration::from_secs(3));
+                    return;
+                }
+                if stream.write_all(chunk).is_err() {
+                    return;
+                }
+                let _ = stream.flush();
+                std::thread::sleep(Duration::from_millis(150));
+            }
+        });
+        (url, handle)
+    }
+
+    #[test]
+    fn slow_body_longer_than_the_configured_timeout_still_downloads() {
+        let dir = tempfile::tempdir().unwrap();
+        let body: &'static str = "2 3\nhello 1 0 0\nworld 0 1 0\n"; // 약 2초 걸린다
+        let (url, server) = dribble_server(body.as_bytes(), None);
+        let path = dir.path().join("ko.vec");
+        let mut config = rag(&path, &sha256_hex(body.as_bytes()));
+        config.download_url = url;
+        config.download_timeout_seconds = 1;
+        let adapter = adapter(config, dir.path());
+
+        let started = std::time::Instant::now();
+        let vector = adapter.embed("hello").unwrap();
+
+        assert!(started.elapsed() > Duration::from_secs(1));
+        assert_eq!(vec![1.0, 0.0, 0.0], vector);
+        assert!(path.exists());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn stalled_body_fails_after_the_stall_limit_and_leaves_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let body: &'static str = "2 3\nhello 1 0 0\nworld 0 1 0\n";
+        let (url, server) = dribble_server(body.as_bytes(), Some(8));
+        let path = dir.path().join("ko.vec");
+        let mut config = rag(&path, &sha256_hex(body.as_bytes()));
+        config.download_url = url;
+        config.download_timeout_seconds = 5;
+        let adapter = adapter(config, dir.path()).with_stall_timeout(Duration::from_millis(700));
+
+        let err = adapter.embed("hello").unwrap_err();
+
+        assert_eq!(
+            AppError::InvalidState(
+                "Failed to download FastText model after retries: Model download failed: stalled: no data received"
+                    .to_string()
+            ),
+            err
+        );
+        assert!(!path.exists());
+        server.join().unwrap();
+        // 취소된 받기 스레드가 임시 파일을 지울 때까지 잠깐 기다린다.
+        std::thread::sleep(Duration::from_millis(500));
         assert!(dir_is_empty(dir.path()));
     }
 

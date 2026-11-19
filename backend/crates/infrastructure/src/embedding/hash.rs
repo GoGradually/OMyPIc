@@ -21,7 +21,7 @@ impl LocalHashEmbeddingAdapter {
         if self.dimension == 0 || is_blank(text) {
             return vector;
         }
-        for token in split_regex_space(&text.to_lowercase()) {
+        for token in split_regex_space(&text.to_lowercase()).filter(|t| !is_blank(t)) {
             let bucket = floor_mod(hash(token), self.dimension);
             vector[bucket] += 1.0;
         }
@@ -130,6 +130,14 @@ mod tests {
         expected[0] = 0.894_427_2_f32;
         expected[2] = 0.447_213_6_f32;
         assert_eq!(expected, vector);
+    }
+
+    #[test]
+    fn tokens_of_only_java_whitespace_are_skipped() {
+        let adapter = LocalHashEmbeddingAdapter::new(16);
+        let expected = adapter.embed("a b").unwrap();
+        assert_eq!(expected, adapter.embed("a \u{3000} b").unwrap());
+        assert_eq!(expected, adapter.embed("a \u{1C} b").unwrap());
     }
 
     #[test]

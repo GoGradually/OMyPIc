@@ -6,32 +6,15 @@ mod hash;
 pub use fasttext::FastTextEmbeddingAdapter;
 pub use hash::LocalHashEmbeddingAdapter;
 
-/// Java `Character.isWhitespace`.
-pub(crate) fn is_java_whitespace(c: char) -> bool {
-    matches!(
-        c,
-        '\t' | '\n' | '\u{0B}' | '\u{0C}' | '\r' | '\u{1C}'..='\u{1F}' | ' '
-    ) || (c != '\u{A0}' && c != '\u{2007}' && c != '\u{202F}' && is_unicode_separator(c))
-}
-
-fn is_unicode_separator(c: char) -> bool {
-    matches!(
-        c,
-        '\u{1680}' | '\u{2000}'..='\u{200A}' | '\u{2028}' | '\u{2029}' | '\u{205F}' | '\u{3000}'
-    )
-}
-
 /// Java 정규식 `\s`(ASCII 공백 문자)에 해당하는지.
 pub(crate) fn is_regex_space(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\u{0B}' | '\u{0C}' | '\r')
 }
 
-/// Java `String.isBlank`.
-pub(crate) fn is_blank(text: &str) -> bool {
-    text.chars().all(is_java_whitespace)
-}
+pub(crate) use omypic_domain::shared::text_utils::java_is_blank as is_blank;
 
-/// Java `split("\\s+")`에서 빈 토큰을 뺀 것. 호출하는 쪽이 빈 토큰을 어차피 건너뛴다.
+/// Java `split("\\s+")`에서 빈 토큰을 뺀 것. 공백만 남은 토큰(`\s`가 나누지 않는 공백)은
+/// 호출하는 쪽이 `is_blank`로 걸러야 한다.
 pub(crate) fn split_regex_space(text: &str) -> impl Iterator<Item = &str> {
     text.split(is_regex_space).filter(|part| !part.is_empty())
 }
@@ -62,13 +45,5 @@ mod tests {
             split_regex_space(" a  b ").collect::<Vec<_>>()
         );
         assert_eq!(0, split_regex_space("   ").count());
-    }
-
-    #[test]
-    fn java_whitespace_differs_from_unicode_white_space() {
-        assert!(is_java_whitespace('\u{3000}'));
-        assert!(is_java_whitespace('\u{1C}'));
-        assert!(!is_java_whitespace('\u{A0}'));
-        assert!(!is_java_whitespace('a'));
     }
 }
