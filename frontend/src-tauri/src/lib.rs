@@ -1,6 +1,7 @@
 //! OMyPIc 데스크톱 앱(Tauri). 백엔드를 이 프로세스 안에서 띄우고, 웹뷰에는 백엔드 주소, API 키,
 //! 백업 파일 명령만 연다. 명령은 `keys`, `backup`의 순수 함수를 감싼다.
 
+pub mod app_origin;
 pub mod backend;
 pub mod backup;
 pub mod keys;
@@ -12,8 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
-use tauri::webview::{PermissionKind, PermissionResponse};
-use tauri::{AppHandle, Manager, RunEvent, State};
+use tauri::{AppHandle, Manager, RunEvent, Runtime, State, Url, Webview};
 use tauri_plugin_dialog::{DialogExt, FilePath, MessageDialogKind};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -94,12 +94,12 @@ fn zip_dialog(app: &AppHandle) -> tauri_plugin_dialog::FileDialogBuilder<tauri::
     }
 }
 
-/// 웹뷰의 권한 요청에 대한 답. Linux의 WebKitGTK는 묻는 창 없이 거부하므로 연습에 필요한
-/// 마이크만 허용한다. 다른 플랫폼은 운영체제/웹뷰의 기본 확인을 그대로 쓴다.
-fn webview_permission(kind: PermissionKind) -> PermissionResponse {
-    match kind {
-        PermissionKind::Microphone if cfg!(target_os = "linux") => PermissionResponse::Allow,
-        _ => PermissionResponse::Default,
+/// `tauri dev`에서 웹뷰가 여는 vite 주소. 설치본에는 없다.
+fn dev_url<R: Runtime>(webview: &Webview<R>) -> Option<Url> {
+    if cfg!(dev) {
+        webview.config().build.dev_url.clone()
+    } else {
+        None
     }
 }
 
@@ -124,7 +124,26 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
-        .on_permission_request(|_, kind| webview_permission(kind))
+        // 주 웹뷰는 앱 페이지 밖으로 이동하지 않는다.
+        .plugin(
+            tauri::plugin::Builder::<tauri::Wry>::new("omypic-navigation")
+                .on_navigation(|webview, url| {
+                    let allowed = app_origin::allow_navigation(url, dev_url(webview).as_ref());
+                    if !allowed {
+                        tracing::warn!("Blocked navigation away from the app: {url}");
+                    }
+                    allowed
+                })
+                .build(),
+        )
+        .on_permission_request(|webview, kind| {
+            app_origin::permission_for(
+                cfg!(target_os = "linux"),
+                webview.url().ok().as_ref(),
+                dev_url(&webview).as_ref(),
+                kind,
+            )
+        })
         .invoke_handler(tauri::generate_handler![
             get_backend_url,
             get_api_key,
@@ -259,24 +278,6 @@ fn init_logging(data_dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn microphone_is_granted_on_linux_only() {
-        let expected = if cfg!(target_os = "linux") {
-            PermissionResponse::Allow
-        } else {
-            PermissionResponse::Default
-        };
-        assert!(matches!(
-            (webview_permission(PermissionKind::Microphone), expected),
-            (PermissionResponse::Allow, PermissionResponse::Allow)
-                | (PermissionResponse::Default, PermissionResponse::Default)
-        ));
-        assert!(matches!(
-            webview_permission(PermissionKind::Camera),
-            PermissionResponse::Default
-        ));
-    }
 
     #[test]
     fn rotates_a_log_larger_than_the_limit() {
