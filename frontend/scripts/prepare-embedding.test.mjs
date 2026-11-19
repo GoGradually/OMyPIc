@@ -3,7 +3,8 @@ import {mkdtemp, readdir, readFile, rm, writeFile, mkdir} from 'node:fs/promises
 import {tmpdir} from 'node:os'
 import path from 'node:path'
 import {afterEach, beforeEach, describe, expect, it} from 'vitest'
-import {fileSha256, prepareEmbedding} from './prepare-embedding.mjs'
+import {fileURLToPath} from 'node:url'
+import {DEFAULT_RESOURCES_ROOT, fileSha256, prepareEmbedding} from './prepare-embedding.mjs'
 
 const MODEL_BYTES = 'fake gguf model bytes'
 const MODEL_SHA = createHash('sha256').update(MODEL_BYTES).digest('hex')
@@ -26,6 +27,13 @@ describe('prepareEmbedding', () => {
     })
 
     const run = (env) => prepareEmbedding({env, resourcesRoot, projectRoot: root, log: () => {}})
+
+    it('writes into src-tauri/resources/models by default, where the app looks', () => {
+        // The app reads <resource_dir>/resources/models (frontend/src-tauri/src/paths.rs,
+        // bundled_embedding_is_found_where_the_bundle_puts_it pins the bundle side).
+        const srcTauri = fileURLToPath(new URL('../src-tauri/', import.meta.url))
+        expect(path.relative(srcTauri, DEFAULT_RESOURCES_ROOT)).toBe('resources')
+    })
 
     it('computes the file sha256', async () => {
         expect(await fileSha256(modelPath)).toBe(MODEL_SHA)

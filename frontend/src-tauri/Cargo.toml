@@ -39,4 +39,6 @@ keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 
 [dev-dependencies]
 tempfile.workspace = true
+# 번들러가 `bundle.resources`를 놓는 규칙을 테스트에서 그대로 쓴다(`paths.rs`).
+tauri-utils = { version = "2", features = ["resources"] }
 reqwest = { workspace = true }

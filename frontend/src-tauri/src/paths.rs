@@ -6,7 +6,11 @@ use std::path::{Path, PathBuf};
 use omypic_infrastructure::config::AppConfig;
 use serde::Deserialize;
 
-/// `bundle.resources` 아래에서 임베딩 모델을 담는 폴더 이름.
+/// 설치본의 리소스 폴더(`resource_dir()`) 안에서 번들 파일이 놓이는 폴더. `tauri.conf.json`의
+/// `bundle.resources`가 목록(`["resources/**/*"]`)이면 번들러는 `src-tauri` 기준 경로를 그대로
+/// 지키므로 `src-tauri/resources/x`는 `<resource_dir>/resources/x`가 된다.
+const RESOURCES_DIR: &str = "resources";
+/// 그 아래에서 임베딩 모델을 담는 폴더 이름(`prepare-embedding.mjs`가 쓴다).
 const MODELS_DIR: &str = "models";
 const MANIFEST_FILE: &str = "manifest.json";
 
@@ -43,10 +47,10 @@ struct Manifest {
     sha256: Option<String>,
 }
 
-/// `<resource_dir>/models`에서 `manifest.json`을 뺀 첫 파일(이름순)을 고른다. 폴더나 파일이
-/// 없으면 `None`. 깨진 `manifest.json`은 없는 것으로 본다.
+/// `<resource_dir>/resources/models`에서 `manifest.json`을 뺀 첫 파일(이름순)을 고른다. 폴더나
+/// 파일이 없으면 `None`. 깨진 `manifest.json`은 없는 것으로 본다.
 pub fn resolve_bundled_embedding(resource_dir: &Path) -> Option<BundledModel> {
-    let models_dir = resource_dir.join(MODELS_DIR);
+    let models_dir = resource_dir.join(RESOURCES_DIR).join(MODELS_DIR);
     let mut names: Vec<String> = fs::read_dir(&models_dir)
         .ok()?
         .filter_map(Result::ok)
@@ -129,15 +133,15 @@ mod tests {
     fn bundled_embedding_none_when_dir_missing() {
         let root = tempfile::tempdir().unwrap();
         assert_eq!(None, resolve_bundled_embedding(root.path()));
-        fs::create_dir(root.path().join("models")).unwrap();
-        fs::write(root.path().join("models/manifest.json"), "{}").unwrap();
+        fs::create_dir_all(root.path().join("resources/models")).unwrap();
+        fs::write(root.path().join("resources/models/manifest.json"), "{}").unwrap();
         assert_eq!(None, resolve_bundled_embedding(root.path()));
     }
 
     #[test]
     fn bundled_embedding_picks_first_file_and_reads_manifest() {
         let root = tempfile::tempdir().unwrap();
-        let models = root.path().join("models");
+        let models = root.path().join("resources/models");
         fs::create_dir_all(models.join("a-dir")).unwrap();
         fs::write(models.join("b.vec.gz"), "b").unwrap();
         fs::write(models.join("a.vec.gz"), "a").unwrap();
@@ -162,8 +166,8 @@ mod tests {
     #[test]
     fn bundled_embedding_ignores_broken_manifest() {
         let root = tempfile::tempdir().unwrap();
-        let models = root.path().join("models");
-        fs::create_dir(&models).unwrap();
+        let models = root.path().join("resources/models");
+        fs::create_dir_all(&models).unwrap();
         fs::write(models.join("ko.vec.gz"), "a").unwrap();
         fs::write(models.join("manifest.json"), "{not json").unwrap();
 
@@ -172,6 +176,38 @@ mod tests {
         assert_eq!(models.join("ko.vec.gz"), model.path);
         assert_eq!("ko.vec.gz", model.version);
         assert_eq!(None, model.sha256);
+    }
+
+    /// `tauri.conf.json`의 `bundle.resources`를 Tauri 번들러와 같은 코드로 풀어, 설치본 안의
+    /// 파일 위치(`<resource_dir>` 기준)를 돌려준다. `cargo test`는 `src-tauri`에서 돈다.
+    fn bundle_targets() -> Vec<PathBuf> {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let patterns: Vec<String> =
+            serde_json::from_value(conf["bundle"]["resources"].clone()).unwrap();
+        tauri_utils::resources::ResourcePaths::new(&patterns, true)
+            .iter()
+            .map(|resource| resource.unwrap().target().to_path_buf())
+            .collect()
+    }
+
+    #[test]
+    fn bundled_embedding_is_found_where_the_bundle_puts_it() {
+        // prepare-embedding.mjs는 `src-tauri/resources/`에 `.gitkeep`을 두고 모델을
+        // `src-tauri/resources/models/<name>`에 쓴다(prepare-embedding.test.mjs가 고정한다).
+        let targets = bundle_targets();
+        let gitkeep = Path::new("resources").join(".gitkeep");
+        assert!(targets.contains(&gitkeep), "{targets:?}");
+        let model_in_bundle =
+            tauri_utils::resources::resource_relpath(Path::new("resources/models/ko.vec.gz"));
+
+        let resource_dir = tempfile::tempdir().unwrap();
+        let installed = resource_dir.path().join(&model_in_bundle);
+        fs::create_dir_all(installed.parent().unwrap()).unwrap();
+        fs::write(&installed, "m").unwrap();
+
+        let model = resolve_bundled_embedding(resource_dir.path()).unwrap();
+        assert_eq!(installed, model.path);
     }
 
     fn bundled() -> BundledModel {

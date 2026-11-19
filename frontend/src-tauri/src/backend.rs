@@ -116,8 +116,8 @@ mod tests {
     #[test]
     fn config_uses_config_dir_and_bundled_model() {
         let resources = tempfile::tempdir().unwrap();
-        std::fs::create_dir(resources.path().join("models")).unwrap();
-        std::fs::write(resources.path().join("models/ko.vec.gz"), "m").unwrap();
+        std::fs::create_dir_all(resources.path().join("resources/models")).unwrap();
+        std::fs::write(resources.path().join("resources/models/ko.vec.gz"), "m").unwrap();
 
         let config = build_config(
             lookup(&[]),
@@ -131,7 +131,10 @@ mod tests {
             config.data_dir
         );
         assert_eq!(
-            resources.path().join("models/ko.vec.gz").to_string_lossy(),
+            resources
+                .path()
+                .join("resources/models/ko.vec.gz")
+                .to_string_lossy(),
             config.rag.model_path
         );
         assert_eq!("ko.vec.gz", config.rag.model_version);
