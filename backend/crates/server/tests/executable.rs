@@ -51,6 +51,8 @@ fn interrupt_signal_shuts_down_cleanly() {
             .expect("server exited before listening")
             .unwrap();
         assert!(!line.contains("Failed"), "{line}");
+        // 터미널이 아닌 곳(파일, 상위 프로세스의 파이프)에는 색 코드를 쓰지 않는다.
+        assert!(!line.contains('\u{1b}'), "{line:?}");
         if line.contains(&listening) {
             break;
         }

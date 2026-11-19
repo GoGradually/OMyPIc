@@ -1,6 +1,7 @@
 //! `omypic-server`: 환경 변수(`OMYPIC_*`)로 설정을 읽고 `127.0.0.1:<port>`에 띄운다.
 //! Ctrl+C(유닉스에서는 SIGTERM도)로 정상 종료한다.
 
+use std::io::IsTerminal;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::process::ExitCode;
 
@@ -14,6 +15,7 @@ async fn main() -> ExitCode {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .with_writer(std::io::stderr)
+        .with_ansi(std::io::stderr().is_terminal())
         .init();
 
     let config = match AppConfig::from_env() {
