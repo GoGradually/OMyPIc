@@ -317,6 +317,7 @@ Claude API에는 음성 인식/합성 기능이 없습니다. 그래서 STT/TTS�
   - 답변 오디오는 기기를 떠나지 않습니다. 인식된 텍스트만 `POST /api/voice/sessions/{id}/answers`로 보냅니다.
   - 인식 모델 파일은 처음 사용할 때 Backend가 내려받아 `<데이터 폴더>/local-models`에 보관하고, 이후에는 그 파일을 읽습니다. 세션 시작 시 모델을 먼저 준비합니다.
   - ONNX Runtime 바이너리(`.wasm`)는 앱 번들에 포함되므로 CDN을 호출하지 않습니다.
+  - 모델은 OpenAI Whisper base.en의 ONNX 변환본(`Xenova/whisper-base.en`)이고, Hugging Face 모델 카드 기준 Apache-2.0 라이선스입니다.
   - 빌드 시 환경 변수로 모델을 바꿀 수 있습니다.
     - `VITE_OMYPIC_LOCAL_STT_MODEL` (기본값: `Xenova/whisper-base.en`)
     - `VITE_OMYPIC_LOCAL_STT_HOST` (기본값: 앱의 Backend `/api/local-models/` 경로. 사내 미러나 앱에 동봉한 모델 경로를 지정할 때 사용)
