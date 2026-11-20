@@ -2,14 +2,16 @@
 //!
 //! 모델 수명:
 //! - 처음 쓸 때 부른 쪽이 모델을 읽는다(없으면 받는다). 그동안 다른 호출은 그 결과를 기다린다.
+//!   부른 쪽이 모델을 받는 것은 프로세스에서 처음 읽을 때뿐이다.
 //! - 읽지 못하면 실패를 기억하고, 그 뒤 호출은 기다리지 않고 기억한 실패를 바로 받는다.
 //!   다시 시도는 백그라운드 작업자 하나가 한다. 네트워크·디스크 쓰기 실패는 30초부터 두 배씩
 //!   늘려 1시간까지 기다렸다가 다시 시도한다. 다시 해도 같은 결과인 실패(다 받은 파일이나 있는
 //!   파일의 체크섬 불일치, 차원 불일치, 읽을 수 없거나 벡터가 없는 파일, 빠진 설정)는 모델 파일이
 //!   바뀔 때까지(생기거나 크기나 수정 시각이 달라질 때까지) 다시 시도하지 않는다. 설정은
 //!   재시작해야 바뀐다.
-//! - 읽은 벡터는 `idle_release` 동안 임베딩 호출이 없으면 놓는다. 다음 호출이 다시 읽는다
-//!   (파일이 그대로면 체크섬은 다시 계산하지 않는다).
+//! - 읽은 벡터는 `idle_release` 동안 임베딩 호출이 없으면 놓는다. 다음 호출이 디스크에서 다시
+//!   읽는다(체크섬을 확인한 뒤로 파일이 그대로면 체크섬은 다시 계산하지 않는다). 그때 파일이
+//!   없으면 부른 쪽은 바로 실패를 받고, 받는 일은 백그라운드 작업자가 한다.
 //! - 어댑터를 놓으면 작업자와 진행 중인 내려받기가 멈추고 임시 파일도 지워진다.
 
 use std::collections::HashMap;
@@ -113,6 +115,8 @@ enum ModelState {
     Failed {
         error: AppError,
         retry: Retry,
+        /// 해시 대체를 쓴다는 경고를 이 실패에 대해 이미 남겼다.
+        fallback_reported: bool,
     },
 }
 
@@ -128,6 +132,8 @@ struct Slot {
     worker_running: bool,
     /// 마지막으로 체크섬을 확인한 모델 파일.
     verified: Option<Fingerprint>,
+    /// 프로세스에서 처음 읽기를 이미 했다. 그 뒤로 부른 쪽은 모델을 받지 않는다.
+    first_load_done: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -196,22 +202,30 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 struct LoadFailure {
     error: AppError,
-    /// 시간이 지나면 나을 수 있는 실패(네트워크, 디스크 쓰기).
-    retryable: bool,
+    recovery: Recovery,
+}
+
+enum Recovery {
+    /// 시간이 지나면 나을 수 있는 실패(네트워크, 디스크 쓰기). 기다렸다가 다시 시도한다.
+    Backoff,
+    /// 다시 읽을 때 파일이 없었다. 부른 쪽 대신 작업자가 바로 받는다.
+    DownloadInBackground,
+    /// 다시 해도 같은 결과다. 모델 파일이 바뀌면 다시 시도한다.
+    WhenFileChanges,
 }
 
 impl LoadFailure {
     fn retryable(error: AppError) -> Self {
         Self {
             error,
-            retryable: true,
+            recovery: Recovery::Backoff,
         }
     }
 
     fn permanent(error: AppError) -> Self {
         Self {
             error,
-            retryable: false,
+            recovery: Recovery::WhenFileChanges,
         }
     }
 }
@@ -230,6 +244,12 @@ struct Inner {
     loaded: Condvar,
     stop: Arc<StopSignal>,
     timing: Timing,
+    /// 체크섬을 확인한 바로 뒤에 한 번 부른다(파일을 그 사이에 바꾸는 시험용).
+    #[cfg(test)]
+    after_checksum: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// 이 횟수만큼 작업자 스레드 띄우기를 실패시킨다(시험용).
+    #[cfg(test)]
+    failing_spawns: std::sync::atomic::AtomicUsize,
 }
 
 impl FastTextEmbeddingAdapter {
@@ -247,6 +267,7 @@ impl FastTextEmbeddingAdapter {
                     model: ModelState::Unloaded,
                     worker_running: false,
                     verified: None,
+                    first_load_done: false,
                 }),
                 loaded: Condvar::new(),
                 stop: Arc::new(StopSignal::default()),
@@ -256,6 +277,10 @@ impl FastTextEmbeddingAdapter {
                     retry_max: RETRY_BACKOFF_MAX,
                     idle_release,
                 },
+                #[cfg(test)]
+                after_checksum: Mutex::new(None),
+                #[cfg(test)]
+                failing_spawns: std::sync::atomic::AtomicUsize::new(0),
             }),
         }
     }
@@ -314,7 +339,10 @@ impl FastTextEmbeddingAdapter {
             match &mut slot.model {
                 ModelState::Ready { vectors, last_used } => {
                     *last_used = Instant::now();
-                    return Ok(Some(Arc::clone(vectors)));
+                    let vectors = Arc::clone(vectors);
+                    // 작업자를 띄우지 못했으면 여기서 다시 띄운다(놓을 때가 되면 놓는다).
+                    Inner::ensure_worker(inner, &mut slot);
+                    return Ok(Some(vectors));
                 }
                 ModelState::Loading => {
                     slot = inner
@@ -322,8 +350,13 @@ impl FastTextEmbeddingAdapter {
                         .wait(slot)
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
                 }
-                ModelState::Failed { error, retry } => {
+                ModelState::Failed {
+                    error,
+                    retry,
+                    fallback_reported,
+                } => {
                     let error = error.clone();
+                    let report = !std::mem::replace(fallback_reported, true);
                     if let Retry::WhenFileChanges(seen) = retry {
                         if fingerprint(&inner.resolve_model_path()) != *seen {
                             tracing::info!(
@@ -333,17 +366,19 @@ impl FastTextEmbeddingAdapter {
                                 at: Instant::now(),
                                 failures: 0,
                             };
-                            Inner::ensure_worker(inner, &mut slot);
                         }
                     }
+                    // 다시 시도할 일이 있는데 작업자가 없으면(띄우지 못했으면) 여기서 띄운다.
+                    Inner::ensure_worker(inner, &mut slot);
                     drop(slot);
-                    return inner.handle_initialization_failure(&error);
+                    return inner.handle_initialization_failure(&error, report);
                 }
                 ModelState::Unloaded => {
                     slot.model = ModelState::Loading;
                     let verified = slot.verified;
+                    let may_download = !std::mem::replace(&mut slot.first_load_done, true);
                     drop(slot);
-                    let result = inner.load_catching_panics(verified);
+                    let result = inner.load_catching_panics(verified, may_download);
                     slot = lock(&inner.slot);
                     inner.store_result(&mut slot, result, 0);
                     inner.loaded.notify_all();
@@ -382,9 +417,16 @@ impl Drop for FastTextEmbeddingAdapter {
 }
 
 impl Inner {
-    fn handle_initialization_failure(&self, failure: &AppError) -> AppResult<Option<Arc<Vectors>>> {
+    /// `report`이면 해시 대체를 쓴다고 남긴다(실패 하나에 한 번).
+    fn handle_initialization_failure(
+        &self,
+        failure: &AppError,
+        report: bool,
+    ) -> AppResult<Option<Arc<Vectors>>> {
         if self.rag.allow_hash_fallback {
-            tracing::warn!("FastText model unavailable; using hash fallback. reason={failure}");
+            if report {
+                tracing::warn!("FastText model unavailable; using hash fallback. reason={failure}");
+            }
             return Ok(None);
         }
         Err(failure.clone())
@@ -393,12 +435,12 @@ impl Inner {
     fn store_result(
         &self,
         slot: &mut Slot,
-        result: Result<(Vectors, Fingerprint), LoadFailure>,
+        result: Result<(Vectors, Option<Fingerprint>), LoadFailure>,
         failures_before: u32,
     ) {
         slot.model = match result {
             Ok((vectors, verified)) => {
-                slot.verified = Some(verified);
+                slot.verified = verified;
                 ModelState::Ready {
                     vectors: Arc::new(vectors),
                     last_used: Instant::now(),
@@ -406,7 +448,21 @@ impl Inner {
             }
             Err(LoadFailure {
                 error,
-                retryable: true,
+                recovery: Recovery::DownloadInBackground,
+            }) => {
+                tracing::warn!("{error}");
+                ModelState::Failed {
+                    error,
+                    retry: Retry::At {
+                        at: Instant::now(),
+                        failures: 0,
+                    },
+                    fallback_reported: false,
+                }
+            }
+            Err(LoadFailure {
+                error,
+                recovery: Recovery::Backoff,
             }) => {
                 let failures = failures_before.saturating_add(1);
                 let delay = self.timing.retry_delay(failures);
@@ -420,11 +476,12 @@ impl Inner {
                         at: Instant::now() + delay,
                         failures,
                     },
+                    fallback_reported: false,
                 }
             }
             Err(LoadFailure {
                 error,
-                retryable: false,
+                recovery: Recovery::WhenFileChanges,
             }) => {
                 tracing::warn!(
                     "FastText model could not be loaded; not retrying until the model file changes \
@@ -433,6 +490,7 @@ impl Inner {
                 ModelState::Failed {
                     error,
                     retry: Retry::WhenFileChanges(fingerprint(&self.resolve_model_path())),
+                    fallback_reported: false,
                 }
             }
         };
@@ -456,34 +514,50 @@ impl Inner {
             return;
         }
         let weak = Arc::downgrade(this);
-        match std::thread::Builder::new()
-            .name("fasttext-model".to_string())
-            .spawn(move || run_worker(weak))
-        {
+        match this.spawn_worker(weak) {
             Ok(_) => slot.worker_running = true,
             Err(error) => tracing::warn!("Failed to start the FastText model worker: {error}"),
         }
     }
 
+    fn spawn_worker(&self, weak: Weak<Self>) -> std::io::Result<std::thread::JoinHandle<()>> {
+        #[cfg(test)]
+        if self
+            .failing_spawns
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            return Err(std::io::Error::other("injected spawn failure"));
+        }
+        std::thread::Builder::new()
+            .name("fasttext-model".to_string())
+            .spawn(move || run_worker(weak))
+    }
+
     fn load_catching_panics(
         &self,
         verified: Option<Fingerprint>,
-    ) -> Result<(Vectors, Fingerprint), LoadFailure> {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.load_model(verified)))
-            .unwrap_or_else(|_| {
-                Err(LoadFailure::permanent(AppError::Internal(
-                    "FastText model loading panicked".to_string(),
-                )))
-            })
+        may_download: bool,
+    ) -> Result<(Vectors, Option<Fingerprint>), LoadFailure> {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.load_model(verified, may_download)
+        }))
+        .unwrap_or_else(|_| {
+            Err(LoadFailure::permanent(AppError::Internal(
+                "FastText model loading panicked".to_string(),
+            )))
+        })
     }
 
+    /// 읽은 벡터와, 체크섬을 확인한 뒤로 파일이 바뀌지 않았으면 그 파일의 지문을 돌려준다.
     fn load_model(
         &self,
         verified: Option<Fingerprint>,
-    ) -> Result<(Vectors, Fingerprint), LoadFailure> {
+        may_download: bool,
+    ) -> Result<(Vectors, Option<Fingerprint>), LoadFailure> {
         let started = Instant::now();
-        let model_path = self.ensure_model_file(verified)?;
-        let checked = started.elapsed();
+        let (model_path, checked) = self.ensure_model_file(verified, may_download)?;
+        let checksum_time = started.elapsed();
         let vectors = self
             .load_vectors(&model_path)
             .map_err(LoadFailure::permanent)?;
@@ -497,13 +571,26 @@ impl Inner {
             "RAG fasttext model loaded path={} vocab={} checksum_ms={} total_ms={}",
             model_path.display(),
             vectors.len(),
-            checked.as_millis(),
+            checksum_time.as_millis(),
             started.elapsed().as_millis()
         );
-        Ok((vectors, current))
+        // 체크섬 확인과 읽기 사이에 바뀐 파일은 확인한 파일이 아니다. 다음에 다시 확인한다.
+        let verified = checked.filter(|checked| *checked == current);
+        if verified.is_none() {
+            tracing::warn!(
+                "FastText model file changed while it was read; checking it again on the next load"
+            );
+        }
+        Ok((vectors, verified))
     }
 
-    fn ensure_model_file(&self, verified: Option<Fingerprint>) -> Result<PathBuf, LoadFailure> {
+    /// 모델 파일의 경로와, 체크섬을 확인한(또는 받은) 그 파일의 지문을 돌려준다.
+    /// `may_download`가 아니면 없는 파일을 받지 않고 작업자에게 넘기는 실패를 돌려준다.
+    fn ensure_model_file(
+        &self,
+        verified: Option<Fingerprint>,
+        may_download: bool,
+    ) -> Result<(PathBuf, Option<Fingerprint>), LoadFailure> {
         let model_path = self.resolve_model_path();
         if let Some(parent) = model_path.parent() {
             std::fs::create_dir_all(parent).map_err(|err| {
@@ -514,15 +601,31 @@ impl Inner {
             })?;
         }
         if model_path.exists() {
-            let current = fingerprint(&model_path);
-            if current.is_none() || current != verified {
+            // 체크섬보다 먼저 잰다. 그 뒤에 바뀐 파일은 읽은 뒤의 지문과 달라진다.
+            let before = fingerprint(&model_path);
+            if before.is_none() || before != verified {
                 self.verify_model_sha256(&model_path)
                     .map_err(LoadFailure::permanent)?;
             }
-            return Ok(model_path);
+            #[cfg(test)]
+            if let Some(hook) = lock(&self.after_checksum).take() {
+                hook();
+            }
+            return Ok((model_path, before));
+        }
+        if !may_download {
+            self.download_settings().map_err(LoadFailure::permanent)?;
+            return Err(LoadFailure {
+                error: AppError::InvalidState(format!(
+                    "FastText model file is missing: {}; downloading it in the background",
+                    model_path.display()
+                )),
+                recovery: Recovery::DownloadInBackground,
+            });
         }
         self.download_model_with_retry(&model_path)?;
-        Ok(model_path)
+        let downloaded = fingerprint(&model_path);
+        Ok((model_path, downloaded))
     }
 
     fn resolve_model_path(&self) -> PathBuf {
@@ -555,16 +658,20 @@ impl Inner {
         check_sha256(expected, &actual, model_path)
     }
 
-    fn download_model_with_retry(&self, model_path: &Path) -> Result<(), LoadFailure> {
+    /// 받을 주소와 기대하는 체크섬. 받기 전에 확인한다(체크섬 없이 받은 파일은 어차피 쓸 수 없다).
+    fn download_settings(&self) -> AppResult<(&str, &str)> {
         let url = java_trim(&self.rag.download_url);
         if url.is_empty() {
-            return Err(LoadFailure::permanent(AppError::InvalidState(
+            return Err(AppError::InvalidState(
                 "FastText model is missing and omypic.rag.download-url is not configured"
                     .to_string(),
-            )));
+            ));
         }
-        // 내려받기 전에 확인한다. 체크섬 없이 받은 파일은 어차피 쓸 수 없다.
-        let expected = self.expected_sha256().map_err(LoadFailure::permanent)?;
+        Ok((url, self.expected_sha256()?))
+    }
+
+    fn download_model_with_retry(&self, model_path: &Path) -> Result<(), LoadFailure> {
+        let (url, expected) = self.download_settings().map_err(LoadFailure::permanent)?;
         let attempts = self.rag.download_retry_max.saturating_add(1).max(1);
         let mut last_failure = String::new();
         for attempt in 1..=attempts {
@@ -768,7 +875,7 @@ fn run_worker(weak: Weak<Inner>) {
             Step::Load(failures) => {
                 let verified = slot.verified;
                 drop(slot);
-                let result = inner.load_catching_panics(verified);
+                let result = inner.load_catching_panics(verified, true);
                 if inner.stop.is_stopped() {
                     return;
                 }
@@ -1518,8 +1625,7 @@ mod tests {
         );
         assert!(!path.exists());
         server.join().unwrap();
-        // 취소된 받기 스레드가 임시 파일을 지울 때까지 잠깐 기다린다.
-        std::thread::sleep(Duration::from_millis(500));
+        // 받기 스레드는 임시 파일을 놓은 뒤에 결과를 보낸다.
         assert!(dir_is_empty(dir.path()));
     }
 
@@ -1754,6 +1860,18 @@ mod tests {
         let failure = adapter.embed("hello").unwrap_err();
         assert!(!adapter.worker_running());
         // Removing the file and putting it back unchanged keeps the failure: same size and time.
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let content = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, &content).unwrap();
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        assert_eq!(failure, adapter.embed("hello").unwrap_err());
+        assert!(!adapter.worker_running());
         std::thread::sleep(Duration::from_millis(100));
         assert_eq!(failure, adapter.embed("hello").unwrap_err());
         assert!(!adapter.worker_running());
@@ -1764,11 +1882,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (path, sha) = write_model(dir.path(), "ko.vec", MODEL);
         let adapter = adapter(rag(&path, &sha), dir.path())
-            .with_idle_release(Some(Duration::from_millis(200)));
+            .with_idle_release(Some(Duration::from_millis(1500)));
 
         assert_eq!(vec![1.0, 0.0, 0.0], adapter.embed("hello").unwrap());
         assert!(adapter.is_loaded());
-        // Each embedding request keeps the model: here one every 50 ms for 400 ms.
+        // Each embedding request keeps the model: here one every 300 ms for 2.1 s, longer than
+        // the idle period, with 1.2 s to spare between two requests.
         for word in [
             "world",
             "alpha",
@@ -1779,7 +1898,7 @@ mod tests {
             "a b",
         ] {
             adapter.embed(word).unwrap();
-            std::thread::sleep(Duration::from_millis(50));
+            std::thread::sleep(Duration::from_millis(300));
             assert!(adapter.is_loaded(), "released while in use");
         }
 
@@ -1970,36 +2089,305 @@ mod tests {
     #[test]
     fn dropping_the_adapter_cancels_a_download_in_progress_and_removes_its_temp_file() {
         let dir = tempfile::tempdir().unwrap();
-        let body: &'static str = "2 3\nhello 1 0 0\nworld 0 1 0\n";
-        // Retried in the background after the first (stalled) attempt; the retry stalls too.
-        let (url, server) = dribble_server(body.as_bytes(), Some(4));
+        let body: &'static [u8] = b"2 3\nhello 1 0 0\nworld 0 1 0\n";
+        // The caller's attempt gets a 500; the background retry gets a few bytes and then
+        // nothing (stall limit: 60 s). The server reports whether the client let go of it.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/ko.vec", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let mut request = [0_u8; 2048];
+            let (mut refused, _) = listener.accept().unwrap();
+            let _ = refused.read(&mut request);
+            refused
+                .write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            drop(refused);
+            let (mut stalled, _) = listener.accept().unwrap();
+            let _ = stalled.read(&mut request);
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stalled.write_all(head.as_bytes()).unwrap();
+            stalled.write_all(&body[..4]).unwrap();
+            stalled.flush().unwrap();
+            stalled
+                .set_read_timeout(Some(Duration::from_secs(20)))
+                .unwrap();
+            let mut rest = [0_u8; 16];
+            // 0 bytes or a reset: the client closed its side.
+            !matches!(
+                stalled.read(&mut rest),
+                Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock
+                    || err.kind() == std::io::ErrorKind::TimedOut
+            )
+        });
         let path = dir.path().join("models").join("ko.vec");
-        let mut config = rag(&path, &sha256_hex(body.as_bytes()));
+        let mut config = rag(&path, &sha256_hex(body));
         config.download_url = url;
-        let adapter = Arc::new(adapter(config, dir.path()));
-        let caller = {
-            let adapter = Arc::clone(&adapter);
-            std::thread::spawn(move || adapter.embed("hello"))
-        };
+        let adapter = adapter(config, dir.path())
+            .with_retry_backoff(Duration::from_millis(50), Duration::from_millis(50));
+        assert!(adapter.embed("hello").is_err());
+        // The background retry is writing its temp file.
         assert!(eventually(Duration::from_secs(5), || std::fs::read_dir(
             path.parent().unwrap()
         )
         .map(|entries| entries.count() == 1)
         .unwrap_or(false)));
 
-        // Stop while the body is stalled (stall limit: 60 s).
         let started = Instant::now();
-        adapter.inner.stop.stop();
-        let result = caller.join().unwrap();
+        drop(adapter);
 
-        assert!(result.is_err());
+        assert!(
+            server.join().unwrap(),
+            "the download kept the connection after the adapter was dropped"
+        );
         assert!(
             started.elapsed() < Duration::from_secs(5),
             "{:?}",
             started.elapsed()
         );
-        assert!(dir_is_empty(path.parent().unwrap()));
-        server.join().unwrap();
+        assert!(eventually(Duration::from_secs(5), || dir_is_empty(
+            path.parent().unwrap()
+        )));
+    }
+
+    /// Serves `body` to every GET and counts the requests. From request number `hold_from` on
+    /// (1-based) it holds the reply until `open` is called.
+    struct GatedUpstream {
+        url: String,
+        requests: Arc<std::sync::atomic::AtomicUsize>,
+        gate: Arc<(Mutex<bool>, Condvar)>,
+    }
+
+    impl GatedUpstream {
+        fn start(body: &'static [u8], hold_from: usize) -> Self {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/ko.vec", listener.local_addr().unwrap());
+            let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let gate = Arc::new((Mutex::new(false), Condvar::new()));
+            let (counter, held) = (Arc::clone(&requests), Arc::clone(&gate));
+            std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    let Ok(mut stream) = stream else { return };
+                    let (counter, held) = (Arc::clone(&counter), Arc::clone(&held));
+                    std::thread::spawn(move || {
+                        let mut request = Vec::new();
+                        let mut byte = [0_u8; 1];
+                        while !request.ends_with(b"\r\n\r\n") {
+                            match stream.read(&mut byte) {
+                                Ok(1) => request.push(byte[0]),
+                                _ => return,
+                            }
+                        }
+                        let number = counter.fetch_add(1, Ordering::SeqCst) + 1;
+                        if number >= hold_from {
+                            let (open, wake) = &*held;
+                            let mut open = lock(open);
+                            while !*open {
+                                open = wake.wait(open).unwrap();
+                            }
+                        }
+                        let head = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        );
+                        let _ = stream.write_all(head.as_bytes());
+                        let _ = stream.write_all(body);
+                    });
+                }
+            });
+            Self {
+                url,
+                requests,
+                gate,
+            }
+        }
+
+        fn requests(&self) -> usize {
+            self.requests.load(Ordering::SeqCst)
+        }
+
+        fn open(&self) {
+            *lock(&self.gate.0) = true;
+            self.gate.1.notify_all();
+        }
+    }
+
+    impl Drop for GatedUpstream {
+        fn drop(&mut self) {
+            self.open();
+        }
+    }
+
+    #[test]
+    fn after_an_idle_release_a_missing_file_fails_the_caller_at_once_and_is_downloaded_in_the_background(
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let body: &'static str = "2 3\nhello 1 0 0\nworld 0 1 0\n";
+        let upstream = GatedUpstream::start(body.as_bytes(), 2);
+        let path = dir.path().join("models").join("ko.vec");
+        let mut config = rag(&path, &sha256_hex(body.as_bytes()));
+        config.download_url = upstream.url.clone();
+        let adapter = Arc::new(
+            adapter(config, dir.path())
+                .with_idle_release(Some(Duration::from_millis(200)))
+                .with_retry_backoff(Duration::from_millis(50), Duration::from_millis(50)),
+        );
+
+        // The first load of the process downloads in the caller.
+        assert_eq!(vec![1.0, 0.0, 0.0], adapter.embed("hello").unwrap());
+        assert_eq!(1, upstream.requests());
+        assert!(eventually(Duration::from_secs(5), || !adapter.is_loaded()));
+        std::fs::remove_file(&path).unwrap();
+
+        // The upstream holds every further request until it is opened: a caller that downloaded
+        // by itself would not come back.
+        let (sender, receiver) = std::sync::mpsc::channel();
+        {
+            let adapter = Arc::clone(&adapter);
+            std::thread::spawn(move || {
+                let _ = sender.send(adapter.embed("world"));
+            });
+        }
+        let result = receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the caller waited for a download after the idle release");
+        assert!(
+            matches!(&result, Err(AppError::InvalidState(m)) if m.contains("missing")),
+            "{result:?}"
+        );
+
+        // The background worker asks the upstream; once it answers, the model is back.
+        assert!(eventually(Duration::from_secs(5), || upstream.requests() == 2));
+        upstream.open();
+        assert!(eventually(Duration::from_secs(10), || adapter
+            .embed("world")
+            .is_ok_and(|v| v == vec![0.0, 1.0, 0.0])));
+        assert!(path.exists());
+        assert_eq!(2, upstream.requests());
+    }
+
+    #[test]
+    fn a_file_replaced_while_it_is_read_is_checked_again_on_the_next_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, sha) = write_model(dir.path(), "ko.vec", MODEL);
+        let adapter = adapter(rag(&path, &sha), dir.path())
+            .with_idle_release(Some(Duration::from_millis(100)));
+        // Replaced (other size) after the checksum was computed, before the vectors are read.
+        let replaced = path.clone();
+        *lock(&adapter.inner.after_checksum) = Some(Box::new(move || {
+            std::fs::write(&replaced, "2 3\nhello 0 1 0\nworld 1 0 0\n").unwrap();
+        }));
+        adapter.embed("hello").unwrap();
+        assert!(eventually(Duration::from_secs(5), || !adapter.is_loaded()));
+
+        // The replacement never passed the checksum, so the next load computes it.
+        assert_eq!(
+            AppError::InvalidState(format!(
+                "FastText model sha256 mismatch for {}",
+                path.display()
+            )),
+            adapter.embed("world").unwrap_err()
+        );
+    }
+
+    #[test]
+    fn a_worker_that_failed_to_start_is_started_by_the_next_call_to_release_the_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, sha) = write_model(dir.path(), "ko.vec", MODEL);
+        let adapter = adapter(rag(&path, &sha), dir.path())
+            .with_idle_release(Some(Duration::from_millis(100)));
+        // Every attempt of the first call to start the worker fails.
+        adapter.inner.failing_spawns.store(2, Ordering::SeqCst);
+
+        adapter.embed("hello").unwrap();
+        assert!(!adapter.worker_running());
+        adapter.embed("world").unwrap();
+
+        assert!(eventually(Duration::from_secs(5), || !adapter.is_loaded()));
+    }
+
+    #[test]
+    fn a_worker_that_failed_to_start_is_started_by_the_next_call_to_retry_the_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = "2 3\nhello 1 0 0\nworld 0 1 0\n";
+        let server = MockServer::start();
+        let mut failing = server.mock(|when, then| {
+            when.method(GET).path("/ko.vec");
+            then.status(500);
+        });
+        let path = dir.path().join("ko.vec");
+        let mut config = rag(&path, &sha256_hex(body.as_bytes()));
+        config.download_url = server.url("/ko.vec");
+        let adapter = adapter(config, dir.path())
+            .with_retry_backoff(Duration::from_millis(50), Duration::from_millis(50));
+        // Every attempt of the first call to start the worker fails.
+        adapter.inner.failing_spawns.store(2, Ordering::SeqCst);
+
+        assert!(adapter.embed("hello").is_err());
+        assert!(!adapter.worker_running());
+        failing.delete();
+        server.mock(|when, then| {
+            when.method(GET).path("/ko.vec");
+            then.status(200).body(body);
+        });
+
+        assert!(eventually(Duration::from_secs(10), || adapter
+            .embed("hello")
+            .is_ok()));
+    }
+
+    /// Runs `f` on this thread and counts the log lines that contain `needle`.
+    fn count_logs(needle: &'static str, f: impl FnOnce()) -> usize {
+        #[derive(Clone)]
+        struct Counter(Arc<std::sync::atomic::AtomicUsize>, &'static str);
+        impl Write for Counter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if String::from_utf8_lossy(bytes).contains(self.1) {
+                    self.0.fetch_add(1, Ordering::SeqCst);
+                }
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let counter = Counter(Arc::new(std::sync::atomic::AtomicUsize::new(0)), needle);
+        let writer = counter.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::with_default(subscriber, f);
+        counter.0.load(Ordering::SeqCst)
+    }
+
+    #[test]
+    fn the_hash_fallback_warning_is_logged_once_per_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ko.vec");
+        let mut config = rag(&path, &sha256_hex(MODEL.as_bytes()));
+        config.allow_hash_fallback = true;
+        let adapter = adapter(config, dir.path());
+
+        let warnings = count_logs("using hash fallback", || {
+            for text in ["one", "two", "three", "four", "five"] {
+                adapter.embed(text).unwrap();
+            }
+        });
+        assert_eq!(1, warnings);
+
+        // A new failure (the file appears with the wrong content) is reported again, once.
+        std::fs::write(&path, "1 3\nhello 0 1 0\n").unwrap();
+        adapter.embed("six").unwrap();
+        assert!(eventually(Duration::from_secs(5), || !adapter.worker_running()));
+        let warnings = count_logs("using hash fallback", || {
+            for text in ["seven", "eight", "nine"] {
+                adapter.embed(text).unwrap();
+            }
+        });
+        assert_eq!(1, warnings);
     }
 
     #[test]
