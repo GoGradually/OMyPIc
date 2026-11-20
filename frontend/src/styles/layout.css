@@ -218,6 +218,15 @@
     }
 }
 
+.voice-note {
+    margin-top: 10px;
+    border-left: 3px solid var(--marker);
+    border-radius: var(--radius);
+    background: var(--marker-soft);
+    padding: 8px 12px;
+    font-size: 14px;
+}
+
 .partial-transcript {
     margin-top: 10px;
     border-radius: var(--radius);

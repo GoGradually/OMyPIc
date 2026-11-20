@@ -11,14 +11,16 @@ import {
     getLocalTtsStatus,
     isLocalTtsSupported,
     loadLocalTts,
-    synthesizeEnglish
+    synthesizeEnglish,
+    watchLocalTtsStatus
 } from './localTts.js'
 import {
     cancelQueuedKoreanSynthesis,
     getLocalKoTtsStatus,
     isLocalKoTtsSupported,
     loadLocalKoTts,
-    synthesizeKorean
+    synthesizeKorean,
+    watchLocalKoTtsStatus
 } from './localKoTts.js'
 
 const KOREAN = 'ko-KR'
@@ -260,4 +262,29 @@ export function speakLocally(text, {onEnd, onUnavailable, onNotice, allowKoreanM
     }
 }
 
-export {loadLocalKoTts, loadLocalTts}
+/**
+ * Calls listener({english, korean}) now and whenever one of the two voices changes, each as
+ * {status, progress} (status 'idle', 'loading', 'ready' or 'failed'; progress in percent or null).
+ * Returns a function that stops it.
+ */
+export function watchLocalSpeechModels(listener) {
+    let models = {
+        english: {status: getLocalTtsStatus(), progress: null},
+        korean: {status: getLocalKoTtsStatus(), progress: null}
+    }
+    listener(models)
+    const stopEnglish = watchLocalTtsStatus((english) => {
+        models = {...models, english}
+        listener(models)
+    })
+    const stopKorean = watchLocalKoTtsStatus((korean) => {
+        models = {...models, korean}
+        listener(models)
+    })
+    return () => {
+        stopEnglish()
+        stopKorean()
+    }
+}
+
+export {getLocalKoTtsStatus, getLocalTtsStatus, loadLocalKoTts, loadLocalTts}

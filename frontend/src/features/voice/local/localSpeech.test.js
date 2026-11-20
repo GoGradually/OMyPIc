@@ -1,6 +1,12 @@
 /** @vitest-environment jsdom */
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
-import {cancelLocalSpeech, neededLocalTtsModels, prepareLocalSpeech, speakLocally} from './localSpeech.js'
+import {
+    cancelLocalSpeech,
+    neededLocalTtsModels,
+    prepareLocalSpeech,
+    speakLocally,
+    watchLocalSpeechModels
+} from './localSpeech.js'
 import {
     cancelQueuedEnglishSynthesis,
     getLocalTtsStatus,
@@ -16,12 +22,20 @@ import {
     synthesizeKorean
 } from './localKoTts.js'
 
+const modelWatchers = vi.hoisted(() => ({english: null, korean: null}))
+
 vi.mock('./localTts.js', () => ({
     isLocalTtsSupported: vi.fn(),
     getLocalTtsStatus: vi.fn(),
     loadLocalTts: vi.fn(),
     synthesizeEnglish: vi.fn(),
-    cancelQueuedEnglishSynthesis: vi.fn()
+    cancelQueuedEnglishSynthesis: vi.fn(),
+    watchLocalTtsStatus: vi.fn((listener) => {
+        modelWatchers.english = listener
+        return () => {
+            modelWatchers.english = null
+        }
+    })
 }))
 
 vi.mock('../../../shared/api/http.js', () => ({
@@ -33,7 +47,13 @@ vi.mock('./localKoTts.js', () => ({
     getLocalKoTtsStatus: vi.fn(),
     loadLocalKoTts: vi.fn(),
     synthesizeKorean: vi.fn(),
-    cancelQueuedKoreanSynthesis: vi.fn()
+    cancelQueuedKoreanSynthesis: vi.fn(),
+    watchLocalKoTtsStatus: vi.fn((listener) => {
+        modelWatchers.korean = listener
+        return () => {
+            modelWatchers.korean = null
+        }
+    })
 }))
 
 let audioInstances = []
@@ -650,3 +670,25 @@ describe('neededLocalTtsModels', () => {
         expect(neededLocalTtsModels('ko')).toEqual({english: false, korean: false})
     })
 })
+
+describe('watchLocalSpeechModels', () => {
+    it('reports the state of both voices now and whenever one changes', () => {
+        getLocalTtsStatus.mockReturnValue('ready')
+        getLocalKoTtsStatus.mockReturnValue('idle')
+        const seen = []
+
+        const stop = watchLocalSpeechModels((models) => seen.push(models))
+        modelWatchers.korean({status: 'loading', progress: 30})
+        modelWatchers.english({status: 'failed', progress: null})
+        stop()
+
+        expect(seen).toEqual([
+            {english: {status: 'ready', progress: null}, korean: {status: 'idle', progress: null}},
+            {english: {status: 'ready', progress: null}, korean: {status: 'loading', progress: 30}},
+            {english: {status: 'failed', progress: null}, korean: {status: 'loading', progress: 30}}
+        ])
+        expect(modelWatchers.english).toBeNull()
+        expect(modelWatchers.korean).toBeNull()
+    })
+})
+

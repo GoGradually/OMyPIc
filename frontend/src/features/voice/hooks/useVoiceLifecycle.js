@@ -29,7 +29,14 @@ import {
 } from './voiceSessionConstants.js'
 import {computeRms, joinByteChunks} from './voiceSessionAudio.js'
 import {loadLocalStt, transcribePcm16} from '../local/localStt.js'
-import {loadLocalKoTts, loadLocalTts, neededLocalTtsModels} from '../local/localSpeech.js'
+import {
+    getLocalTtsStatus,
+    loadLocalKoTts,
+    loadLocalTts,
+    neededLocalTtsModels,
+    watchLocalSpeechModels
+} from '../local/localSpeech.js'
+import {speechModelNote} from '../utils/speechModelNote.js'
 import {LOCAL_STT_MODEL, LOCAL_TTS_MODEL} from '../../../shared/constants/models.js'
 
 const VOICE_CHUNK_UPLOAD_TIMEOUT_MS = 3000
@@ -145,6 +152,9 @@ export function useVoiceLifecycle({
     const koreanUnavailableNoticeShownRef = useRef(false)
     // Whether a Korean sentence may fetch the Korean model: only in a session with Korean feedback.
     const koreanModelAllowedRef = useRef(false)
+    // The state of the two on-device voices, and which of them the current session reads with.
+    const [speechModels, setSpeechModels] = useState({english: {status: 'idle'}, korean: {status: 'idle'}})
+    const [sessionVoices, setSessionVoices] = useState({localSpeech: false, koreanWanted: false})
     // Counts session starts; Stop during a start moves it on, which abandons that start.
     const startGenerationRef = useRef(0)
     const onConnectionErrorRef = useRef(() => {
@@ -153,6 +163,8 @@ export function useVoiceLifecycle({
     useEffect(() => {
         statusRef.current = onStatus
     }, [onStatus])
+
+    useEffect(() => watchLocalSpeechModels(setSpeechModels), [])
 
     useEffect(() => {
         feedbackRef.current = onFeedback
@@ -307,9 +319,10 @@ export function useVoiceLifecycle({
 
     const handleLocalSpeechNotice = useCallback((notice) => {
         if (notice === 'korean-unavailable') {
-            if (!koreanUnavailableNoticeShownRef.current) {
+            // A Korean-feedback session keeps a note about the Korean model in the panel instead.
+            if (!koreanModelAllowedRef.current && !koreanUnavailableNoticeShownRef.current) {
                 koreanUnavailableNoticeShownRef.current = true
-                setStatus('한국어 음성 모델이 준비되지 않아 한국어 문장은 화면으로만 보여 드립니다.')
+                setStatus('이 세션에서는 한국어 문장을 소리 없이 화면으로만 보여 드립니다.')
             }
         } else if (notice === 'preparing') {
             setStatus('음성을 준비하고 있습니다. 기기에서 합성하므로 잠시 걸릴 수 있습니다.')
@@ -1253,8 +1266,13 @@ export function useVoiceLifecycle({
 
     // Downloads (first use) and loads one on-device speech model, reporting which one it is. On first
     // use the backend fetches the files before the percentage can move, so the size is said up front.
-    const loadSpeechModel = useCallback(async (load, label, size, report) => {
-        report(`기기에서 실행할 ${label} 모델을 준비하고 있습니다. 처음 한 번은 ${size}를 내려받으므로 몇 분 걸릴 수 있습니다.`)
+    // A model that is already loaded is not mentioned.
+    const loadSpeechModel = useCallback(async (load, getStatus, label, size, report) => {
+        if (getStatus() === 'ready') {
+            await load()
+            return
+        }
+        report(`기기에서 실행할 ${label} 모델을 준비하고 있습니다. 처음 사용할 때는 ${size}를 내려받으므로 몇 분 걸릴 수 있습니다.`)
         let lastReported = -1
         await load(({progress}) => {
             const percent = Math.floor(progress / 10) * 10
@@ -1276,7 +1294,7 @@ export function useVoiceLifecycle({
         }
         if (needed.english) {
             try {
-                await loadSpeechModel(loadLocalTts, '영어 음성 합성', '약 90MB', report)
+                await loadSpeechModel(loadLocalTts, getLocalTtsStatus, '영어 음성 합성', '약 90MB', report)
             } catch (_error) {
                 // The session opens all the same (AI on or off): questions are shown on screen, and
                 // the next English sentence retries the load in the background.
@@ -1333,6 +1351,9 @@ export function useVoiceLifecycle({
             koreanUnavailableNoticeShownRef.current = false
             const feedbackLanguage = aiOn ? settingsRef.current.feedbackLang : null
             koreanModelAllowedRef.current = feedbackLanguage === 'ko'
+            // Speech is read on this device when AI is off or the free local TTS model is selected.
+            const localSpeech = !aiOn || settingsRef.current.ttsModel === LOCAL_TTS_MODEL
+            setSessionVoices({localSpeech, koreanWanted: localSpeech && feedbackLanguage === 'ko'})
             transcribingRef.current = false
             sessionSttModeRef.current = !aiOn
                 ? STT_MODE.NONE
@@ -1343,8 +1364,7 @@ export function useVoiceLifecycle({
                     return
                 }
             }
-            // Speech is read on this device when AI is off or the free local TTS model is selected.
-            if (!aiOn || settingsRef.current.ttsModel === LOCAL_TTS_MODEL) {
+            if (localSpeech) {
                 await prepareLocalTts({feedbackLanguage, report})
                 if (abandoned()) {
                     return
@@ -1560,6 +1580,16 @@ export function useVoiceLifecycle({
         setStatus('설정은 다음 세션 시작 시 반영됩니다.')
     }, [setStatus])
 
+    // The English note is about a reload during the session; before it opens, the start reports
+    // its own load in the status bar.
+    const voiceNote = sessionPhase === 'IDLE' || sessionPhase === 'STOPPING'
+        ? ''
+        : speechModelNote({
+            english: sessionPhase === 'ACTIVE' ? speechModels.english : {status: 'idle'},
+            korean: speechModels.korean,
+            ...sessionVoices
+        })
+
     const replayButtonDisabledReason = getReplayDisabledReason()
     const replayButtonDisabled = replayState !== REPLAY_STATE.PLAYING && Boolean(replayButtonDisabledReason)
     const replayButtonLabel = replayState === REPLAY_STATE.PLAYING ? '중지' : '내 응답 재생'
@@ -1591,6 +1621,7 @@ export function useVoiceLifecycle({
         handleReplayAction,
         replayPlaying: replayState === REPLAY_STATE.PLAYING,
         sessionAiEnabled,
-        awaitingReview
+        awaitingReview,
+        speechModelNote: voiceNote
     }
 }

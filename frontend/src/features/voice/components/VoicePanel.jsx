@@ -40,7 +40,8 @@ export function VoicePanel({
                                autoReplayEnabled = false,
                                onToggleAutoReplay,
                                feedbackSummary = '',
-                               continuousMode = false
+                               continuousMode = false,
+                               speechModelNote = ''
                            }) {
     const stageOptions = {aiEnabled: stageAiEnabled, autoReplayEnabled, continuousMode}
     const steps = getPracticeSteps(stageOptions)
@@ -87,6 +88,7 @@ export function VoicePanel({
                 {recording && <span className="rec-dot" aria-hidden="true"/>}
                 {caption}
             </p>
+            {speechModelNote && <p className="voice-note" role="note">{speechModelNote}</p>}
             {partialTranscript && <p className="partial-transcript">{partialTranscript}</p>}
 
             <div className="voice-panel__actions">

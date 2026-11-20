@@ -12,11 +12,13 @@ import {
 } from '../../../shared/api/http.js'
 import {
     cancelLocalSpeech,
+    getLocalTtsStatus,
     loadLocalKoTts,
     loadLocalTts,
     neededLocalTtsModels,
     prepareLocalSpeech,
-    speakLocally
+    speakLocally,
+    watchLocalSpeechModels
 } from '../local/localSpeech.js'
 import {loadLocalStt, transcribePcm16} from '../local/localStt.js'
 
@@ -33,6 +35,9 @@ vi.mock('../local/localSpeech.js', () => ({
     speakLocally: vi.fn(),
     prepareLocalSpeech: vi.fn(),
     cancelLocalSpeech: vi.fn(),
+    watchLocalSpeechModels: vi.fn(),
+    getLocalTtsStatus: vi.fn(),
+    getLocalKoTtsStatus: vi.fn(),
     neededLocalTtsModels: vi.fn(),
     loadLocalTts: vi.fn(),
     loadLocalKoTts: vi.fn()
@@ -50,6 +55,16 @@ let eventSourceInstances = []
 let lastProcessor = null
 let audioInstances = []
 let audioPlayShouldFail = false
+// The voice model states the hook watches; tellModels() changes them.
+let modelListener = null
+let modelStates = null
+
+function tellModels(change) {
+    modelStates = {...modelStates, ...change}
+    act(() => {
+        modelListener?.(modelStates)
+    })
+}
 
 class MockEventSource {
     constructor(url) {
@@ -377,6 +392,16 @@ describe('useVoiceSession', () => {
         neededLocalTtsModels.mockImplementation((feedbackLanguage) => ({english: true, korean: feedbackLanguage === 'ko'}))
         loadLocalTts.mockResolvedValue(undefined)
         loadLocalKoTts.mockResolvedValue(undefined)
+        getLocalTtsStatus.mockReturnValue('idle')
+        modelStates = {english: {status: 'ready', progress: null}, korean: {status: 'idle', progress: null}}
+        modelListener = null
+        watchLocalSpeechModels.mockImplementation((listener) => {
+            modelListener = listener
+            listener(modelStates)
+            return () => {
+                modelListener = null
+            }
+        })
         loadLocalStt.mockResolvedValue(undefined)
         transcribePcm16.mockResolvedValue('local transcript')
     })
@@ -1848,7 +1873,7 @@ describe('useVoiceSession', () => {
             await result.current.startSession()
         })
 
-        expect(onStatus).toHaveBeenCalledWith('기기에서 실행할 영어 음성 합성 모델을 준비하고 있습니다. 처음 한 번은 약 90MB를 내려받으므로 몇 분 걸릴 수 있습니다.')
+        expect(onStatus).toHaveBeenCalledWith('기기에서 실행할 영어 음성 합성 모델을 준비하고 있습니다. 처음 사용할 때는 약 90MB를 내려받으므로 몇 분 걸릴 수 있습니다.')
         expect(onStatus).toHaveBeenCalledWith('영어 음성 합성 모델을 내려받는 중입니다. (70%)')
         unmount()
     })
@@ -1915,8 +1940,96 @@ describe('useVoiceSession', () => {
             speechCallbacks[0].onNotice('korean-unavailable')
         })
 
-        const notices = onStatus.mock.calls.filter(([message]) => message === '한국어 음성 모델이 준비되지 않아 한국어 문장은 화면으로만 보여 드립니다.')
+        const notices = onStatus.mock.calls.filter(([message]) => message === '이 세션에서는 한국어 문장을 소리 없이 화면으로만 보여 드립니다.')
         expect(notices).toHaveLength(1)
+        unmount()
+    })
+
+    it('does not claim a download when the English model is already loaded', async () => {
+        getLocalTtsStatus.mockReturnValue('ready')
+        const onStatus = vi.fn()
+        const {result, unmount} = renderLocalSpeechSession({ttsModel: 'local-kokoro', feedbackLang: 'en', onStatus})
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+
+        expect(loadLocalTts).toHaveBeenCalledTimes(1)
+        expect(onStatus.mock.calls.some(([message]) => message.includes('MB'))).toBe(false)
+        unmount()
+    })
+
+    it('keeps a note in the panel while the Korean voice loads in a Korean-feedback session, and drops it once it is ready', async () => {
+        const onStatus = vi.fn()
+        const {result, unmount} = renderLocalSpeechSession({ttsModel: 'local-kokoro', feedbackLang: 'ko', onStatus})
+        expect(result.current.speechModelNote).toBe('')
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+        tellModels({korean: {status: 'loading', progress: 40}})
+        const loadingNote = '한국어 음성 모델을 준비하고 있습니다. (40%) 처음 사용할 때는 약 263MB를 내려받습니다. 준비될 때까지 한국어 피드백은 소리 없이 화면으로만 보여 드립니다.'
+        expect(result.current.speechModelNote).toBe(loadingNote)
+
+        // Speech status messages do not replace it, and the note covers the Korean-silent notice.
+        await act(async () => {
+            activeEventSource.emit('tts.text', {role: 'feedback', text: '좋았습니다. Good job.', sequence: 1})
+        })
+        await act(async () => {
+            speechCallbacks[0].onNotice('korean-unavailable')
+            speechCallbacks[0].onNotice('preparing')
+            speechCallbacks[0].onNotice('ready')
+        })
+        expect(result.current.speechModelNote).toBe(loadingNote)
+        expect(onStatus).toHaveBeenLastCalledWith('음성을 재생합니다.')
+        expect(onStatus.mock.calls.some(([message]) => message.includes('한국어 문장을 소리 없이'))).toBe(false)
+
+        tellModels({korean: {status: 'ready', progress: null}})
+        expect(result.current.speechModelNote).toBe('')
+        unmount()
+    })
+
+    it('keeps a note when the Korean voice could not be loaded, until the session ends', async () => {
+        const {result, unmount} = renderLocalSpeechSession({ttsModel: 'local-kokoro', feedbackLang: 'ko'})
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+        tellModels({korean: {status: 'failed', progress: null}})
+        expect(result.current.speechModelNote).toBe('한국어 음성 모델을 불러오지 못해 한국어 피드백은 화면으로만 보여 드립니다.')
+
+        await act(async () => {
+            await result.current.stopSession()
+        })
+        expect(result.current.speechModelNote).toBe('')
+        unmount()
+    })
+
+    it('does not mention the Korean voice in a session with English feedback', async () => {
+        const {result, unmount} = renderLocalSpeechSession({ttsModel: 'local-kokoro', feedbackLang: 'en'})
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+        tellModels({korean: {status: 'failed', progress: null}})
+
+        expect(result.current.speechModelNote).toBe('')
+        unmount()
+    })
+
+    it('opens an AI-on session with a note in the panel when Kokoro cannot be loaded', async () => {
+        loadLocalTts.mockImplementation(async () => {
+            tellModels({english: {status: 'failed', progress: null}})
+            throw new Error('offline')
+        })
+        const {result, unmount} = renderLocalSpeechSession({ttsModel: 'local-kokoro', feedbackLang: 'en'})
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+
+        expect(result.current.sessionActive).toBe(true)
+        expect(result.current.speechModelNote).toBe('음성 합성 모델을 불러오지 못해 질문을 화면으로만 보여 드립니다.')
         unmount()
     })
 

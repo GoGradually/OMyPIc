@@ -99,6 +99,14 @@ describe('VoicePanel', () => {
         expect(screen.getByRole('button', {name: '세션 시작'}).disabled).toBe(false)
     })
 
+    it('shows the note about the voice models while there is one', () => {
+        const {rerender} = render(<VoicePanel {...buildProps({speechModelNote: '한국어 음성 모델을 준비하고 있습니다. (40%)'})} />)
+
+        expect(screen.getByRole('note').textContent).toBe('한국어 음성 모델을 준비하고 있습니다. (40%)')
+        rerender(<VoicePanel {...buildProps({speechModelNote: ''})} />)
+        expect(screen.queryByRole('note')).toBeNull()
+    })
+
     it('locks the switch during a session and marks the active step', () => {
         render(<VoicePanel {...buildProps({
             sessionActive: true,

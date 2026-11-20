@@ -17,6 +17,17 @@ let loadedConfig = null
 let status = 'idle'
 const pending = new Map()
 const progressListeners = new Set()
+const statusListeners = new Set()
+// The download progress of the running load in percent, or null.
+let progress = null
+
+function setStatus(next) {
+    status = next
+    if (next !== 'loading') {
+        progress = null
+    }
+    statusListeners.forEach((listener) => listener({status, progress}))
+}
 
 function readEnv(name) {
     return (import.meta.env && import.meta.env[name]) || ''
@@ -56,10 +67,20 @@ export function getLocalKoTtsStatus() {
     return status
 }
 
+/** Calls listener({status, progress}) whenever the status or the download progress changes; returns a function that stops it. */
+export function watchLocalKoTtsStatus(listener) {
+    statusListeners.add(listener)
+    return () => statusListeners.delete(listener)
+}
+
 function handleMessage(event) {
     const data = event.data || {}
     if (data.type === 'progress') {
         progressListeners.forEach((listener) => listener(data))
+        if (status === 'loading' && Number.isFinite(data.progress)) {
+            progress = data.progress
+            setStatus('loading')
+        }
         return
     }
     const request = pending.get(data.id)
@@ -82,7 +103,7 @@ function failAll(message) {
     pending.forEach((request) => request.reject(new Error(message)))
     pending.clear()
     loadPromise = null
-    status = 'failed'
+    setStatus('failed')
     if (worker) {
         worker.terminate?.()
         worker = null
@@ -112,22 +133,22 @@ function request(type, payload) {
  */
 export function loadLocalKoTts(onProgress) {
     if (!isLocalKoTtsSupported()) {
-        status = 'failed'
+        setStatus('failed')
         return Promise.reject(new Error('이 환경에서는 한국어 음성 합성을 실행할 수 없습니다.'))
     }
     if (onProgress) {
         progressListeners.add(onProgress)
     }
     if (!loadPromise) {
-        status = 'loading'
+        setStatus('loading')
         loadPromise = buildConfig().then((config) => {
             loadedConfig = config
             return request('load', {config})
         }).then(() => {
-            status = 'ready'
+            setStatus('ready')
         }, (error) => {
             loadPromise = null
-            status = 'failed'
+            setStatus('failed')
             throw error
         })
     }

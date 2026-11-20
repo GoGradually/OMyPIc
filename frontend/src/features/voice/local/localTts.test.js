@@ -139,6 +139,17 @@ describe('local tts status', () => {
         expect(getLocalTtsStatus()).toBe('ready')
     })
 
+    it('tells watchers when its state changes', async () => {
+        const {loadLocalTts, watchLocalTtsStatus} = await import('./localTts.js')
+        const seen = []
+        watchLocalTtsStatus((state) => seen.push(state.status))
+
+        await loadLocalTts()
+        instance.onerror({message: 'out of memory'})
+
+        expect(seen).toEqual(['loading', 'ready', 'failed'])
+    })
+
     it('is failed after a failed load or a crash, and loads again on the next call', async () => {
         respond = (message) => ({id: message.id, ok: false, message: 'HTTP 502'})
         const {getLocalTtsStatus, loadLocalTts} = await import('./localTts.js')

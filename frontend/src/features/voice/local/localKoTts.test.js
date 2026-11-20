@@ -258,4 +258,35 @@ describe('local Korean tts', () => {
         await expect(first).resolves.toMatchObject({sampleRate: 44100})
         await expect(second).rejects.toMatchObject({cancelled: true})
     })
+
+    it('tells watchers its state and the download progress', async () => {
+        let instance
+        vi.stubGlobal('Worker', class {
+            constructor() {
+                instance = this
+            }
+
+            postMessage(message) {
+                posted.push(message)
+            }
+        })
+        const {loadLocalKoTts, watchLocalKoTtsStatus} = await import('./localKoTts.js')
+        const seen = []
+        const stop = watchLocalKoTtsStatus((state) => seen.push(state))
+
+        const load = loadLocalKoTts()
+        await vi.waitFor(() => expect(posted).toHaveLength(1))
+        instance.onmessage({data: {type: 'progress', file: 'model', progress: 40}})
+        instance.onmessage({data: {id: posted[0].id, ok: true}})
+        await load
+        stop()
+        instance.onerror({message: 'crash'})
+
+        expect(seen).toEqual([
+            {status: 'loading', progress: null},
+            {status: 'loading', progress: 40},
+            {status: 'ready', progress: null}
+        ])
+    })
 })
+

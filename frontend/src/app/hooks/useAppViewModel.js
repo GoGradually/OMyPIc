@@ -267,7 +267,8 @@ export function useAppViewModel() {
         handleReplayAction,
         replayPlaying,
         sessionAiEnabled,
-        awaitingReview
+        awaitingReview,
+        speechModelNote
     } = useVoiceSession({
         sessionId,
         feedbackModel,
@@ -665,7 +666,8 @@ export function useAppViewModel() {
             autoReplayEnabled,
             onToggleAutoReplay: setAutoReplayEnabled,
             feedbackSummary,
-            continuousMode: mode === 'CONTINUOUS'
+            continuousMode: mode === 'CONTINUOUS',
+            speechModelNote
         },
         questionPanelProps: {
             currentQuestionLabel,
