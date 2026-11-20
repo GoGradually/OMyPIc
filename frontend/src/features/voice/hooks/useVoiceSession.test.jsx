@@ -1796,9 +1796,6 @@ describe('useVoiceSession', () => {
 
     it('prepares both models at the start of a Korean-feedback session with the local voice', async () => {
         const onStatus = vi.fn()
-        loadLocalKoTts.mockImplementation(async (onProgress) => {
-            onProgress({file: 'ko', progress: 42})
-        })
         const {result, unmount} = renderLocalSpeechSession({ttsModel: 'local-kokoro', feedbackLang: 'ko', onStatus})
 
         await act(async () => {
@@ -1808,9 +1805,6 @@ describe('useVoiceSession', () => {
         expect(neededLocalTtsModels).toHaveBeenCalledWith('ko')
         expect(loadLocalTts).toHaveBeenCalledTimes(1)
         expect(loadLocalKoTts).toHaveBeenCalledTimes(1)
-        // The learner sees which model is downloading.
-        expect(onStatus).toHaveBeenCalledWith('기기에서 실행할 한국어 음성 합성 모델을 준비하고 있습니다. 처음 한 번은 약 263MB를 내려받으므로 몇 분 걸릴 수 있습니다.')
-        expect(onStatus).toHaveBeenCalledWith('한국어 음성 합성 모델을 내려받는 중입니다. (40%)')
         expect(openVoiceSession).toHaveBeenCalledWith(expect.objectContaining({ttsModel: 'local-kokoro'}))
 
         await act(async () => {
@@ -1895,7 +1889,6 @@ describe('useVoiceSession', () => {
         await act(async () => {
             await result.current.startSession()
         })
-        expect(onStatus).toHaveBeenCalledWith('한국어 음성 합성 모델을 불러오지 못해 한국어 피드백은 화면으로만 보여 드립니다.')
         expect(result.current.sessionActive).toBe(true)
         await act(async () => {
             activeEventSource.emit('session.ready', {sessionId: 's1', voiceSessionId: 'voice-1'})
@@ -1953,6 +1946,96 @@ describe('useVoiceSession', () => {
         expect(openVoiceSession).toHaveBeenCalledTimes(1)
         expect(result.current.sessionActive).toBe(true)
         expect(onStatus).toHaveBeenCalledWith('음성 합성 모델을 불러오지 못해 질문을 화면으로만 보여 드립니다.')
+        unmount()
+    })
+
+    it('opens a Korean-feedback session without waiting for the Korean model, which loads in the background', async () => {
+        loadLocalKoTts.mockImplementation(() => new Promise(() => {
+        }))
+        const {result, unmount} = renderLocalSpeechSession({ttsModel: 'local-kokoro', feedbackLang: 'ko'})
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+
+        expect(loadLocalTts).toHaveBeenCalledTimes(1)
+        expect(loadLocalKoTts).toHaveBeenCalledTimes(1)
+        expect(openVoiceSession).toHaveBeenCalledTimes(1)
+        expect(result.current.sessionActive).toBe(true)
+        unmount()
+    })
+
+    it('abandons the start when Stop is pressed while the models load, and starts again afterwards', async () => {
+        let finishLoad
+        let reportProgress
+        loadLocalTts.mockImplementationOnce((onProgress) => {
+            reportProgress = onProgress
+            return new Promise((resolve) => {
+                finishLoad = resolve
+            })
+        })
+        const onStatus = vi.fn()
+        const {result, unmount} = renderLocalSpeechSession({ttsModel: 'local-kokoro', feedbackLang: 'en', onStatus})
+
+        let starting
+        await act(async () => {
+            starting = result.current.startSession()
+        })
+        expect(result.current.sessionPhase).toBe('STARTING')
+        await act(async () => {
+            await result.current.stopSession({statusMessage: '세션을 종료했습니다.'})
+        })
+
+        expect(result.current.sessionPhase).toBe('IDLE')
+        expect(onStatus).toHaveBeenLastCalledWith('세션 시작을 취소했습니다.')
+
+        // The load goes on in the background, but nothing of the abandoned start shows up.
+        onStatus.mockClear()
+        await act(async () => {
+            reportProgress({file: 'en', progress: 50})
+            finishLoad()
+            await starting
+        })
+        expect(onStatus).not.toHaveBeenCalled()
+        expect(openVoiceSession).not.toHaveBeenCalled()
+        expect(result.current.sessionActive).toBe(false)
+        expect(result.current.sessionPhase).toBe('IDLE')
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+        expect(openVoiceSession).toHaveBeenCalledTimes(1)
+        expect(result.current.sessionActive).toBe(true)
+        unmount()
+    })
+
+    it('closes what an abandoned start had already opened', async () => {
+        const tracks = [{stop: vi.fn(), readyState: 'live', label: 'Mock Mic'}]
+        let grantMicrophone
+        navigator.mediaDevices.getUserMedia.mockImplementationOnce(() => new Promise((resolve) => {
+            grantMicrophone = () => resolve({getTracks: () => tracks, getAudioTracks: () => tracks})
+        }))
+        const {result, unmount} = renderLocalSpeechSession({ttsModel: 'gpt-4o-mini-tts'})
+
+        let starting
+        await act(async () => {
+            starting = result.current.startSession()
+        })
+        await waitFor(() => expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalled())
+        const source = activeEventSource
+        await act(async () => {
+            await result.current.stopSession()
+        })
+        expect(stopVoiceSession).toHaveBeenCalledWith('voice-1', expect.anything())
+        expect(source.closed).toBe(true)
+
+        await act(async () => {
+            grantMicrophone()
+            await starting
+        })
+        expect(tracks[0].stop).toHaveBeenCalled()
+        expect(result.current.sessionActive).toBe(false)
+        expect(result.current.sessionPhase).toBe('IDLE')
         unmount()
     })
 

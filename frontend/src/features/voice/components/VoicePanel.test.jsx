@@ -77,10 +77,20 @@ describe('VoicePanel', () => {
         expect(onToggleAutoReplay).toHaveBeenCalledWith(false)
     })
 
-    it('disables Start while a session is starting', () => {
-        render(<VoicePanel {...buildProps({sessionStarting: true})} />)
+    it('disables Start and enables Stop while a session is starting', () => {
+        const stopSession = vi.fn()
+        render(<VoicePanel {...buildProps({sessionStarting: true, stopSession})} />)
 
         expect(screen.getByRole('button', {name: '세션 시작'}).disabled).toBe(true)
+        expect(screen.getByRole('button', {name: '세션 종료'}).disabled).toBe(false)
+        fireEvent.click(screen.getByRole('button', {name: '세션 종료'}))
+        expect(stopSession).toHaveBeenCalledTimes(1)
+    })
+
+    it('disables Stop when no session is running or starting', () => {
+        render(<VoicePanel {...buildProps()} />)
+
+        expect(screen.getByRole('button', {name: '세션 종료'}).disabled).toBe(true)
     })
 
     it('enables Start when no session is running or starting', () => {

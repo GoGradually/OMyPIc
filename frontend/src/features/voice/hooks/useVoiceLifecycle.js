@@ -145,6 +145,8 @@ export function useVoiceLifecycle({
     const koreanUnavailableNoticeShownRef = useRef(false)
     // Whether a Korean sentence may fetch the Korean model: only in a session with Korean feedback.
     const koreanModelAllowedRef = useRef(false)
+    // Counts session starts; Stop during a start moves it on, which abandons that start.
+    const startGenerationRef = useRef(0)
     const onConnectionErrorRef = useRef(() => {
     })
 
@@ -980,6 +982,26 @@ export function useVoiceLifecycle({
                                                statusMessage = '세션을 종료했습니다.',
                                                preserveReplay = false
                                            } = {}) => {
+        if (sessionStartingRef.current && !sessionActiveRef.current) {
+            // Stop while the session starts (models may take minutes to download): the start is
+            // abandoned. Loads already running go on in the background and stay usable.
+            startGenerationRef.current += 1
+            sessionStartingRef.current = false
+            const startingVoiceSessionId = voiceSessionIdRef.current
+            voiceSessionIdRef.current = ''
+            closeEventSource()
+            if (notifyServer && startingVoiceSessionId) {
+                stopVoiceSession(startingVoiceSessionId, {forced, reason}).catch(() => {
+                })
+            }
+            setVoiceConnected(false)
+            setSessionPhase('IDLE')
+            updateSpeechState(SPEECH_STATE.IDLE)
+            if (statusMessage) {
+                setStatus('세션 시작을 취소했습니다.')
+            }
+            return
+        }
         if (!sessionActiveRef.current && !voiceSessionIdRef.current && !eventSourceRef.current) {
             return
         }
@@ -1209,16 +1231,17 @@ export function useVoiceLifecycle({
         onConnectionErrorRef.current = handleConnectionError
     }, [handleConnectionError])
 
-    // The model is downloaded once (first use) and then served from the browser cache.
-    const prepareLocalStt = useCallback(async () => {
-        setStatus('기기에서 실행할 음성 인식 모델을 준비하고 있습니다.')
+    // The model is downloaded once (first use) and then served from the browser cache. report is
+    // the status setter of the start that asked, so an abandoned start shows nothing more.
+    const prepareLocalStt = useCallback(async (report) => {
+        report('기기에서 실행할 음성 인식 모델을 준비하고 있습니다.')
         let lastReported = -1
         try {
             await loadLocalStt(({progress}) => {
                 const percent = Math.floor(progress / 10) * 10
                 if (percent > lastReported) {
                     lastReported = percent
-                    setStatus(`음성 인식 모델을 내려받는 중입니다. (${percent}%)`)
+                    report(`음성 인식 모델을 내려받는 중입니다. (${percent}%)`)
                 }
             })
         } catch (error) {
@@ -1226,43 +1249,41 @@ export function useVoiceLifecycle({
                 `로컬 음성 인식 모델을 불러오지 못했습니다. 네트워크를 확인하거나 설정에서 STT 모델을 바꿔 주세요. (${error?.message || '알 수 없는 오류'})`
             )
         }
-    }, [setStatus])
+    }, [])
 
     // Downloads (first use) and loads one on-device speech model, reporting which one it is. On first
     // use the backend fetches the files before the percentage can move, so the size is said up front.
-    const loadSpeechModel = useCallback(async (load, label, size) => {
-        setStatus(`기기에서 실행할 ${label} 모델을 준비하고 있습니다. 처음 한 번은 ${size}를 내려받으므로 몇 분 걸릴 수 있습니다.`)
+    const loadSpeechModel = useCallback(async (load, label, size, report) => {
+        report(`기기에서 실행할 ${label} 모델을 준비하고 있습니다. 처음 한 번은 ${size}를 내려받으므로 몇 분 걸릴 수 있습니다.`)
         let lastReported = -1
         await load(({progress}) => {
             const percent = Math.floor(progress / 10) * 10
             if (percent > lastReported) {
                 lastReported = percent
-                setStatus(`${label} 모델을 내려받는 중입니다. (${percent}%)`)
+                report(`${label} 모델을 내려받는 중입니다. (${percent}%)`)
             }
         })
-    }, [setStatus])
+    }, [])
 
-    // English (questions) uses Kokoro. The Korean model is needed only for Korean feedback.
-    const prepareLocalTts = useCallback(async ({feedbackLanguage}) => {
+    // English (questions) uses Kokoro and is loaded before the session opens: the first question
+    // needs it. The Korean model (Korean feedback only, 263 MB) loads in the background and does
+    // not hold up the start; Korean sentences before it is ready are shown without sound.
+    const prepareLocalTts = useCallback(async ({feedbackLanguage, report}) => {
         const needed = neededLocalTtsModels(feedbackLanguage)
+        if (needed.korean) {
+            loadLocalKoTts().catch(() => {
+            })
+        }
         if (needed.english) {
             try {
-                await loadSpeechModel(loadLocalTts, '영어 음성 합성', '약 90MB')
+                await loadSpeechModel(loadLocalTts, '영어 음성 합성', '약 90MB', report)
             } catch (_error) {
                 // The session opens all the same (AI on or off): questions are shown on screen, and
                 // the next English sentence retries the load in the background.
-                setStatus('음성 합성 모델을 불러오지 못해 질문을 화면으로만 보여 드립니다.')
+                report('음성 합성 모델을 불러오지 못해 질문을 화면으로만 보여 드립니다.')
             }
         }
-        if (needed.korean) {
-            try {
-                await loadSpeechModel(loadLocalKoTts, '한국어 음성 합성', '약 263MB')
-            } catch (_error) {
-                // The session still opens: English is read, and Korean feedback is shown on screen.
-                setStatus('한국어 음성 합성 모델을 불러오지 못해 한국어 피드백은 화면으로만 보여 드립니다.')
-            }
-        }
-    }, [loadSpeechModel, setStatus])
+    }, [loadSpeechModel])
 
     const startSession = useCallback(async () => {
         if (sessionActiveRef.current || sessionStartingRef.current) {
@@ -1276,6 +1297,14 @@ export function useVoiceLifecycle({
         }
 
         sessionStartingRef.current = true
+        const generation = startGenerationRef.current + 1
+        startGenerationRef.current = generation
+        const abandoned = () => startGenerationRef.current !== generation
+        const report = (message) => {
+            if (!abandoned()) {
+                setStatus(message)
+            }
+        }
         try {
             setSessionPhase('STARTING')
             localStopRef.current = false
@@ -1309,11 +1338,17 @@ export function useVoiceLifecycle({
                 ? STT_MODE.NONE
                 : (settingsRef.current.voiceSttModel === LOCAL_STT_MODEL ? STT_MODE.LOCAL : STT_MODE.SERVER)
             if (sessionSttModeRef.current === STT_MODE.LOCAL) {
-                await prepareLocalStt()
+                await prepareLocalStt(report)
+                if (abandoned()) {
+                    return
+                }
             }
             // Speech is read on this device when AI is off or the free local TTS model is selected.
             if (!aiOn || settingsRef.current.ttsModel === LOCAL_TTS_MODEL) {
-                await prepareLocalTts({feedbackLanguage})
+                await prepareLocalTts({feedbackLanguage, report})
+                if (abandoned()) {
+                    return
+                }
             }
 
             const created = await openVoiceSession({
@@ -1327,17 +1362,32 @@ export function useVoiceLifecycle({
                 ttsVoice: settingsRef.current.voice
             })
             const voiceSessionId = created?.voiceSessionId
+            if (abandoned()) {
+                if (voiceSessionId) {
+                    stopVoiceSession(voiceSessionId, {forced: true, reason: 'user_stop'}).catch(() => {
+                    })
+                }
+                return
+            }
             if (!voiceSessionId) {
                 throw new Error('음성 세션 ID를 받지 못했습니다.')
             }
             voiceSessionIdRef.current = voiceSessionId
 
             const eventsUrl = await getVoiceEventsUrl(voiceSessionId)
+            if (abandoned()) {
+                // Stop already closed the voice session it found.
+                return
+            }
             const eventSource = new EventSource(eventsUrl)
             eventSourceRef.current = eventSource
             bindSessionEvents(eventSource)
 
             const stream = await navigator.mediaDevices.getUserMedia({audio: true})
+            if (abandoned()) {
+                stream.getTracks().forEach((track) => track.stop())
+                return
+            }
             const AudioContextClass = window.AudioContext || window.webkitAudioContext
             const audioContext = new AudioContextClass({sampleRate: DEFAULT_SAMPLE_RATE})
             const sourceNode = audioContext.createMediaStreamSource(stream)
@@ -1445,6 +1495,10 @@ export function useVoiceLifecycle({
             refreshAudioDeviceStatus().catch(() => {
             })
         } catch (error) {
+            if (abandoned()) {
+                // Stop has already put everything back; what is running now belongs to a newer start.
+                return
+            }
             const openedVoiceSessionId = voiceSessionIdRef.current
             setSessionPhase('IDLE')
             updateSpeechState(SPEECH_STATE.IDLE)
@@ -1477,7 +1531,9 @@ export function useVoiceLifecycle({
             refreshAudioDeviceStatus().catch(() => {
             })
         } finally {
-            sessionStartingRef.current = false
+            if (!abandoned()) {
+                sessionStartingRef.current = false
+            }
         }
     }, [
         bindSessionEvents,
