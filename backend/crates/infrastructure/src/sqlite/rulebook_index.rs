@@ -173,16 +173,10 @@ impl RulebookIndexPort for SqliteRulebookIndexAdapter {
             return Ok(Vec::new());
         }
         let dimension = self.embedding.dimension();
-        let query_vector = self.embedding.embed(query)?;
-        if query_vector.len() != dimension {
-            return Err(AppError::InvalidState(format!(
-                "Embedding dimension mismatch. expected={dimension} actual={}",
-                query_vector.len()
-            )));
-        }
         let ids: Vec<&str> = enabled_rulebook_ids.iter().map(RulebookId::value).collect();
 
-        // 1단계: 호환성을 맞추고 임베딩만 읽는다.
+        // 1단계: 호환성을 맞추고 임베딩만 읽는다. 질의 임베딩은 그 뒤에 계산한다. 찾을 조각이
+        // 없으면 임베딩 모델(fastText는 처음 쓸 때 읽거나 받는다)을 건드리지 않는다.
         let candidates = self.db.with_conn(|conn| {
             let tx = write_transaction(conn)?;
             self.ensure_index_compatibility(&tx)?;
@@ -206,6 +200,16 @@ impl RulebookIndexPort for SqliteRulebookIndexAdapter {
             tx.commit().map_err(db_err)?;
             Ok(found)
         })?;
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+        let query_vector = self.embedding.embed(query)?;
+        if query_vector.len() != dimension {
+            return Err(AppError::InvalidState(format!(
+                "Embedding dimension mismatch. expected={dimension} actual={}",
+                query_vector.len()
+            )));
+        }
 
         // 2단계: 거리 계산과 정렬은 잠금 밖에서 한다.
         let mut scored: Vec<(f32, i64)> = Vec::with_capacity(candidates.len());
@@ -365,6 +369,42 @@ mod tests {
             .search("alpha", 3, &enabled(&["r1"]))
             .unwrap()
             .is_empty());
+    }
+
+    /// 부르면 실패한다. 무거운 임베딩 모델(fastText는 약 240MB를 읽고 처음에는 1.27GB를
+    /// 받는다)을 건드리면 안 되는 경로를 본다.
+    struct UntouchableEmbedding;
+
+    impl EmbeddingPort for UntouchableEmbedding {
+        fn embed(&self, text: &str) -> AppResult<Vec<f32>> {
+            panic!("the embedding model must not be used here (query: {text})");
+        }
+        fn dimension(&self) -> usize {
+            2
+        }
+        fn provider(&self) -> String {
+            "hash".to_string()
+        }
+        fn model_version(&self) -> String {
+            "v1".to_string()
+        }
+    }
+
+    #[test]
+    fn search_does_not_embed_the_query_when_the_enabled_rulebooks_have_no_chunks() {
+        let db = Database::open_in_memory().unwrap();
+        // Chunks of a rulebook that is not enabled, with the same embedding metadata.
+        adapter(&db, FakeEmbedding::alpha_beta("hash", "v1"))
+            .index_rulebook_chunks(&rid("off"), "off.md", &["alpha".to_string()])
+            .unwrap();
+        let untouchable =
+            SqliteRulebookIndexAdapter::new(db.clone(), Arc::new(UntouchableEmbedding));
+
+        let result = untouchable
+            .search("alpha", 3, &enabled(&["empty"]))
+            .unwrap();
+
+        assert!(result.is_empty());
     }
 
     #[test]
