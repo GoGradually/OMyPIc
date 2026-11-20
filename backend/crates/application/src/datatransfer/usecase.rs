@@ -16,8 +16,9 @@ use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 use super::model::{
-    BackupManifest, DataTransferImportResult, QuestionGroupSnapshot, QuestionItemSnapshot,
-    RulebookSnapshot, WrongNoteQueueSnapshot, WrongNoteSnapshot,
+    BackupManifest, DataExport, DataTransferImportResult, MissingRulebookFile,
+    QuestionGroupSnapshot, QuestionItemSnapshot, RulebookSnapshot, WrongNoteQueueSnapshot,
+    WrongNoteSnapshot,
 };
 use super::port::{DataReplacement, DataReplacementPort, ReplacementRulebook};
 use crate::question::port::QuestionGroupPort;
@@ -97,6 +98,13 @@ impl DataTransferUseCase {
     }
 
     pub fn export_zip(&self) -> AppResult<Vec<u8>> {
+        self.export_backup().map(|export| export.zip)
+    }
+
+    /// 백업 zip을 만든다. 파일이 없는 룰북은 백업에서 빼고(내용이 없으니 되살릴 것도 없다)
+    /// 결과와 `manifest.json`의 `missingRulebookFiles`, 경고 로그에 남긴다. 이렇게 만든 백업은
+    /// 그대로 가져올 수 있다.
+    pub fn export_backup(&self) -> AppResult<DataExport> {
         let question_groups: Vec<QuestionGroupSnapshot> = self
             .question_group_port
             .find_all()?
@@ -104,7 +112,9 @@ impl DataTransferUseCase {
             .map(question_group_snapshot)
             .collect();
         let mut rulebook_files: Vec<(String, Vec<u8>)> = Vec::new();
-        let rulebooks = self.collect_rulebook_snapshots(&mut rulebook_files)?;
+        let mut missing_rulebook_files = Vec::new();
+        let rulebooks =
+            self.collect_rulebook_snapshots(&mut rulebook_files, &mut missing_rulebook_files)?;
         let wrong_notes: Vec<WrongNoteSnapshot> = self
             .wrong_note_port
             .find_all()?
@@ -118,6 +128,7 @@ impl DataTransferUseCase {
             schema_version: SCHEMA_VERSION,
             app: Some("omypic".to_string()),
             exported_at: Some(Utc::now()),
+            missing_rulebook_files: missing_rulebook_files.clone(),
         };
 
         let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
@@ -130,7 +141,10 @@ impl DataTransferUseCase {
             write_bytes(&mut zip, entry_path, bytes)?;
         }
         let cursor = zip.finish().map_err(io_error)?;
-        Ok(cursor.into_inner())
+        Ok(DataExport {
+            zip: cursor.into_inner(),
+            missing_rulebook_files,
+        })
     }
 
     pub fn import_zip(&self, zip_bytes: &[u8]) -> AppResult<DataTransferImportResult> {
@@ -187,11 +201,27 @@ impl DataTransferUseCase {
     fn collect_rulebook_snapshots(
         &self,
         rulebook_files: &mut Vec<(String, Vec<u8>)>,
+        missing: &mut Vec<MissingRulebookFile>,
     ) -> AppResult<Vec<RulebookSnapshot>> {
         let mut snapshots = Vec::new();
         for rulebook in self.rulebook_port.find_all()? {
             let entry_path = to_rulebook_entry_path(rulebook.id().value(), rulebook.filename());
-            let bytes = self.rulebook_file_store.read_bytes(rulebook.path())?;
+            let bytes = match self.rulebook_file_store.read_bytes(rulebook.path()) {
+                Ok(bytes) => bytes,
+                Err(AppError::NotFound(reason)) => {
+                    tracing::warn!(
+                        "Leaving rulebook {} ({}) out of the backup: {reason}",
+                        rulebook.id().value(),
+                        rulebook.filename()
+                    );
+                    missing.push(MissingRulebookFile {
+                        id: rulebook.id().value().to_string(),
+                        filename: rulebook.filename().to_string(),
+                    });
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             rulebook_files.push((entry_path.clone(), bytes));
             snapshots.push(rulebook_snapshot(&rulebook, entry_path));
         }

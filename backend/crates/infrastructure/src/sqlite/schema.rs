@@ -1,12 +1,19 @@
 //! SQLite 스키마와 버전 관리(`PRAGMA user_version`).
 
+use std::path::{Component, Path};
+
 use rusqlite::Connection;
 
 use super::db_err;
 use omypic_domain::error::{AppError, AppResult};
 
 /// 이 빌드가 만드는 스키마 버전.
-pub const CURRENT_VERSION: i64 = 1;
+///
+/// - 1: 0.3.0의 첫 스키마.
+/// - 2: 룰북 파일 경로를 데이터 폴더 기준 상대 경로로 저장한다. 데이터 폴더 안을 가리키던
+///   절대 경로를 상대 경로로 바꾸고(밖을 가리키는 경로는 그대로 둔다), 지운 룰북이 남긴 색인
+///   조각을 지운다.
+pub const CURRENT_VERSION: i64 = 2;
 
 const SCHEMA_V1: &str = "
 CREATE TABLE question_groups (
@@ -62,33 +69,82 @@ CREATE TABLE rulebook_index_meta (
 );
 ";
 
-/// `user_version`이 0이면 버전 1 스키마를 만들고, 1이면 아무것도 하지 않는다.
-pub fn migrate(conn: &Connection) -> AppResult<()> {
+/// `user_version`을 현재 버전까지 올린다. 0이면 스키마를 새로 만든다. 모든 단계는 한
+/// 트랜잭션 안에서 하므로 중간에 실패하면 아무것도 바뀌지 않는다. `data_dir`는 데이터베이스가
+/// 든 데이터 폴더다(메모리 데이터베이스면 `None`).
+pub fn migrate(conn: &Connection, data_dir: Option<&Path>) -> AppResult<()> {
     match read_version(conn)? {
-        0 => {
-            conn.execute_batch("BEGIN IMMEDIATE").map_err(db_err)?;
-            // 쓰기 잠금을 얻은 뒤 다시 읽는다. 그 사이 다른 프로세스가 끝냈을 수 있다.
-            let result = read_version(conn).and_then(|version| match version {
-                0 => conn
-                    .execute_batch(SCHEMA_V1)
-                    .and_then(|()| {
-                        conn.execute_batch(&format!("PRAGMA user_version = {CURRENT_VERSION}"))
-                    })
-                    .map_err(db_err),
-                CURRENT_VERSION => Ok(()),
-                other => Err(unsupported(other)),
-            });
-            match result {
-                Ok(()) => conn.execute_batch("COMMIT").map_err(db_err),
-                Err(err) => {
-                    let _ = conn.execute_batch("ROLLBACK");
-                    Err(err)
-                }
+        CURRENT_VERSION => return Ok(()),
+        version if !(0..CURRENT_VERSION).contains(&version) => return Err(unsupported(version)),
+        _ => {}
+    }
+    conn.execute_batch("BEGIN IMMEDIATE").map_err(db_err)?;
+    // 쓰기 잠금을 얻은 뒤 다시 읽는다. 그 사이 다른 프로세스가 끝냈을 수 있다.
+    let result = (|| loop {
+        match read_version(conn)? {
+            0 => conn.execute_batch(SCHEMA_V1).map_err(db_err)?,
+            1 => migrate_to_v2(conn, data_dir)?,
+            CURRENT_VERSION => return Ok(()),
+            other => return Err(unsupported(other)),
+        }
+        let next = read_version(conn)? + 1;
+        conn.execute_batch(&format!("PRAGMA user_version = {next}"))
+            .map_err(db_err)?;
+    })();
+    match result {
+        Ok(()) => conn.execute_batch("COMMIT").map_err(db_err),
+        Err(err) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(err)
+        }
+    }
+}
+
+fn migrate_to_v2(conn: &Connection, data_dir: Option<&Path>) -> AppResult<()> {
+    if let Some(data_dir) = data_dir {
+        let rows: Vec<(String, String)> = conn
+            .prepare("SELECT id, path FROM rulebooks")
+            .and_then(|mut statement| {
+                statement
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                    .collect()
+            })
+            .map_err(db_err)?;
+        for (id, path) in rows {
+            if let Some(relative) = relative_to(Path::new(&path), data_dir) {
+                conn.execute(
+                    "UPDATE rulebooks SET path = ?1 WHERE id = ?2",
+                    rusqlite::params![relative, id],
+                )
+                .map_err(db_err)?;
             }
         }
-        CURRENT_VERSION => Ok(()),
-        other => Err(unsupported(other)),
     }
+    conn.execute(
+        "DELETE FROM rulebook_chunks WHERE rulebook_id IS NULL
+             OR rulebook_id NOT IN (SELECT id FROM rulebooks)",
+        [],
+    )
+    .map_err(db_err)?;
+    Ok(())
+}
+
+/// `path`가 `data_dir` 안을 가리키면 `/`로 이은 상대 경로. 0.3.0은 데이터 폴더 설정을 그대로
+/// 이어 붙여 저장했으므로 데이터 폴더가 상대 경로로 설정됐으면 저장된 경로도 그 꼴이다.
+fn relative_to(path: &Path, data_dir: &Path) -> Option<String> {
+    if data_dir.as_os_str().is_empty() {
+        return None;
+    }
+    let rest = path.strip_prefix(data_dir).ok()?;
+    let parts: Option<Vec<&str>> = rest
+        .components()
+        .map(|part| match part {
+            Component::Normal(name) => name.to_str(),
+            _ => None,
+        })
+        .collect();
+    let parts = parts.filter(|parts| !parts.is_empty())?;
+    Some(parts.join("/"))
 }
 
 fn read_version(conn: &Connection) -> AppResult<i64> {
@@ -106,6 +162,86 @@ mod tests {
     use std::sync::{Arc, Barrier};
     use std::time::Duration;
 
+    /// 0.3.0이 만든 버전 1 데이터베이스.
+    fn version_1_database(path: &std::path::Path) -> Connection {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(SCHEMA_V1).unwrap();
+        conn.execute_batch("PRAGMA user_version = 1").unwrap();
+        conn
+    }
+
+    fn insert_rulebook(conn: &Connection, id: &str, path: &str) {
+        conn.execute(
+            "INSERT INTO rulebooks (id, filename, path, scope, question_group, enabled, created_at, updated_at)
+             VALUES (?1, 'rules.md', ?2, 'MAIN', NULL, 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            rusqlite::params![id, path],
+        )
+        .unwrap();
+    }
+
+    fn insert_chunk(conn: &Connection, rulebook_id: &str) {
+        conn.execute(
+            "INSERT INTO rulebook_chunks (rulebook_id, filename, position, text, embedding)
+             VALUES (?1, 'rules.md', 0, 'text', x'00')",
+            rusqlite::params![rulebook_id],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn version_2_stores_rulebook_paths_inside_the_data_folder_relative_to_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let db_path = data.join("omypic.db");
+        let inside = data.join("rulebooks").join("1700000000000_rules.md");
+        let outside = dir.path().join("elsewhere").join("notes.md");
+        {
+            let conn = version_1_database(&db_path);
+            insert_rulebook(&conn, "inside", &inside.to_string_lossy());
+            insert_rulebook(&conn, "outside", &outside.to_string_lossy());
+            insert_rulebook(&conn, "relative", "rulebooks/already.md");
+            insert_chunk(&conn, "inside");
+            insert_chunk(&conn, "deleted-long-ago");
+        }
+
+        let db = crate::sqlite::Database::open(&db_path).unwrap();
+
+        db.with_conn(|conn| {
+            assert_eq!(CURRENT_VERSION, read_version(conn)?);
+            let path_of = |id: &str| -> String {
+                conn.query_row("SELECT path FROM rulebooks WHERE id = ?1", [id], |row| {
+                    row.get(0)
+                })
+                .unwrap()
+            };
+            assert_eq!("rulebooks/1700000000000_rules.md", path_of("inside"));
+            assert_eq!(outside.to_string_lossy(), path_of("outside"));
+            assert_eq!("rulebooks/already.md", path_of("relative"));
+            let chunk_owners: Vec<String> = conn
+                .prepare("SELECT rulebook_id FROM rulebook_chunks")
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            assert_eq!(vec!["inside".to_string()], chunk_owners);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn new_database_starts_at_the_current_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::sqlite::Database::open(&dir.path().join("omypic.db")).unwrap();
+        db.with_conn(|conn| {
+            assert_eq!(2, read_version(conn)?);
+            Ok(())
+        })
+        .unwrap();
+    }
+
     #[test]
     fn concurrent_openers_migrate_once_without_error() {
         for round in 0..10 {
@@ -120,7 +256,7 @@ mod tests {
                         let conn = Connection::open(&path).unwrap();
                         conn.busy_timeout(Duration::from_secs(5)).unwrap();
                         barrier.wait();
-                        migrate(&conn)
+                        migrate(&conn, None)
                     })
                 })
                 .collect();

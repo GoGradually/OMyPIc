@@ -280,6 +280,28 @@ async fn export_data_returns_zip_attachment() {
 }
 
 #[tokio::test]
+async fn export_names_rulebooks_left_out_for_a_missing_file_in_a_header() {
+    let fixture = Fixture::new();
+    fixture.add_rulebook(rulebook("r1", RulebookScope::Main, true));
+
+    let reply = send(&fixture.router(), get("/api/data-transfer/export")).await;
+
+    assert_eq!(StatusCode::OK, reply.status, "{}", reply.text());
+    assert_eq!(b"PK", &reply.body[..2]);
+    assert_eq!("1", reply.headers["x-omypic-missing-rulebook-files"]);
+}
+
+#[tokio::test]
+async fn export_without_missing_files_sends_no_missing_header() {
+    let reply = send(&Fixture::new().router(), get("/api/data-transfer/export")).await;
+
+    assert!(reply
+        .headers
+        .get("x-omypic-missing-rulebook-files")
+        .is_none());
+}
+
+#[tokio::test]
 async fn import_data_returns_import_summary() {
     let source = Fixture::new();
     source.add_group(group(

@@ -153,6 +153,7 @@ impl SessionStorePort for InMemorySessionStorePort {
 pub struct InMemoryRulebookPort {
     rulebooks: Mutex<Vec<Rulebook>>,
     save_error: Mutex<Option<AppError>>,
+    delete_error: Mutex<Option<AppError>>,
     save_calls: Mutex<usize>,
     deleted_ids: Mutex<Vec<String>>,
     call_log: Mutex<Vec<&'static str>>,
@@ -176,6 +177,11 @@ impl InMemoryRulebookPort {
     /// 이후 모든 `save`가 이 오류로 실패한다(아무것도 저장하지 않는다).
     pub fn fail_save_with(&self, error: AppError) {
         *lock(&self.save_error) = Some(error);
+    }
+
+    /// 이후 모든 `delete_by_id`가 이 오류로 실패한다(아무것도 지우지 않는다).
+    pub fn fail_delete_with(&self, error: AppError) {
+        *lock(&self.delete_error) = Some(error);
     }
 
     pub fn save_calls(&self) -> usize {
@@ -218,6 +224,9 @@ impl RulebookPort for InMemoryRulebookPort {
     }
 
     fn delete_by_id(&self, id: &RulebookId) -> AppResult<()> {
+        if let Some(error) = lock(&self.delete_error).clone() {
+            return Err(error);
+        }
         lock(&self.deleted_ids).push(id.value().to_string());
         lock(&self.call_log).push("delete_by_id");
         lock(&self.rulebooks).retain(|r| r.id() != id);
@@ -297,7 +306,7 @@ impl InMemoryRulebookFileStore {
             .iter()
             .find(|(p, _)| p == path)
             .map(|(_, bytes)| bytes.clone())
-            .ok_or_else(|| AppError::Internal(format!("File not found: {path}")))
+            .ok_or_else(|| AppError::NotFound(format!("File not found: {path}")))
     }
 }
 

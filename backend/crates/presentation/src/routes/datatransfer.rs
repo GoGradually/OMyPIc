@@ -1,5 +1,5 @@
 use axum::extract::State;
-use axum::http::{header, HeaderValue};
+use axum::http::{header, HeaderName, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -27,13 +27,19 @@ struct DataTransferImportResponse {
     restart_required: bool,
 }
 
+/// 파일이 없어 백업에서 뺀 룰북 수. 하나도 없으면 보내지 않는다. 어떤 룰북인지는 백업의
+/// `manifest.json`(`missingRulebookFiles`)과 서버 로그에 있다.
+pub const MISSING_RULEBOOK_FILES_HEADER: &str = "x-omypic-missing-rulebook-files";
+
 async fn export_data(State(state): State<AppState>) -> Result<Response, ApiError> {
     let use_case = state.data_transfer.clone();
-    let bytes = blocking(move || use_case.export_zip()).await?;
+    let export = blocking(move || use_case.export_backup()).await?;
+    let missing = export.missing_rulebook_files.len();
+    let bytes = export.zip;
     let filename = format!("omypic-backup-{}.zip", Utc::now().format("%Y%m%d-%H%M%S"));
     let disposition = HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
         .map_err(|_| ApiError::Internal)?;
-    Ok((
+    let mut response = (
         [
             (
                 header::CONTENT_TYPE,
@@ -43,7 +49,14 @@ async fn export_data(State(state): State<AppState>) -> Result<Response, ApiError
         ],
         bytes,
     )
-        .into_response())
+        .into_response();
+    if missing > 0 {
+        response.headers_mut().insert(
+            HeaderName::from_static(MISSING_RULEBOOK_FILES_HEADER),
+            HeaderValue::from(missing),
+        );
+    }
+    Ok(response)
 }
 
 async fn import_data(

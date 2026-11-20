@@ -13,6 +13,7 @@ use serde_json::{json, Value};
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
 
+use super::model::MissingRulebookFile;
 use super::usecase::{read_zip_entries, DataTransferUseCase, ZipLimits};
 use crate::rulebook::port::{RulebookFileStore, RulebookPort};
 use crate::test_support::{
@@ -909,4 +910,65 @@ fn files_left_by_an_interrupted_import_are_not_exported() {
         vec!["files/rulebooks/local-rulebook_local.md"],
         rulebook_files
     );
+}
+
+#[test]
+fn export_skips_a_rulebook_whose_file_is_missing_names_it_and_stays_importable() {
+    let rulebook = |id: &str, filename: &str, path: &str| {
+        Rulebook::rehydrate(
+            RulebookId::of(id).unwrap(),
+            filename,
+            path,
+            Some(RulebookScope::Main),
+            None,
+            true,
+            Some(fixed_time()),
+            Some(fixed_time()),
+        )
+        .unwrap()
+    };
+    let f = fixture_with(
+        InMemoryQuestionGroupPort::new(),
+        InMemoryRulebookPort::with_rulebooks(vec![
+            rulebook("r1", "kept.md", "rulebooks/kept.md"),
+            rulebook("r2", "lost.md", "rulebooks/lost.md"),
+        ]),
+        InMemoryWrongNotePort::new(),
+        InMemoryWrongNoteRecentQueuePort::new(),
+    );
+    f.files.put("rulebooks/kept.md", b"# kept");
+
+    let exported = f.use_case.export_backup().unwrap();
+
+    assert_eq!(
+        vec![MissingRulebookFile {
+            id: "r2".to_string(),
+            filename: "lost.md".to_string(),
+        }],
+        exported.missing_rulebook_files
+    );
+    let entries = unzip_entries(&exported.zip);
+    let rulebooks: Value = serde_json::from_slice(&entries["data/rulebooks.json"]).unwrap();
+    assert_eq!(1, rulebooks.as_array().unwrap().len());
+    assert_eq!(json!("r1"), rulebooks[0]["id"]);
+    let manifest: Value = serde_json::from_slice(&entries["manifest.json"]).unwrap();
+    assert_eq!(
+        json!([{"id": "r2", "filename": "lost.md"}]),
+        manifest["missingRulebookFiles"]
+    );
+
+    let imported = fixture().use_case.import_zip(&exported.zip).unwrap();
+    assert_eq!(1, imported.rulebook_count);
+}
+
+#[test]
+fn export_without_missing_files_writes_no_missing_list() {
+    let f = fixture();
+
+    let exported = f.use_case.export_backup().unwrap();
+
+    assert!(exported.missing_rulebook_files.is_empty());
+    let entries = unzip_entries(&exported.zip);
+    let manifest: Value = serde_json::from_slice(&entries["manifest.json"]).unwrap();
+    assert!(manifest.get("missingRulebookFiles").is_none(), "{manifest}");
 }

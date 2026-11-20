@@ -31,15 +31,16 @@ pub struct Database {
 impl Database {
     pub fn open(path: &Path) -> AppResult<Database> {
         let conn = Connection::open(path).map_err(db_err)?;
-        Self::init(conn, true)
+        // 데이터베이스 파일은 데이터 폴더 바로 아래에 있다(룰북 경로 이전에 쓴다).
+        Self::init(conn, true, path.parent())
     }
 
     pub fn open_in_memory() -> AppResult<Database> {
         let conn = Connection::open_in_memory().map_err(db_err)?;
-        Self::init(conn, false)
+        Self::init(conn, false, None)
     }
 
-    fn init(conn: Connection, wal: bool) -> AppResult<Database> {
+    fn init(conn: Connection, wal: bool, data_dir: Option<&Path>) -> AppResult<Database> {
         conn.busy_timeout(Duration::from_secs(5)).map_err(db_err)?;
         if wal {
             conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get::<_, String>(0))
@@ -47,7 +48,7 @@ impl Database {
         }
         conn.execute_batch("PRAGMA foreign_keys=ON")
             .map_err(db_err)?;
-        schema::migrate(&conn)?;
+        schema::migrate(&conn, data_dir)?;
         Ok(Database {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -121,7 +122,7 @@ mod tests {
         drop(db);
 
         let db = Database::open(&path).unwrap();
-        assert_eq!(1, user_version(&db));
+        assert_eq!(schema::CURRENT_VERSION, user_version(&db));
         let notes = SqliteWrongNoteAdapter::new(db).find_all().unwrap();
         assert_eq!(1, notes.len());
         assert_eq!("n1", notes[0].id().value());

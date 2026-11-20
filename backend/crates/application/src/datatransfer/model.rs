@@ -65,6 +65,24 @@ pub(super) struct BackupManifest {
         deserialize_with = "deserialize_instant"
     )]
     pub exported_at: Option<DateTime<Utc>>,
+    /// 파일이 없어 백업에 넣지 못한 룰북. 없으면 쓰지 않는다. 가져오기는 이 필드를 읽지 않는다.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub missing_rulebook_files: Vec<MissingRulebookFile>,
+}
+
+/// 파일이 없어 백업에서 뺀 룰북.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MissingRulebookFile {
+    pub id: String,
+    pub filename: String,
+}
+
+/// 내보낸 백업 zip과, 파일이 없어 넣지 못한 룰북.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataExport {
+    pub zip: Vec<u8>,
+    pub missing_rulebook_files: Vec<MissingRulebookFile>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

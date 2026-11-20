@@ -14,6 +14,8 @@ use chrono::{DateTime, SecondsFormat, Utc};
 
 use crate::state::AppState;
 
+pub(crate) use datatransfer::MISSING_RULEBOOK_FILES_HEADER;
+
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .merge(apikey::routes())

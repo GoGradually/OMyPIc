@@ -202,6 +202,62 @@ async fn data_survives_restart() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn rulebooks_follow_a_moved_data_folder_and_delete_removes_their_files() {
+    let root = tempfile::tempdir().unwrap();
+    let old_dir = root.path().join("old");
+    let server = start_hash(&old_dir).await;
+    upload_rulebook(&server, "kept.md", "# kept").await;
+    let dropped = upload_rulebook(&server, "dropped.md", "# dropped").await;
+    let response = reqwest::Client::new()
+        .delete(url(
+            &server,
+            &format!("/api/rulebooks/{}", dropped["id"].as_str().unwrap()),
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(StatusCode::OK, response.status());
+    let files = file_names(&old_dir.join("rulebooks"));
+    assert_eq!(1, files.len(), "{files:?}");
+    assert!(files[0].ends_with("_kept.md"), "{files:?}");
+    server.shutdown().await.unwrap();
+
+    let new_dir = root.path().join("new");
+    std::fs::rename(&old_dir, &new_dir).unwrap();
+    let server = start_hash(&new_dir).await;
+    let response = reqwest::get(url(&server, "/api/data-transfer/export"))
+        .await
+        .unwrap();
+    assert_eq!(StatusCode::OK, response.status());
+    assert!(response
+        .headers()
+        .get("x-omypic-missing-rulebook-files")
+        .is_none());
+    let zip = response.bytes().await.unwrap().to_vec();
+    // The export carries the file's content: import it elsewhere and read the stored file.
+    let other_dir = root.path().join("other");
+    let other = start_hash(&other_dir).await;
+    let (status, imported) = import_zip(&other, zip).await;
+    assert_eq!(StatusCode::OK, status, "{imported}");
+    assert_eq!(1, imported["rulebookCount"]);
+    let imported_files = file_names(&other_dir.join("rulebooks"));
+    assert_eq!(
+        "# kept",
+        std::fs::read_to_string(other_dir.join("rulebooks").join(&imported_files[0])).unwrap()
+    );
+    other.shutdown().await.unwrap();
+
+    // The file disappears: export still works and says one rulebook was left out.
+    std::fs::remove_file(new_dir.join("rulebooks").join(&files[0])).unwrap();
+    let response = reqwest::get(url(&server, "/api/data-transfer/export"))
+        .await
+        .unwrap();
+    assert_eq!(StatusCode::OK, response.status());
+    assert_eq!("1", response.headers()["x-omypic-missing-rulebook-files"]);
+    server.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn export_import_over_http_round_trips() {
     let source_dir = tempfile::tempdir().unwrap();
     let source = start_hash(source_dir.path()).await;
@@ -255,11 +311,12 @@ async fn export_import_over_http_round_trips() {
         }
         list
     };
-    // 파일 경로는 새 데이터 폴더 기준이므로 그것만 빼고 같다.
+    // 저장 이름은 가져올 때 새로 정하므로 경로만 빼고 같다.
     assert_eq!(strip_path(&source_rulebooks), strip_path(&target_rulebooks));
+    // 경로는 데이터 폴더 기준 상대 경로다.
     let path = target_rulebooks[0]["path"].as_str().unwrap();
-    assert!(Path::new(path).starts_with(target_dir.path()), "{path}");
-    assert!(Path::new(path).is_file());
+    assert!(path.starts_with("rulebooks/"), "{path}");
+    assert!(target_dir.path().join(path).is_file());
     target.shutdown().await.unwrap();
 }
 

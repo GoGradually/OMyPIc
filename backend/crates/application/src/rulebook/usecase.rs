@@ -112,8 +112,23 @@ impl RulebookUseCase {
         self.repository.save(rulebook)
     }
 
+    /// 색인 조각, 행, 파일 순서로 지운다. 중간에 멈춰도 행 없는 조각은 남지 않는다(행만 남으면
+    /// 다시 지우면 되고, 남은 파일은 아무 데도 쓰이지 않는다). 모르는 id면 아무것도 하지 않는다.
     pub fn delete(&self, id: &str) -> AppResult<()> {
-        self.repository.delete_by_id(&RulebookId::of(id)?)
+        let id = RulebookId::of(id)?;
+        let Some(rulebook) = self.repository.find_by_id(&id)? else {
+            return Ok(());
+        };
+        self.index_port.delete_rulebook_chunks(&id)?;
+        self.repository.delete_by_id(&id)?;
+        if let Err(error) = self.file_store.delete(rulebook.path()) {
+            tracing::warn!(
+                "Rulebook {} was deleted but its file {} could not be removed: {error}",
+                id.value(),
+                rulebook.path()
+            );
+        }
+        Ok(())
     }
 
     pub fn search_contexts(&self, query: &str) -> AppResult<Vec<RulebookContext>> {
@@ -570,6 +585,60 @@ mod tests {
         f.use_case.delete("r1").unwrap();
 
         assert_eq!(vec!["r1"], f.repository.deleted_ids());
+    }
+
+    #[test]
+    fn delete_removes_row_index_chunks_and_file() {
+        let f = fixture(vec![]);
+        let uploaded = f
+            .use_case
+            .upload(Some("rules.md"), b"# rules", None, None)
+            .unwrap();
+        let keep = f
+            .use_case
+            .upload(Some("keep.md"), b"# keep", None, None)
+            .unwrap();
+
+        f.use_case.delete(uploaded.id().value()).unwrap();
+
+        assert_eq!(vec![keep.id().clone()], ids_of(&f.repository.rulebooks()));
+        let indexed: Vec<RulebookId> = f.index.indexed().into_iter().map(|e| e.0).collect();
+        assert_eq!(vec![keep.id().clone()], indexed);
+        let files: Vec<String> = f.file_store.files().into_iter().map(|e| e.0).collect();
+        assert_eq!(vec![keep.path().to_string()], files);
+    }
+
+    #[test]
+    fn delete_that_fails_on_the_row_leaves_no_chunks_and_keeps_the_file() {
+        let f = fixture(vec![]);
+        let uploaded = f
+            .use_case
+            .upload(Some("rules.md"), b"# rules", None, None)
+            .unwrap();
+        f.repository
+            .fail_delete_with(AppError::Internal("disk full".to_string()));
+
+        let error = f.use_case.delete(uploaded.id().value()).unwrap_err();
+
+        assert_eq!(AppError::Internal("disk full".to_string()), error);
+        // Chunks go first: a rulebook row without chunks can be deleted again; chunks without a
+        // row would never be cleaned up. The file goes last (a leftover file is harmless).
+        assert!(f.index.indexed().is_empty());
+        assert_eq!(1, f.file_store.files().len());
+        assert!(f.file_store.deleted().is_empty());
+    }
+
+    #[test]
+    fn deleting_an_unknown_rulebook_is_a_no_op() {
+        let f = fixture(vec![]);
+
+        f.use_case.delete("missing").unwrap();
+
+        assert!(f.file_store.deleted().is_empty());
+    }
+
+    fn ids_of(rulebooks: &[Rulebook]) -> Vec<RulebookId> {
+        rulebooks.iter().map(|r| r.id().clone()).collect()
     }
 
     #[test]
