@@ -106,6 +106,7 @@ pub struct FakeVoicePolicy {
     pub tts_voice: String,
     pub recovery_retention_ms: i64,
     pub stopped_context_max: usize,
+    pub idle_timeout_ms: i64,
 }
 
 impl Default for FakeVoicePolicy {
@@ -118,6 +119,7 @@ impl Default for FakeVoicePolicy {
             tts_voice: "alloy".to_string(),
             recovery_retention_ms: 300_000,
             stopped_context_max: 100,
+            idle_timeout_ms: 300_000,
         }
     }
 }
@@ -143,6 +145,9 @@ impl VoicePolicy for FakeVoicePolicy {
     }
     fn voice_stopped_context_max(&self) -> usize {
         self.stopped_context_max
+    }
+    fn voice_idle_timeout_ms(&self) -> i64 {
+        self.idle_timeout_ms
     }
 }
 

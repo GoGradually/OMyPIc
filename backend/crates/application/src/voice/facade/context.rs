@@ -23,7 +23,7 @@ use super::settings::RuntimeSettings;
 use crate::feedback::usecase::PrefetchedTurnPrompt;
 use crate::question::model::NextQuestion;
 use crate::voice::model::VoiceEventSink;
-use crate::voice::usecase::{RecoveryQuestion, RecoverySnapshot};
+use crate::voice::usecase::{NowMillis, RecoveryQuestion, RecoverySnapshot};
 
 const PREFETCH_CACHE_LIMIT: usize = 2;
 
@@ -113,6 +113,9 @@ pub(super) struct RuntimeContext {
     tts_sequence: AtomicI64,
     stop_reason: Mutex<String>,
     stopped_at_epoch_ms: AtomicI64,
+    now_millis: NowMillis,
+    /// 마지막으로 무슨 일이 있던 시각: 클라이언트 요청, 싱크 등록/해제, 이벤트, 턴 끝.
+    last_activity_epoch_ms: AtomicI64,
 }
 
 fn same_sink(a: &Arc<dyn VoiceEventSink>, b: &Arc<dyn VoiceEventSink>) -> bool {
@@ -127,7 +130,9 @@ impl RuntimeContext {
         feedback_api_key: String,
         settings: RuntimeSettings,
         event_replay_buffer_limit: usize,
+        now_millis: NowMillis,
     ) -> Self {
+        let opened_at = now_millis();
         Self {
             voice_session_id,
             session_id,
@@ -157,7 +162,42 @@ impl RuntimeContext {
             tts_sequence: AtomicI64::new(0),
             stop_reason: Mutex::new(String::new()),
             stopped_at_epoch_ms: AtomicI64::new(0),
+            now_millis,
+            last_activity_epoch_ms: AtomicI64::new(opened_at),
         }
+    }
+
+    /// 지금 무슨 일이 있었다고 적는다. 버려진 세션인지 볼 때 쓴다.
+    pub(super) fn touch(&self) {
+        self.last_activity_epoch_ms
+            .store((self.now_millis)(), Ordering::SeqCst);
+    }
+
+    /// 진행 중인데 이벤트 스트림이 하나도 붙어 있지 않고, 처리 중인 턴도 없이 `idle_ms` 동안
+    /// 아무 일도 없었으면 `true`. 클라이언트가 창을 닫았거나 죽어서 정지를 부르지 못한 세션이다.
+    pub(super) fn is_abandoned(&self, now_epoch_ms: i64, idle_ms: i64) -> bool {
+        if self.is_inactive() || self.turn_processing.load(Ordering::SeqCst) {
+            return false;
+        }
+        {
+            // 받는 쪽이 떠났는데 해제되지 않은 싱크(등록 중에 끊긴 SSE 요청 등)는 여기서 뺀다.
+            let mut events = lock(&self.events);
+            events.sinks.retain(|sink| !sink.is_closed());
+            if !events.sinks.is_empty() {
+                return false;
+            }
+        }
+        now_epoch_ms - self.last_activity_epoch_ms.load(Ordering::SeqCst) >= idle_ms
+    }
+
+    /// 정지한 세션은 더 처리할 답이 없으므로 쌓인 오디오, 전사문, 연속 모드 턴, 프리페치를
+    /// 놓는다. 복구 조회에 필요한 현재 질문, 순번, 재전송 버퍼는 남긴다.
+    pub(super) fn release_pending_work(&self) {
+        let mut audio = lock(&self.audio);
+        audio.pcm_buffer = Vec::new();
+        audio.pending_transcripts = VecDeque::new();
+        audio.continuous_turns = VecDeque::new();
+        audio.prefetch_by_question_id = Vec::new();
     }
 
     // ---- 싱크와 이벤트 ----
@@ -165,6 +205,7 @@ impl RuntimeContext {
     /// `since_event_id`가 있으면 그 뒤의 이벤트를 먼저 다시 보낸다. 다시 보내다 실패하면 싱크를
     /// 등록하지 않는다. 같은 싱크는 한 번만 등록된다(Java `Set`).
     pub(super) fn add_sink(&self, sink: Arc<dyn VoiceEventSink>, since_event_id: Option<i64>) {
+        self.touch();
         let mut events = lock(&self.events);
         if let Some(since) = since_event_id {
             if !replay_events(&events, sink.as_ref(), since) {
@@ -181,6 +222,7 @@ impl RuntimeContext {
     }
 
     pub(super) fn remove_sink(&self, sink: &Arc<dyn VoiceEventSink>) {
+        self.touch();
         lock(&self.events)
             .sinks
             .retain(|existing| !same_sink(existing, sink));
@@ -189,6 +231,7 @@ impl RuntimeContext {
     /// payload에 `eventId`를 붙여 재전송 버퍼에 넣고 모든 싱크에 보낸다. `false`를 돌려준 싱크는
     /// 뺀다. 객체가 아닌 payload는 `{"eventId", "data"}`로 감싼다.
     pub(super) fn emit(&self, event: &str, payload: Value) {
+        self.touch();
         let mut events = lock(&self.events);
         events.last_event_id += 1;
         let event_id = events.last_event_id;
@@ -262,6 +305,7 @@ impl RuntimeContext {
     }
 
     pub(super) fn finish_turn_processing(&self) {
+        self.touch();
         self.turn_processing.store(false, Ordering::SeqCst);
     }
 

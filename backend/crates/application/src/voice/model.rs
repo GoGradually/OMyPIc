@@ -2,6 +2,11 @@
 /// `send` 안에서 음성 세션 유스케이스를 다시 부르면 안 된다(이벤트 잠금을 쥔 채로 불린다).
 pub trait VoiceEventSink: Send + Sync {
     fn send(&self, event: &str, payload: serde_json::Value) -> bool;
+
+    /// 받는 쪽이 이미 떠났으면 `true`. 이벤트를 보내 보지 않고도 죽은 싱크를 뺄 때 쓴다.
+    fn is_closed(&self) -> bool {
+        false
+    }
 }
 
 /// 학습자가 오디오 없이 현재 질문에 답을 마쳤다고 알린다. AI가 꺼져 있으면 턴 경계만 오고,

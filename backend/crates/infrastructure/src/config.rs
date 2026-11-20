@@ -83,8 +83,14 @@ pub struct VoiceConfig {
     pub feedback_language: String,
     pub tts_model: String,
     pub tts_voice: String,
+    /// `OMYPIC_VOICE_RECOVERY_RETENTION_MS`, 기본 600000. 정지한 세션을 복구 조회용으로 두는 시간.
     pub recovery_retention_ms: i64,
+    /// `OMYPIC_VOICE_STOPPED_CONTEXT_MAX`, 기본 1000. 보관하는 정지 세션의 최대 수.
     pub stopped_context_max: usize,
+    /// `OMYPIC_VOICE_IDLE_TIMEOUT_MS`, 기본 600000. 이벤트 스트림이 끊긴 채 이만큼 아무 일도 없는
+    /// 진행 중 세션은 `idle_timeout`으로 멈춘다(창을 닫았거나 앱이 죽은 클라이언트). 다시 붙는
+    /// 클라이언트는 이 시간 안에 돌아오면 그대로 이어 간다.
+    pub idle_timeout_ms: i64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -200,6 +206,7 @@ impl Default for AppConfig {
                 tts_voice: "alloy".to_string(),
                 recovery_retention_ms: 600_000,
                 stopped_context_max: 1000,
+                idle_timeout_ms: 600_000,
             },
             integrations: IntegrationsConfig {
                 openai: OpenAiConfig {
@@ -285,6 +292,17 @@ impl AppConfig {
         )?;
 
         let openai = &mut config.integrations.openai;
+        let voice = &mut config.voice;
+        env.set(
+            "OMYPIC_VOICE_RECOVERY_RETENTION_MS",
+            &mut voice.recovery_retention_ms,
+        )?;
+        env.set(
+            "OMYPIC_VOICE_STOPPED_CONTEXT_MAX",
+            &mut voice.stopped_context_max,
+        )?;
+        env.set("OMYPIC_VOICE_IDLE_TIMEOUT_MS", &mut voice.idle_timeout_ms)?;
+
         env.set("OMYPIC_OPENAI_BASE_URL", &mut openai.base_url)?;
         env.set_bool(
             "OMYPIC_OPENAI_RESPONSES_ENABLED",
@@ -482,6 +500,10 @@ impl VoicePolicy for AppConfig {
     fn voice_stopped_context_max(&self) -> usize {
         self.voice.stopped_context_max
     }
+
+    fn voice_idle_timeout_ms(&self) -> i64 {
+        self.voice.idle_timeout_ms
+    }
 }
 
 #[cfg(test)]
@@ -537,6 +559,21 @@ mod tests {
         assert_eq!("alloy", config.voice_tts_voice());
         assert_eq!(600_000, config.voice_recovery_retention_ms());
         assert_eq!(1000, config.voice_stopped_context_max());
+        assert_eq!(600_000, config.voice_idle_timeout_ms());
+    }
+
+    #[test]
+    fn voice_session_lifetimes_can_be_set_by_env() {
+        let config = from_map(&[
+            ("OMYPIC_VOICE_IDLE_TIMEOUT_MS", "2000"),
+            ("OMYPIC_VOICE_RECOVERY_RETENTION_MS", "3000"),
+            ("OMYPIC_VOICE_STOPPED_CONTEXT_MAX", "7"),
+        ])
+        .unwrap();
+        assert_eq!(2000, config.voice_idle_timeout_ms());
+        assert_eq!(3000, config.voice_recovery_retention_ms());
+        assert_eq!(7, config.voice_stopped_context_max());
+        assert!(from_map(&[("OMYPIC_VOICE_IDLE_TIMEOUT_MS", "soon")]).is_err());
     }
 
     #[test]

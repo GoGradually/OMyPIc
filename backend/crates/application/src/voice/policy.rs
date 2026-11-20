@@ -8,6 +8,8 @@ pub trait VoicePolicy: Send + Sync {
     fn voice_tts_voice(&self) -> String;
     fn voice_recovery_retention_ms(&self) -> i64;
     fn voice_stopped_context_max(&self) -> usize;
+    /// 이벤트 스트림이 붙어 있지 않은 진행 중 세션을 멈추기까지 기다리는 시간. 0 이하이면 기본값.
+    fn voice_idle_timeout_ms(&self) -> i64;
 }
 
 /// 지원하는 음성 모델 목록.

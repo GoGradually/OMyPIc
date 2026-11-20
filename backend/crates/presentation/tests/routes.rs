@@ -478,6 +478,7 @@ fn meta_router(feedback: &str, stt: &str, tts: &str, voice: &str, language: &str
             tts_voice: voice.to_string(),
             recovery_retention_ms: 600_000,
             stopped_context_max: 1000,
+            idle_timeout_ms: 600_000,
         });
     fixture.router()
 }

@@ -1,6 +1,8 @@
 //! Java `VoiceSessionUseCase`: 음성 세션의 공개 진입점. 동작은 `facade`에 있다.
 
 #[cfg(test)]
+mod lifecycle_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod validation_tests;
@@ -153,6 +155,14 @@ impl VoiceSessionUseCase {
 
     pub fn complete_answer(&self, command: &VoiceAnswerCommand) -> AppResult<()> {
         self.facade.complete_answer(command)
+    }
+
+    /// 버려진 세션을 정리한다. 이벤트 스트림이 붙어 있지 않고 처리 중인 턴도 없이
+    /// `VoicePolicy::voice_idle_timeout_ms` 동안 아무 일도 없던 세션은 `idle_timeout`으로 멈추고,
+    /// 보관 기간이 지난 정지 세션은 지운다. 다른 호출도 같은 정리를 하지만, 호출이 없어도
+    /// 정리되도록 서버가 주기적으로 부른다.
+    pub fn reap_idle_sessions(&self) {
+        self.facade.purge_contexts();
     }
 
     /// 모르는 세션이면 아무것도 하지 않는다.

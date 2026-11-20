@@ -3,6 +3,7 @@
 pub mod wiring;
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context};
@@ -12,6 +13,7 @@ use axum::http::header::CONTENT_TYPE;
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use futures_util::StreamExt;
+use omypic_application::voice::usecase::VoiceSessionUseCase;
 use omypic_infrastructure::config::AppConfig;
 use omypic_presentation::AppState;
 use tokio::net::TcpListener;
@@ -82,6 +84,7 @@ pub async fn start(config: AppConfig, bind: SocketAddr) -> anyhow::Result<Runnin
         .map_err(|err| anyhow!("Failed to bind {bind}: {err}"))?;
     let addr = listener.local_addr()?;
 
+    let sweep_every = voice_sweep_interval(config.voice.idle_timeout_ms);
     // 블로킹 HTTP 클라이언트는 비동기 작업자 스레드에서 만들 수 없다.
     let state = tokio::task::spawn_blocking(move || wiring::build_state(&config))
         .await
@@ -91,6 +94,11 @@ pub async fn start(config: AppConfig, bind: SocketAddr) -> anyhow::Result<Runnin
     let app = omypic_presentation::router(state.clone()).layer(middleware::from_fn_with_state(
         shutdown_rx.clone(),
         end_event_streams_on_shutdown,
+    ));
+    tokio::spawn(sweep_voice_sessions(
+        state.voice_session.clone(),
+        sweep_every,
+        shutdown_rx.clone(),
     ));
     let mut signal = shutdown_rx;
     let serve = tokio::spawn(async move {
@@ -132,6 +140,34 @@ async fn end_event_streams_on_shutdown(
     };
     let stream = body.into_data_stream().take_until(stopped);
     Response::from_parts(parts, Body::from_stream(stream))
+}
+
+/// 버려진 음성 세션을 찾는 간격: 유예 시간의 4분의 1, 1초에서 30초 사이.
+fn voice_sweep_interval(idle_timeout_ms: i64) -> Duration {
+    let quarter = u64::try_from(idle_timeout_ms / 4).unwrap_or(0);
+    Duration::from_millis(quarter.clamp(1_000, 30_000))
+}
+
+/// 요청이 없어도 버려진 음성 세션과 보관 기간이 지난 정지 세션이 정리되도록 주기적으로 부른다.
+/// 종료 신호가 오면 끝난다.
+async fn sweep_voice_sessions(
+    voice_session: Arc<VoiceSessionUseCase>,
+    every: Duration,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let mut ticks = tokio::time::interval(every);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        let stopped = tokio::select! {
+            _ = ticks.tick() => false,
+            _ = shutdown.wait_for(|stop| *stop) => true,
+        };
+        if stopped {
+            return;
+        }
+        let voice_session = Arc::clone(&voice_session);
+        let _ = tokio::task::spawn_blocking(move || voice_session.reap_idle_sessions()).await;
+    }
 }
 
 async fn release_off_async_workers(state: Option<AppState>) {

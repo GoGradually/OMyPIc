@@ -67,6 +67,10 @@ impl VoiceEventSink for ChannelSink {
     fn send(&self, event: &str, payload: Value) -> bool {
         self.tx.send((event.to_string(), payload)).is_ok()
     }
+
+    fn is_closed(&self) -> bool {
+        self.tx.is_closed()
+    }
 }
 
 /// 등록을 쥐고 있다가 drop되면 해제한다. 해제는 이벤트 잠금을 기다릴 수 있으므로

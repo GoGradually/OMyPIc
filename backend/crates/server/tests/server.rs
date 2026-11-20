@@ -359,6 +359,39 @@ async fn shutdown_ends_open_event_streams() {
     assert!(body.contains("event: session.ready"), "{body}");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn abandoned_voice_session_is_stopped_and_removed_without_further_requests() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = hash_config(dir.path());
+    config.voice.idle_timeout_ms = 1_000;
+    config.voice.recovery_retention_ms = 1_000;
+    let server = start(config, ephemeral()).await.unwrap();
+    let (status, opened) = send_json(
+        &server,
+        reqwest::Method::POST,
+        "/api/voice/sessions",
+        json!({"sessionId": "s-1", "aiEnabled": false}),
+    )
+    .await;
+    assert_eq!(StatusCode::OK, status, "{opened}");
+    let voice_session_id = opened["voiceSessionId"].as_str().unwrap().to_string();
+
+    // No request at all: only the server's own sweep can stop the session and then drop it.
+    tokio::time::sleep(Duration::from_millis(4_500)).await;
+
+    let (status, body) = get_json(
+        &server,
+        &format!("/api/voice/sessions/{voice_session_id}/recovery"),
+    )
+    .await;
+    assert_eq!(StatusCode::BAD_REQUEST, status, "{body}");
+    assert_eq!(
+        format!("Unknown voice session: {voice_session_id}"),
+        body["message"]
+    );
+    server.shutdown().await.unwrap();
+}
+
 fn file_names(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
         .map(|entries| {

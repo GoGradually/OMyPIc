@@ -122,4 +122,8 @@ impl VoiceEventSink for RecordingSink {
         lock(&self.events).push((event.to_string(), payload));
         true
     }
+
+    fn is_closed(&self) -> bool {
+        *lock(&self.closed)
+    }
 }

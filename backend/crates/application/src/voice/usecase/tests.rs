@@ -47,10 +47,10 @@ use crate::voice::model::{
 use crate::wrongnote::usecase::WrongNoteUseCase;
 
 type Events = Vec<(String, Value)>;
-type Question = (&'static str, &'static str, &'static str, &'static str);
+pub(super) type Question = (&'static str, &'static str, &'static str, &'static str);
 
-const Q1: Question = ("q-1", "question-1", "g-1", "travel");
-const Q2: Question = ("q-2", "question-2", "g-2", "hobby");
+pub(super) const Q1: Question = ("q-1", "question-1", "g-1", "travel");
+pub(super) const Q2: Question = ("q-2", "question-2", "g-2", "hobby");
 const Q3: Question = ("q-3", "question-3", "g-3", "music");
 
 /// Java `setUp`의 `voicePolicy` 값.
@@ -63,6 +63,7 @@ pub(super) fn java_voice_policy() -> FakeVoicePolicy {
         tts_voice: "alloy".to_string(),
         recovery_retention_ms: 600_000,
         stopped_context_max: 1000,
+        idle_timeout_ms: 600_000,
     }
 }
 
@@ -170,7 +171,7 @@ impl Fixture {
     /// Java `when(sessionUseCase.getOrCreate(id)).thenReturn(state)`와
     /// `when(questionUseCase.nextQuestion(id)).thenReturn(...)`: 질문마다 그룹 하나를 만들고
     /// 그 순서대로 묻는 세션을 둔다. 질문이 다 떨어지면 `skipped`다.
-    fn session(
+    pub(super) fn session(
         &self,
         id: &str,
         mode: Option<ModeType>,
@@ -287,7 +288,7 @@ pub(super) fn open_command(session_id: &str) -> VoiceSessionOpenCommand {
     }
 }
 
-fn ai_off_command(session_id: &str) -> VoiceSessionOpenCommand {
+pub(super) fn ai_off_command(session_id: &str) -> VoiceSessionOpenCommand {
     VoiceSessionOpenCommand {
         session_id: Some(session_id.to_string()),
         ai_enabled: Some(false),
@@ -295,7 +296,7 @@ fn ai_off_command(session_id: &str) -> VoiceSessionOpenCommand {
     }
 }
 
-fn answer(voice_session_id: &str, sequence: i64) -> VoiceAnswerCommand {
+pub(super) fn answer(voice_session_id: &str, sequence: i64) -> VoiceAnswerCommand {
     VoiceAnswerCommand {
         voice_session_id: Some(voice_session_id.to_string()),
         sequence: Some(sequence),
@@ -303,7 +304,7 @@ fn answer(voice_session_id: &str, sequence: i64) -> VoiceAnswerCommand {
     }
 }
 
-fn audio_chunk(voice_session_id: &str, sequence: i64) -> VoiceAudioChunkCommand {
+pub(super) fn audio_chunk(voice_session_id: &str, sequence: i64) -> VoiceAudioChunkCommand {
     VoiceAudioChunkCommand {
         voice_session_id: Some(voice_session_id.to_string()),
         // Base64.getEncoder().encodeToString(new byte[]{0, 1, 2, 3})
@@ -313,7 +314,7 @@ fn audio_chunk(voice_session_id: &str, sequence: i64) -> VoiceAudioChunkCommand 
     }
 }
 
-fn stop_command(voice_session_id: &str) -> VoiceSessionStopCommand {
+pub(super) fn stop_command(voice_session_id: &str) -> VoiceSessionStopCommand {
     VoiceSessionStopCommand {
         voice_session_id: Some(voice_session_id.to_string()),
         ..VoiceSessionStopCommand::default()
@@ -342,7 +343,7 @@ fn event_id(payload: &Value) -> i64 {
     payload["eventId"].as_i64().expect("eventId is a number")
 }
 
-fn unknown_session(voice_session_id: &str) -> AppError {
+pub(super) fn unknown_session(voice_session_id: &str) -> AppError {
     AppError::InvalidArgument(format!("Unknown voice session: {voice_session_id}"))
 }
 

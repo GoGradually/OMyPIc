@@ -41,6 +41,9 @@ use crate::voice::usecase::{NowMillis, RecoverySnapshot, VoiceSessionDependencie
 
 const DEFAULT_RECOVERY_RETENTION_MS: i64 = 600_000;
 const DEFAULT_STOPPED_CONTEXT_MAX: usize = 1000;
+const DEFAULT_IDLE_TIMEOUT_MS: i64 = 600_000;
+/// 이벤트 스트림 없이 오래 방치돼 서버가 멈춘 세션의 정지 이유.
+const IDLE_TIMEOUT_STOP_REASON: &str = "idle_timeout";
 const MAX_RULEBOOK_DOCUMENTS_PER_TURN: usize = 2;
 
 pub(crate) struct VoiceSessionFacade {
@@ -65,7 +68,7 @@ impl VoiceSessionFacade {
     }
 
     pub(crate) fn open(&self, command: &VoiceSessionOpenCommand) -> AppResult<String> {
-        self.purge_stopped_contexts();
+        self.purge_contexts();
         self.validate_open_command(command)?;
         let session_id = command.session_id.clone().unwrap_or_default();
         self.deps.session_use_case.get_or_create(&session_id)?;
@@ -82,6 +85,7 @@ impl VoiceSessionFacade {
             feedback_api_key.unwrap_or_default(),
             settings,
             self.event_replay_buffer_limit,
+            Arc::clone(&self.now_millis),
         ));
         let voice_session_id = context.voice_session_id.clone();
         lock(&self.contexts).insert(voice_session_id.clone(), context);
@@ -123,7 +127,7 @@ impl VoiceSessionFacade {
         sink: Arc<dyn VoiceEventSink>,
         since_event_id: Option<i64>,
     ) -> AppResult<()> {
-        self.purge_stopped_contexts();
+        self.purge_contexts();
         let context = self.require_context(voice_session_id)?;
         context.add_sink(sink, since_event_id);
         if !context.mark_initialized() {
@@ -137,7 +141,7 @@ impl VoiceSessionFacade {
     }
 
     pub(crate) fn unregister_sink(&self, voice_session_id: &str, sink: &Arc<dyn VoiceEventSink>) {
-        self.purge_stopped_contexts();
+        self.purge_contexts();
         if let Some(context) = self.find_context(voice_session_id) {
             context.remove_sink(sink);
         }
@@ -148,7 +152,7 @@ impl VoiceSessionFacade {
         voice_session_id: &str,
         last_seen_event_id: Option<i64>,
     ) -> AppResult<RecoverySnapshot> {
-        self.purge_stopped_contexts();
+        self.purge_contexts();
         let context = self.require_context(voice_session_id)?;
         Ok(context.snapshot_for_recovery(last_seen_event_id.unwrap_or(0).max(0)))
     }
@@ -157,7 +161,7 @@ impl VoiceSessionFacade {
         self: &Arc<Self>,
         command: &VoiceAudioChunkCommand,
     ) -> AppResult<()> {
-        self.purge_stopped_contexts();
+        self.purge_contexts();
         if is_blank(command.voice_session_id.as_deref()) {
             return Err(invalid("voiceSessionId is required"));
         }
@@ -189,7 +193,7 @@ impl VoiceSessionFacade {
     /// 학습자가 오디오 없이 답을 마쳤다고 알린다. AI가 꺼져 있으면 전사 없이 다음 질문으로
     /// 넘어간다. 기기 안 음성 인식이면 명령의 전사문이 보통 턴을 거친다.
     pub(crate) fn complete_answer(self: &Arc<Self>, command: &VoiceAnswerCommand) -> AppResult<()> {
-        self.purge_stopped_contexts();
+        self.purge_contexts();
         let Some(voice_session_id) = command
             .voice_session_id
             .as_deref()
@@ -215,7 +219,7 @@ impl VoiceSessionFacade {
     }
 
     pub(crate) fn stop(&self, command: &VoiceSessionStopCommand) -> AppResult<()> {
-        self.purge_stopped_contexts();
+        self.purge_contexts();
         let Some(voice_session_id) = command
             .voice_session_id
             .as_deref()
@@ -231,8 +235,11 @@ impl VoiceSessionFacade {
         Ok(())
     }
 
+    /// 클라이언트 요청으로 찾은 세션은 방금 쓰인 것으로 적는다.
     fn find_context(&self, voice_session_id: &str) -> Option<Arc<RuntimeContext>> {
-        lock(&self.contexts).get(voice_session_id).cloned()
+        let context = lock(&self.contexts).get(voice_session_id).cloned()?;
+        context.touch();
+        Some(context)
     }
 
     fn require_context(&self, voice_session_id: &str) -> AppResult<Arc<RuntimeContext>> {
@@ -310,6 +317,7 @@ impl VoiceSessionFacade {
         };
         let stop_reason = normalize_stop_reason(Some(reason), fallback);
         context.mark_stopped(&stop_reason, (self.now_millis)());
+        context.release_pending_work();
         context.emit(
             "session.stopped",
             json!({
@@ -321,10 +329,34 @@ impl VoiceSessionFacade {
         );
     }
 
+    /// 버려진 진행 중 세션을 `idle_timeout`으로 멈추고, 보관 기간이 지난 정지 세션을 지우고,
+    /// 정지 세션이 상한보다 많으면 오래된 것부터 지운다. 이벤트 스트림이 붙어 있거나 턴을
+    /// 처리 중인 세션은 멈추지 않는다.
+    pub(crate) fn purge_contexts(&self) {
+        let now = (self.now_millis)();
+        let mut idle_timeout_ms = self.deps.voice_policy.voice_idle_timeout_ms();
+        if idle_timeout_ms <= 0 {
+            idle_timeout_ms = DEFAULT_IDLE_TIMEOUT_MS;
+        }
+        let abandoned: Vec<Arc<RuntimeContext>> = lock(&self.contexts)
+            .values()
+            .filter(|context| context.is_abandoned(now, idle_timeout_ms))
+            .cloned()
+            .collect();
+        // 정지는 이벤트를 보내므로 세션 목록 잠금을 놓은 뒤에 한다.
+        for context in abandoned {
+            tracing::info!(
+                voice_session_id = %context.voice_session_id,
+                "Stopping voice session without an event stream after {idle_timeout_ms} ms idle"
+            );
+            self.stop_internal(&context, true, IDLE_TIMEOUT_STOP_REASON);
+        }
+        self.purge_stopped_contexts(now);
+    }
+
     /// 보관 기간이 지난 정지 세션을 지우고, 정지 세션이 상한보다 많으면 오래된 것부터 지운다.
     /// 진행 중인 세션은 지우지 않는다.
-    fn purge_stopped_contexts(&self) {
-        let now = (self.now_millis)();
+    fn purge_stopped_contexts(&self, now: i64) {
         let mut retention_ms = self.deps.voice_policy.voice_recovery_retention_ms();
         if retention_ms <= 0 {
             retention_ms = DEFAULT_RECOVERY_RETENTION_MS;
