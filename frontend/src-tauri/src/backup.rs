@@ -3,6 +3,10 @@
 //! 백업은 웹뷰와 앱 사이를 JSON이 아닌 바이트 그대로 오간다. 저장할 때는 요청 본문이 백업 자체이고
 //! 기본 파일 이름은 `BACKUP_NAME_HEADER`(퍼센트 인코딩)로 온다. 고른 파일은 이름 길이(u32, 리틀
 //! 엔디언), UTF-8 이름, 파일 내용을 이어 붙인 바이트로 돌려준다(빈 바이트는 취소).
+//!
+//! 저장은 같은 폴더의 임시 파일에 다 쓰고 디스크에 내린 뒤 이름을 바꿔 덮어쓴다. 쓰다가 실패하면
+//! (디스크가 가득 참 등) 원래 백업이 그대로 남는다. 가져올 파일은 Backend가 받는 크기
+//! (`MAX_IMPORT_BYTES`)를 넘으면 읽지 않고 거절한다.
 
 use std::borrow::Cow;
 use std::io::Read;
@@ -16,10 +20,19 @@ pub const FILTER_NAME: &str = "Zip Archive";
 pub const FILTER_EXTENSIONS: &[&str] = &["zip"];
 /// 저장 대화상자의 기본 파일 이름을 담는 요청 헤더.
 pub const BACKUP_NAME_HEADER: &str = "x-omypic-backup-name";
+/// 가져올 수 있는 백업의 최대 크기. Backend가 받는 요청 본문의 한도와 같다.
+pub const MAX_IMPORT_BYTES: usize = omypic_presentation::MAX_BODY_BYTES;
+const TEMP_PREFIX: &str = ".omypic-backup-";
+const TEMP_SUFFIX: &str = ".tmp";
 
-/// 저장 대화상자의 기본 파일 이름. 비었으면 `omypic-backup.zip`.
+/// 저장 대화상자의 기본 파일 이름: 헤더 값의 마지막 경로 조각(`/`와 `\`를 모두 구분자로 본다).
+/// 비었거나 `.`/`..`이면 `omypic-backup.zip`.
 pub fn default_name(name: Option<String>) -> String {
-    name.filter(|value| !value.trim().is_empty())
+    name.as_deref()
+        .and_then(|value| value.rsplit(['/', '\\']).next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && !matches!(*value, "." | ".."))
+        .map(str::to_string)
         .unwrap_or_else(|| DEFAULT_BACKUP_NAME.to_string())
 }
 
@@ -65,11 +78,36 @@ pub async fn write_backup(path: Option<&Path>, bytes: &[u8]) -> Result<bool, Str
     let Some(path) = path else {
         return Ok(false);
     };
-    let failed = |err: std::io::Error| format!("Failed to write {}: {err}", path.display());
-    let mut file = tokio::fs::File::create(path).await.map_err(failed)?;
-    file.write_all(bytes).await.map_err(failed)?;
-    file.flush().await.map_err(failed)?;
+    write_backup_from(path, bytes).await?;
     Ok(true)
+}
+
+/// `source`를 `path` 옆의 임시 파일에 다 쓰고 디스크에 내린 뒤 `path`로 이름을 바꾼다. 실패하면
+/// 임시 파일을 지우고 `path`는 건드리지 않는다.
+async fn write_backup_from(
+    path: &Path,
+    mut source: impl tokio::io::AsyncRead + Unpin,
+) -> Result<(), String> {
+    let failed = |err: std::io::Error| format!("Failed to write {}: {err}", path.display());
+    let dir = match path.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir,
+        _ => Path::new("."),
+    };
+    // 임시 파일은 놓이면(실패해 이 함수를 빠져나가면) 지워진다.
+    let temp = tempfile::Builder::new()
+        .prefix(TEMP_PREFIX)
+        .suffix(TEMP_SUFFIX)
+        .tempfile_in(dir)
+        .map_err(failed)?;
+    let mut file = tokio::fs::File::from_std(temp.as_file().try_clone().map_err(failed)?);
+    tokio::io::copy(&mut source, &mut file)
+        .await
+        .map_err(failed)?;
+    file.flush().await.map_err(failed)?;
+    file.sync_all().await.map_err(failed)?;
+    drop(file);
+    temp.persist(path).map_err(|err| failed(err.error))?;
+    Ok(())
 }
 
 /// 고른 파일을 읽어 이름과 내용을 이은 바이트로 돌려준다. 대화상자를 닫았으면(`None`) 빈 바이트.
@@ -84,16 +122,34 @@ pub fn read_backup(path: Option<&Path>) -> Result<Vec<u8>, String> {
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
     let name_length = u32::try_from(name.len()).map_err(|_| "File name too long".to_string())?;
-    let mut file = std::fs::File::open(path).map_err(failed)?;
-    let size = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    let file = std::fs::File::open(path).map_err(failed)?;
+    let size = file.metadata().map_err(failed)?.len();
+    let limit = MAX_IMPORT_BYTES as u64;
+    if size > limit {
+        return Err(too_large(size));
+    }
     let capacity = usize::try_from(size)
         .unwrap_or(0)
         .saturating_add(4 + name.len());
     let mut out = Vec::with_capacity(capacity);
     out.extend_from_slice(&name_length.to_le_bytes());
     out.extend_from_slice(name.as_bytes());
-    file.read_to_end(&mut out).map_err(failed)?;
+    // 고른 뒤에 파일이 커졌어도 한도까지만 읽는다.
+    let read = file.take(limit + 1).read_to_end(&mut out).map_err(failed)?;
+    if read as u64 > limit {
+        return Err(too_large(read as u64));
+    }
     Ok(out)
+}
+
+/// 웹뷰가 "데이터 가져오기에 실패했습니다: …" 뒤에 그대로 보여 주는 글.
+fn too_large(size: u64) -> String {
+    const MIB: u64 = 1024 * 1024;
+    format!(
+        "백업 파일이 너무 큽니다({:.1} MiB). 가져올 수 있는 백업은 {} MiB까지입니다.",
+        size as f64 / MIB as f64,
+        MAX_IMPORT_BYTES as u64 / MIB
+    )
 }
 
 #[cfg(test)]
@@ -181,5 +237,84 @@ mod tests {
     fn unreadable_backup_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
         assert!(read_backup(Some(&dir.path().join("missing.zip"))).is_err());
+    }
+
+    #[test]
+    fn default_name_keeps_only_the_last_path_component() {
+        assert_eq!("evil.zip", default_name(Some("../../evil.zip".into())));
+        assert_eq!("b.zip", default_name(Some("a/b.zip".into())));
+        assert_eq!("b.zip", default_name(Some("C:\\Users\\a\\b.zip".into())));
+        assert_eq!("omypic-backup.zip", default_name(Some("dir/".into())));
+        assert_eq!("omypic-backup.zip", default_name(Some("a/..".into())));
+        assert_eq!("omypic-backup.zip", default_name(Some("/".into())));
+    }
+
+    #[test]
+    fn an_import_file_larger_than_the_backend_accepts_is_refused_before_reading() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("huge.zip");
+        // 성긴 파일이라 디스크를 쓰지 않는다.
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(omypic_presentation::MAX_BODY_BYTES as u64 + 1)
+            .unwrap();
+        drop(file);
+
+        let Err(error) = read_backup(Some(&path)) else {
+            panic!("a file over the limit was read");
+        };
+        assert!(error.contains("64 MiB"), "{error}");
+
+        let fits = dir.path().join("fits.zip");
+        std::fs::write(&fits, b"PK").unwrap();
+        assert!(read_backup(Some(&fits)).is_ok());
+    }
+
+    /// `good`만큼 내준 뒤 읽기 오류(디스크가 가득 찬 것과 같은 실패)로 끝나는 원본.
+    struct FailingSource {
+        good: Vec<u8>,
+    }
+
+    impl tokio::io::AsyncRead for FailingSource {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            if self.good.is_empty() {
+                return std::task::Poll::Ready(Err(std::io::Error::other(
+                    "No space left on device",
+                )));
+            }
+            let good = std::mem::take(&mut self.good);
+            buf.put_slice(&good);
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_export_leaves_the_previous_backup_intact_and_no_temporary_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("backup.zip");
+        std::fs::write(&path, b"previous backup").unwrap();
+
+        let error = write_backup_from(
+            &path,
+            FailingSource {
+                good: b"half of the new".to_vec(),
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.contains("No space left"), "{error}");
+        assert_eq!(b"previous backup".to_vec(), std::fs::read(&path).unwrap());
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(vec![std::ffi::OsString::from("backup.zip")], names);
+
+        assert_eq!(Ok(true), write_backup(Some(&path), b"new backup").await);
+        assert_eq!(b"new backup".to_vec(), std::fs::read(&path).unwrap());
     }
 }
