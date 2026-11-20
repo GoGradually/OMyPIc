@@ -158,3 +158,51 @@ describe('useAppViewModel TTS models from an older backend', () => {
         expect(JSON.parse(window.localStorage.getItem('omypic_pref_tts_model'))).toBe('local-kokoro')
     })
 })
+
+describe('useAppViewModel data export', () => {
+    function exportReply(missingCount) {
+        return {
+            ...okJson([]),
+            headers: new Headers(missingCount ? {'x-omypic-missing-rulebook-files': String(missingCount)} : {}),
+            blob: async () => new Blob(['zip'])
+        }
+    }
+
+    beforeEach(() => {
+        window.omypic = {
+            getBackendUrl: vi.fn(async () => 'http://backend'),
+            getApiKey: vi.fn(async () => null),
+            setApiKey: vi.fn(async () => true),
+            saveBackupFile: vi.fn(async () => true)
+        }
+    })
+
+    afterEach(() => {
+        cleanup()
+        delete window.omypic
+        vi.restoreAllMocks()
+    })
+
+    async function exportWith(missingCount) {
+        global.fetch = vi.fn(async (url) => (String(url).includes('/api/data-transfer/export')
+            ? exportReply(missingCount)
+            : okJson([])))
+        const {result} = renderHook(() => useAppViewModel())
+        await waitFor(() => expect(window.omypic.getApiKey).toHaveBeenCalled())
+        await act(async () => {
+            await result.current.overlayContentProps.modelSettingsProps.onExportData()
+        })
+        return result.current.statusBarProps.statusMessage
+    }
+
+    it('says so when rulebooks without a file were left out of the backup', async () => {
+        const message = await exportWith(2)
+
+        expect(message).toContain('데이터 내보내기를 완료했습니다.')
+        expect(message).toContain('파일을 찾지 못한 룰북 2개는 백업에 들어가지 않았습니다.')
+    })
+
+    it('reports a plain success when every rulebook was exported', async () => {
+        expect(await exportWith(0)).toBe('데이터 내보내기를 완료했습니다.')
+    })
+})

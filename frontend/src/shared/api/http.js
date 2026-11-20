@@ -72,9 +72,15 @@ export async function getModelMeta() {
     return response.json()
 }
 
+// The backup, plus how many rulebooks the backend left out because their file was missing (the
+// response header is only sent when there is at least one).
 export async function exportDataBundle() {
     const response = await callApi('/api/data-transfer/export')
-    return response.blob()
+    const missing = Number.parseInt(response.headers?.get?.('x-omypic-missing-rulebook-files') ?? '', 10)
+    return {
+        blob: await response.blob(),
+        missingRulebookFiles: Number.isFinite(missing) && missing > 0 ? missing : 0
+    }
 }
 
 export async function importDataBundle(file) {

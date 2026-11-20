@@ -377,7 +377,7 @@ export function useAppViewModel() {
 
     const handleExportData = useCallback(async () => {
         try {
-            const backupBlob = await exportDataBundle()
+            const {blob: backupBlob, missingRulebookFiles} = await exportDataBundle()
             const filename = buildBackupFilename()
             if (window.omypic && window.omypic.saveBackupFile) {
                 const bytes = new Uint8Array(await backupBlob.arrayBuffer())
@@ -389,7 +389,9 @@ export function useAppViewModel() {
             } else {
                 triggerBlobDownload(backupBlob, filename)
             }
-            setStatusMessage('데이터 내보내기를 완료했습니다.')
+            setStatusMessage(missingRulebookFiles > 0
+                ? `데이터 내보내기를 완료했습니다. 파일을 찾지 못한 룰북 ${missingRulebookFiles}개는 백업에 들어가지 않았습니다.`
+                : '데이터 내보내기를 완료했습니다.')
         } catch (error) {
             setStatusMessage(`데이터 내보내기에 실패했습니다: ${error.message}`)
         }
@@ -409,7 +411,9 @@ export function useAppViewModel() {
                     setStatusMessage('데이터 가져오기를 취소했습니다.')
                     return
                 }
-                file = new File([new Uint8Array(selected.bytes)], selected.name || 'omypic-backup.zip', {
+                // The bridge hands the file over as a Uint8Array view; File copies it once on its own.
+                const bytes = selected.bytes instanceof Uint8Array ? selected.bytes : new Uint8Array(selected.bytes)
+                file = new File([bytes], selected.name || 'omypic-backup.zip', {
                     type: 'application/zip'
                 })
             } else {

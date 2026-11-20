@@ -39,6 +39,7 @@ import {
     watchLocalSpeechModels
 } from '../local/localSpeech.js'
 import {speechModelNote} from '../utils/speechModelNote.js'
+import {stoppedByServerMessage} from '../utils/stopReason.js'
 import {LOCAL_STT_MODEL, LOCAL_TTS_MODEL} from '../../../shared/constants/models.js'
 
 const VOICE_CHUNK_UPLOAD_TIMEOUT_MS = 3000
@@ -1199,9 +1200,7 @@ export function useVoiceLifecycle({
                         stopSession({
                             forced: false,
                             notifyServer: false,
-                            statusMessage: snapshot?.stopReason
-                                ? `세션이 종료되었습니다. (${snapshot.stopReason})`
-                                : '세션이 서버에서 종료되었습니다.'
+                            statusMessage: stoppedByServerMessage(snapshot?.stopReason)
                         }).catch(() => {
                         })
                         return
