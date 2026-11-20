@@ -1003,6 +1003,9 @@ export function useVoiceLifecycle({
             const startingVoiceSessionId = voiceSessionIdRef.current
             voiceSessionIdRef.current = ''
             closeEventSource()
+            // The server sends the first question as soon as the session opens, so it may already
+            // be queued or playing while the start still waits for the microphone.
+            stopCapture('')
             if (notifyServer && startingVoiceSessionId) {
                 stopVoiceSession(startingVoiceSessionId, {forced, reason}).catch(() => {
                 })

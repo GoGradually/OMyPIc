@@ -704,6 +704,30 @@ describe('local speech', () => {
         expect(synthesizeEnglish).toHaveBeenLastCalledWith(sentences[1])
     })
 
+    it('keeps a sentence that is still being synthesized when the cache is trimmed', async () => {
+        const pending = english('Still being synthesized')
+        let releasePending
+        synthesizeEnglish.mockImplementation((sentence) => (sentence === pending
+            ? new Promise((resolve) => {
+                releasePending = () => resolve({samples: new Float32Array([0.5]), sampleRate: ENGLISH_RATE})
+            })
+            : Promise.resolve({samples: new Float32Array(2 * 1024 * 1024), sampleRate: ENGLISH_RATE})))
+
+        prepareLocalSpeech(pending)
+        await flush()
+        // 40 MB of other audio arrives while the first sentence is still in the worker.
+        for (let index = 0; index < 5; index += 1) {
+            await prepareLocalSpeech(english(`Filler sentence ${index}`))
+        }
+        await flush()
+        releasePending()
+        await flush()
+        await prepareLocalSpeech(pending)
+        await flush()
+
+        expect(synthesizeEnglish.mock.calls.filter(([sentence]) => sentence === pending).length).toBe(1)
+    })
+
     it('reports preparing and ready around synthesis', async () => {
         const onNotice = vi.fn()
 

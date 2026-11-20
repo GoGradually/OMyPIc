@@ -47,7 +47,9 @@ function trimCache(keep) {
         if (cachedBytes <= CACHE_BYTES) {
             return
         }
-        if (entry !== keep) {
+        // An entry still being synthesized holds no audio yet: dropping it frees nothing and
+        // would make its sentence be synthesized twice.
+        if (entry !== keep && entry.settled) {
             dropFromCache(sentence)
         }
     }

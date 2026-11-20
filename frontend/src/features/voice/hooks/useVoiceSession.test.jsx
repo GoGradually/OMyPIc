@@ -2152,6 +2152,46 @@ describe('useVoiceSession', () => {
         unmount()
     })
 
+    it('stops the question an abandoned start was already reading', async () => {
+        const tracks = [{stop: vi.fn(), readyState: 'live', label: 'Mock Mic'}]
+        let grantMicrophone
+        navigator.mediaDevices.getUserMedia.mockImplementationOnce(() => new Promise((resolve) => {
+            grantMicrophone = () => resolve({getTracks: () => tracks, getAudioTracks: () => tracks})
+        }))
+        const cancelSpeech = vi.fn()
+        speakLocally.mockImplementation(() => cancelSpeech)
+        const {result, unmount} = renderLocalSpeechSession({ttsModel: 'local-kokoro', feedbackLang: 'en'})
+
+        let starting
+        await act(async () => {
+            starting = result.current.startSession()
+        })
+        await waitFor(() => expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalled())
+        // The server sends the first question as soon as the session opens, before the microphone is granted.
+        await act(async () => {
+            activeEventSource.emit('question.prompt', {
+                turnId: 1,
+                question: {id: 'q-1', text: 'question-1', group: 'travel'},
+                selection: {exhausted: false}
+            })
+            activeEventSource.emit('tts.text', {role: 'question', text: 'question-1', sequence: 1})
+        })
+        await waitFor(() => expect(speakLocally).toHaveBeenCalledTimes(1))
+
+        await act(async () => {
+            await result.current.stopSession()
+        })
+        expect(cancelSpeech).toHaveBeenCalled()
+
+        await act(async () => {
+            grantMicrophone()
+            await starting
+        })
+        expect(speakLocally).toHaveBeenCalledTimes(1)
+        expect(result.current.sessionPhase).toBe('IDLE')
+        unmount()
+    })
+
     it('opens the session once when start is pressed again while the models load', async () => {
         // One shared load, as the real client does for repeated calls.
         let finishLoad
