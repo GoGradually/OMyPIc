@@ -590,12 +590,81 @@ async fn rejects_path_traversal_with_400() {
         "/api/local-models/Xenova/%2e%2e/resolve/main/x",
         "/api/local-models/Xenova/whisper-base.en/resolve/main/a//b",
         "/api/local-models/Xenova/whisper-base.en/resolve/main/a%5Cb",
+        "/api/local-models/Xenova/whisper-base.en/resolve/main/x.PART",
+        "/api/local-models/Xenova/whisper-base.en/resolve/main/nul.json",
     ] {
         let reply = send(&router, get(uri)).await;
 
         assert_eq!(StatusCode::BAD_REQUEST, reply.status, "{uri}");
     }
     assert_eq!(0, upstream.hits());
+}
+
+#[tokio::test]
+async fn an_overlong_path_segment_is_a_bad_request_not_a_server_error() {
+    let setup = setup();
+    // 상위 서버는 무엇이든 준다. 이름이 너무 길면 파일 시스템이 거부하기 전에 400으로 끝나야 한다.
+    let upstream = setup.server.mock(|when, then| {
+        when.method(GET);
+        then.status(200).body("x");
+    });
+    let uri = format!(
+        "/api/local-models/Xenova/whisper-base.en/resolve/main/{}.onnx",
+        "a".repeat(300)
+    );
+
+    let reply = send(&setup.fixture.router(), get(&uri)).await;
+
+    assert_eq!(StatusCode::BAD_REQUEST, reply.status);
+    assert_eq!(0, upstream.hits());
+}
+
+#[tokio::test]
+async fn a_404_upstream_leaves_no_empty_folders() {
+    let setup = setup();
+    setup.server.mock(|when, then| {
+        when.method(GET);
+        then.status(404);
+    });
+
+    let reply = send(&setup.fixture.router(), get(PATH)).await;
+
+    assert_eq!(StatusCode::NOT_FOUND, reply.status);
+    assert!(!setup.dir.path().join("local-models").exists());
+}
+
+#[tokio::test]
+async fn a_range_other_than_the_first_byte_on_an_uncached_file_is_answered_from_the_download() {
+    let dir = tempfile::tempdir().unwrap();
+    let upstream = FakeUpstream::start(|_, stream| {
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n0123456789",
+            )
+            .unwrap();
+    });
+    let router = fixture_for(&upstream.url, dir.path()).router();
+
+    let tail = send(
+        &router,
+        with_header(Method::GET, PATH, header::RANGE, "bytes=7-"),
+    )
+    .await;
+    let multi = send(
+        &router,
+        with_header(Method::GET, PATH, header::RANGE, "bytes=0-0,2-3"),
+    )
+    .await;
+
+    assert_eq!(StatusCode::PARTIAL_CONTENT, tail.status);
+    assert_eq!("bytes 7-9/10", tail.headers[header::CONTENT_RANGE]);
+    assert_eq!(b"789".to_vec(), tail.body);
+    // 여러 구간은 지원하지 않으므로 전체를 보낸다(RFC 9110이 허용한다).
+    assert_eq!(StatusCode::OK, multi.status);
+    assert_eq!(b"0123456789".to_vec(), multi.body);
+    let requests = upstream.requests();
+    assert_eq!(1, requests.len(), "한 번 받아 캐시한다: {requests:?}");
+    assert!(!requests[0].contains("\r\nrange:"), "{}", requests[0]);
 }
 
 #[tokio::test]
