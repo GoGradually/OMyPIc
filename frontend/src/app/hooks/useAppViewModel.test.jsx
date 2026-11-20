@@ -125,3 +125,36 @@ describe('useAppViewModel retired TTS preference', () => {
         expect(JSON.parse(window.localStorage.getItem('omypic_pref_tts_model'))).toBe('local-kokoro')
     })
 })
+
+describe('useAppViewModel TTS models from an older backend', () => {
+    beforeEach(() => {
+        window.localStorage.clear()
+        global.fetch = vi.fn(async (url) => okJson(String(url).includes('/api/meta/models')
+            ? {
+                ttsModels: ['device-voice', 'gpt-4o-mini-tts', 'local-kokoro'],
+                defaultTtsModel: 'device-voice'
+            }
+            : []))
+        window.omypic = {
+            getBackendUrl: vi.fn(async () => 'http://backend'),
+            getApiKey: vi.fn(async () => null),
+            setApiKey: vi.fn(async () => true)
+        }
+    })
+
+    afterEach(() => {
+        cleanup()
+        delete window.omypic
+        window.localStorage.clear()
+        vi.restoreAllMocks()
+    })
+
+    it('never puts the retired device voice back into the selection or the options', async () => {
+        const {result} = renderHook(() => useAppViewModel())
+        await waitFor(() => expect(result.current.overlayContentProps.modelSettingsProps.ttsModelOptions).toContain('gpt-4o-mini-tts'))
+
+        expect(result.current.overlayContentProps.modelSettingsProps.ttsModelOptions).toEqual(['local-kokoro', 'gpt-4o-mini-tts'])
+        expect(result.current.overlayContentProps.modelSettingsProps.ttsModel).toBe('local-kokoro')
+        expect(JSON.parse(window.localStorage.getItem('omypic_pref_tts_model'))).toBe('local-kokoro')
+    })
+})

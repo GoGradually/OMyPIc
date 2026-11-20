@@ -47,7 +47,10 @@ const EMPTY_MODEL_META = {
 function normalizeModelMeta(meta = {}) {
     const feedbackModels = Array.isArray(meta.feedbackModels) ? meta.feedbackModels.filter(Boolean) : []
     const voiceSttModels = Array.isArray(meta.voiceSttModels) ? meta.voiceSttModels.filter(Boolean) : []
-    const ttsModels = Array.isArray(meta.ttsModels) ? meta.ttsModels.filter(Boolean) : []
+    // An older backend may still list or default to the retired device voice; it reads as its replacement.
+    const ttsModels = Array.isArray(meta.ttsModels)
+        ? [...new Set(meta.ttsModels.filter(Boolean).map(normalizeTtsModel))]
+        : []
     const voices = Array.isArray(meta.voices) ? meta.voices.filter(Boolean) : []
     const feedbackLanguages = Array.isArray(meta.feedbackLanguages) && meta.feedbackLanguages.length > 0
         ? meta.feedbackLanguages.filter(Boolean)
@@ -60,7 +63,7 @@ function normalizeModelMeta(meta = {}) {
         voiceSttModels,
         defaultVoiceSttModel: typeof meta.defaultVoiceSttModel === 'string' ? meta.defaultVoiceSttModel : '',
         ttsModels,
-        defaultTtsModel: typeof meta.defaultTtsModel === 'string' ? meta.defaultTtsModel : '',
+        defaultTtsModel: typeof meta.defaultTtsModel === 'string' ? normalizeTtsModel(meta.defaultTtsModel) : '',
         voices,
         defaultVoice: typeof meta.defaultVoice === 'string' ? meta.defaultVoice : '',
         feedbackLanguages,
