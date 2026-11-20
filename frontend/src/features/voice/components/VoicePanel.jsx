@@ -14,6 +14,7 @@ function stepState(index, activeIndex) {
 export function VoicePanel({
                                voiceConnected,
                                sessionActive,
+                               sessionStarting = false,
                                speechState,
                                partialTranscript,
                                startSession,
@@ -90,7 +91,7 @@ export function VoicePanel({
 
             <div className="voice-panel__actions">
                 <div className="button-group">
-                    <button className="action-button primary" onClick={startSession} disabled={sessionActive}>
+                    <button className="action-button primary" onClick={startSession} disabled={sessionActive || sessionStarting}>
                         세션 시작
                     </button>
                     <button className="action-button danger" onClick={stopSession} disabled={!sessionActive}>

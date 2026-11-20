@@ -247,6 +247,7 @@ export function useAppViewModel() {
 
     const {
         sessionActive,
+        sessionPhase,
         voiceConnected,
         speechState,
         partialTranscript,
@@ -635,6 +636,7 @@ export function useAppViewModel() {
         voicePanelProps: {
             voiceConnected,
             sessionActive,
+            sessionStarting: sessionPhase === 'STARTING',
             speechState,
             partialTranscript,
             startSession: handleStartSession,

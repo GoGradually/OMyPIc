@@ -77,6 +77,18 @@ describe('VoicePanel', () => {
         expect(onToggleAutoReplay).toHaveBeenCalledWith(false)
     })
 
+    it('disables Start while a session is starting', () => {
+        render(<VoicePanel {...buildProps({sessionStarting: true})} />)
+
+        expect(screen.getByRole('button', {name: '세션 시작'}).disabled).toBe(true)
+    })
+
+    it('enables Start when no session is running or starting', () => {
+        render(<VoicePanel {...buildProps()} />)
+
+        expect(screen.getByRole('button', {name: '세션 시작'}).disabled).toBe(false)
+    })
+
     it('locks the switch during a session and marks the active step', () => {
         render(<VoicePanel {...buildProps({
             sessionActive: true,

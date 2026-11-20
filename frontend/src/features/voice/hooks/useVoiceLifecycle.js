@@ -94,6 +94,9 @@ export function useVoiceLifecycle({
     const eventSourceRef = useRef(null)
 
     const sessionActiveRef = useRef(false)
+    // True while startSession runs (the models can take minutes to download), so a second press of
+    // Start does not open a second session.
+    const sessionStartingRef = useRef(false)
     const speechStateRef = useRef(SPEECH_STATE.IDLE)
     const localStopRef = useRef(false)
     const serverStopRef = useRef(false)
@@ -1266,7 +1269,7 @@ export function useVoiceLifecycle({
     }, [loadSpeechModel, setStatus])
 
     const startSession = useCallback(async () => {
-        if (sessionActiveRef.current) {
+        if (sessionActiveRef.current || sessionStartingRef.current) {
             return
         }
 
@@ -1276,6 +1279,7 @@ export function useVoiceLifecycle({
             return
         }
 
+        sessionStartingRef.current = true
         try {
             setSessionPhase('STARTING')
             localStopRef.current = false
@@ -1476,6 +1480,8 @@ export function useVoiceLifecycle({
             }
             refreshAudioDeviceStatus().catch(() => {
             })
+        } finally {
+            sessionStartingRef.current = false
         }
     }, [
         bindSessionEvents,

@@ -1922,6 +1922,33 @@ describe('useVoiceSession', () => {
         unmount()
     })
 
+    it('opens the session once when start is pressed again while the models load', async () => {
+        // One shared load, as the real client does for repeated calls.
+        let finishLoad
+        const load = new Promise((resolve) => {
+            finishLoad = resolve
+        })
+        loadLocalTts.mockImplementation(() => load)
+        const {result, unmount} = renderLocalSpeechSession({ttsModel: 'local-kokoro', feedbackLang: 'en'})
+
+        let first
+        let second
+        await act(async () => {
+            first = result.current.startSession()
+            second = result.current.startSession()
+        })
+        expect(result.current.sessionPhase).toBe('STARTING')
+        await act(async () => {
+            finishLoad()
+            await Promise.all([first, second])
+        })
+
+        expect(openVoiceSession).toHaveBeenCalledTimes(1)
+        expect(eventSourceInstances).toHaveLength(1)
+        expect(result.current.sessionActive).toBe(true)
+        unmount()
+    })
+
     it('does not load any voice model for hosted TTS', async () => {
         const {result, unmount} = renderLocalSpeechSession({ttsModel: 'gpt-4o-mini-tts'})
 
