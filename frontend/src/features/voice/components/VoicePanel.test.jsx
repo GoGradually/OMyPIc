@@ -85,6 +85,8 @@ describe('VoicePanel', () => {
         expect(screen.getByRole('button', {name: '세션 종료'}).disabled).toBe(false)
         fireEvent.click(screen.getByRole('button', {name: '세션 종료'}))
         expect(stopSession).toHaveBeenCalledTimes(1)
+        // The click event is not passed on as the stop options.
+        expect(stopSession).toHaveBeenCalledWith()
     })
 
     it('disables Stop when no session is running or starting', () => {

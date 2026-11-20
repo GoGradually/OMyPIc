@@ -96,7 +96,7 @@ export function VoicePanel({
                     <button className="action-button primary" onClick={startSession} disabled={sessionActive || sessionStarting}>
                         세션 시작
                     </button>
-                    <button className="action-button danger" onClick={stopSession} disabled={!sessionActive && !sessionStarting}>
+                    <button className="action-button danger" onClick={() => stopSession()} disabled={!sessionActive && !sessionStarting}>
                         세션 종료
                     </button>
                 </div>

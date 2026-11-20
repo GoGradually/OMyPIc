@@ -2152,6 +2152,38 @@ describe('useVoiceSession', () => {
         unmount()
     })
 
+    it('shows the server reason when the server stops the session while the start waits for the microphone', async () => {
+        const tracks = [{stop: vi.fn(), readyState: 'live', label: 'Mock Mic'}]
+        let grantMicrophone
+        navigator.mediaDevices.getUserMedia.mockImplementationOnce(() => new Promise((resolve) => {
+            grantMicrophone = () => resolve({getTracks: () => tracks, getAudioTracks: () => tracks})
+        }))
+        const onStatus = vi.fn()
+        const {result, unmount} = renderLocalSpeechSession({ttsModel: 'gpt-4o-mini-tts', onStatus})
+
+        let starting
+        await act(async () => {
+            starting = result.current.startSession()
+        })
+        await waitFor(() => expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalled())
+        await act(async () => {
+            activeEventSource.emit('session.stopped', {reason: 'server_shutdown'})
+        })
+        expect(result.current.sessionPhase).toBe('IDLE')
+        expect(onStatus).toHaveBeenLastCalledWith('세션이 서버에서 종료되었습니다.')
+        expect(onStatus).not.toHaveBeenCalledWith('세션 시작을 취소했습니다.')
+        // The server ended it; the client does not send a stop of its own.
+        expect(stopVoiceSession).not.toHaveBeenCalled()
+
+        await act(async () => {
+            grantMicrophone()
+            await starting
+        })
+        expect(tracks[0].stop).toHaveBeenCalled()
+        expect(result.current.sessionActive).toBe(false)
+        unmount()
+    })
+
     it('stops the question an abandoned start was already reading', async () => {
         const tracks = [{stop: vi.fn(), readyState: 'live', label: 'Mock Mic'}]
         let grantMicrophone

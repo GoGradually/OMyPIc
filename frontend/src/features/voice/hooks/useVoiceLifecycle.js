@@ -1014,7 +1014,10 @@ export function useVoiceLifecycle({
             setSessionPhase('IDLE')
             updateSpeechState(SPEECH_STATE.IDLE)
             if (statusMessage) {
-                setStatus('세션 시작을 취소했습니다.')
+                // Only the learner's Stop cancels the start; a stop from the server (or a failure)
+                // that arrives during the start keeps its own reason.
+                const cancelledByLearner = notifyServer && reason === 'user_stop'
+                setStatus(cancelledByLearner ? '세션 시작을 취소했습니다.' : statusMessage)
             }
             return
         }
