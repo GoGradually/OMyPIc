@@ -1,11 +1,7 @@
 // Runs Whisper on this device (WebAssembly) so answers can be transcribed without any API.
 // Lives in a worker because a transcription takes seconds and would freeze the UI otherwise.
 import {env, pipeline} from '@huggingface/transformers'
-// The ONNX Runtime binary is bundled with the app instead of being fetched from a CDN on first
-// run. It is imported from the copy @huggingface/transformers itself depends on, so it always
-// matches the runtime code inside that library.
-import ortFactoryUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.mjs?url'
-import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url'
+import {ortWasmPaths} from './ortWasm.js'
 
 const WHISPER_SAMPLE_RATE = 16000
 let transcriberPromise = null
@@ -22,10 +18,7 @@ function configure({modelHost, modelPathTemplate, backendHosted}) {
         env.remoteHost = modelHost
         env.remotePathTemplate = modelPathTemplate || '{model}/'
     }
-    env.backends.onnx.wasm.wasmPaths = {
-        mjs: new URL(ortFactoryUrl, self.location.href).href,
-        wasm: new URL(ortWasmUrl, self.location.href).href
-    }
+    env.backends.onnx.wasm.wasmPaths = ortWasmPaths(self.location.href)
 }
 
 function reportProgress(event) {

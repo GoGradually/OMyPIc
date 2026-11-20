@@ -1,9 +1,7 @@
 // Synthesizes Korean speech on this device (ONNX Runtime WebAssembly), so Korean feedback is read
 // by a Korean voice. No API is called. Messages are the same as localTtsWorker.js.
 import {env, pipeline} from '@huggingface/transformers'
-// Same bundled ONNX Runtime binary as the speech recognizer (see localSttWorker.js).
-import ortFactoryUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.mjs?url'
-import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url'
+import {ortWasmPaths} from './ortWasm.js'
 import {isVoiceFile} from './backendModelHost.js'
 
 let ttsPromise = null
@@ -21,10 +19,7 @@ function configure({modelHost, modelPathTemplate, backendHosted}) {
         env.remoteHost = modelHost
         env.remotePathTemplate = modelPathTemplate || '{model}/'
     }
-    env.backends.onnx.wasm.wasmPaths = {
-        mjs: new URL(ortFactoryUrl, self.location.href).href,
-        wasm: new URL(ortWasmUrl, self.location.href).href
-    }
+    env.backends.onnx.wasm.wasmPaths = ortWasmPaths(self.location.href)
 }
 
 // The library reports each file and the total; the total is what tells the learner how far along

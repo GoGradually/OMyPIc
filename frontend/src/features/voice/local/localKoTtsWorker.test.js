@@ -5,8 +5,6 @@ vi.mock('@huggingface/transformers', () => ({
     env: {backends: {onnx: {wasm: {}}}},
     pipeline: vi.fn(async () => vi.fn())
 }))
-vi.mock('onnxruntime-web/ort-wasm-simd-threaded.asyncify.mjs?url', () => ({default: '/ort.mjs'}))
-vi.mock('onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url', () => ({default: '/ort.wasm'}))
 
 const CONFIG = {
     model: 'onnx-community/Supertonic-TTS-2-ONNX',

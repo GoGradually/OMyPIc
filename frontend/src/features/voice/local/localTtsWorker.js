@@ -3,9 +3,7 @@
 import {env} from '@huggingface/transformers'
 import {KokoroTTS} from 'kokoro-js'
 import {dropBrokenVoiceCache, redirectHuggingFaceFetch} from './backendModelHost.js'
-// Same bundled ONNX Runtime binary as the speech recognizer (see localSttWorker.js).
-import ortFactoryUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.mjs?url'
-import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url'
+import {ortWasmPaths} from './ortWasm.js'
 
 let ttsPromise = null
 
@@ -22,10 +20,7 @@ function configure({modelHost, modelPathTemplate, backendHosted}) {
         env.remoteHost = modelHost
         env.remotePathTemplate = modelPathTemplate || '{model}/'
     }
-    env.backends.onnx.wasm.wasmPaths = {
-        mjs: new URL(ortFactoryUrl, self.location.href).href,
-        wasm: new URL(ortWasmUrl, self.location.href).href
-    }
+    env.backends.onnx.wasm.wasmPaths = ortWasmPaths(self.location.href)
 }
 
 function reportProgress(event) {

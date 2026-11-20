@@ -16,7 +16,7 @@
 - 환경: 컨테이너 CPU 4개(Intel Xeon 2.10GHz), GPU 없음. Playwright Chromium 157(헤드리스). 시간은 사용자 노트북과 다르므로 상대 비교로만 본다.
 - 앱과 같은 구성:
   - `@huggingface/transformers` 4.3.2, `onnxruntime-web` 1.31.0-dev(앱의 `frontend/node_modules`를 그대로 씀).
-  - Vite로 묶은 모듈 Worker 안에서 `pipeline('text-to-speech', 모델, {device: 'wasm', dtype})`. ONNX Runtime 파일(`ort-wasm-simd-threaded.asyncify.mjs/.wasm`)은 `localTtsWorker.js`처럼 `?url`로 묶어 로컬에서 제공했다(CDN 사용 안 함).
+  - Vite로 묶은 모듈 Worker 안에서 `pipeline('text-to-speech', 모델, {device: 'wasm', dtype})`. ONNX Runtime 파일은 `localTtsWorker.js`처럼 `?url`로 묶어 로컬에서 제공했다(CDN 사용 안 함). 시험 때는 Asyncify 빌드(`ort-wasm-simd-threaded.asyncify.mjs/.wasm`)였고, 앱은 지금 세 Worker 모두 일반 빌드(`ort-wasm-simd-threaded.mjs/.wasm`, `ortWasm.js`)를 쓴다. Asyncify는 WebGPU에만 필요하고, WebKit은 그 빌드를 컴파일하는 데 몇 분과 수 GB 메모리를 쓴다. 이 문서의 Chromium 측정값은 두 빌드에서 거의 같다.
   - `env.allowLocalModels = false`, `env.remoteHost = http://localhost:<port>/api/local-models/`, `env.useBrowserCache = false`. 모델 파일은 백엔드 경로 `/api/local-models/<org>/<name>/resolve/main/<file>`를 흉내 낸 작은 Node 서버가 디스크에서 내줬다(저장소 허용 목록도 흉내 냄). 즉 "모델 준비 시간"은 파일이 이미 백엔드 디스크에 있을 때, 새 브라우저에서 처음 불러오는 시간이다. 인터넷에서 내려받는 시간은 포함하지 않는다.
   - 앱처럼 COOP/COEP 헤더가 없어 `crossOriginIsolated = false`이고, 그래서 WASM은 스레드 1개로 돈다. 비교용으로 헤더를 켠 경우(스레드 2개)도 한 번 쟀다.
 - 합성 시간은 Worker 안에서 `tts(text, options)` 호출 전후를 잰 값. RTF = 합성 시간 / 음성 길이.
