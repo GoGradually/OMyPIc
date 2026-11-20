@@ -10,6 +10,10 @@ vi.mock('./localTts.js', () => ({
     synthesizeEnglish: vi.fn()
 }))
 
+vi.mock('../../../shared/api/http.js', () => ({
+    getBackendUrl: vi.fn(async () => 'http://localhost:4317')
+}))
+
 vi.mock('./localKoTts.js', () => ({
     isLocalKoTtsSupported: vi.fn(),
     getLocalKoTtsStatus: vi.fn(),
@@ -223,6 +227,51 @@ describe('local speech', () => {
         await flush()
         expect(synthesizeKorean).toHaveBeenCalledTimes(1)
         expect(loadLocalKoTts).toHaveBeenCalledTimes(1)
+    })
+
+    it('after the Korean worker crashes, a Korean sentence is skipped silently, English plays and the model loads again in the background', async () => {
+        // The real Korean client, with a worker that loads, crashes, and then takes its time to reload.
+        const actual = await vi.importActual('./localKoTts.js')
+        const loads = []
+        let crashed
+        vi.stubGlobal('Worker', class {
+            constructor() {
+                this.answersLoad = !crashed
+            }
+
+            postMessage(message) {
+                if (message.type === 'load') {
+                    loads.push(message)
+                }
+                if (this.answersLoad) {
+                    queueMicrotask(() => this.onmessage({data: {id: message.id, ok: true}}))
+                }
+                crashed = this
+            }
+
+            terminate() {}
+        })
+        isLocalKoTtsSupported.mockImplementation(actual.isLocalKoTtsSupported)
+        getLocalKoTtsStatus.mockImplementation(actual.getLocalKoTtsStatus)
+        loadLocalKoTts.mockImplementation(actual.loadLocalKoTts)
+        synthesizeKorean.mockImplementation(actual.synthesizeKorean)
+        try {
+            await actual.loadLocalKoTts()
+            crashed.onerror({message: 'out of memory'})
+            const onEnd = vi.fn()
+            const first = english('Nice work')
+            const second = korean('다음에는 이유를 말해 보세요')
+
+            speakLocally(`${first} ${second}`, {onEnd, allowKoreanModel: true})
+            await flush()
+
+            expect(synthesizeKorean).not.toHaveBeenCalled()
+            expect(loads).toHaveLength(2)
+            expect(await playAll()).toBe(1)
+            expect(onEnd).toHaveBeenCalledTimes(1)
+        } finally {
+            vi.unstubAllGlobals()
+        }
     })
 
     it('does not start a second load while the Korean model is loading', async () => {

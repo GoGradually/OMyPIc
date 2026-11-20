@@ -11,6 +11,8 @@ const KO_TTS_OPTIONS = {num_inference_steps: 5, speed: 1.05}
 let worker = null
 let nextRequestId = 0
 let loadPromise = null
+// The settings the current load was started with; every sentence is synthesized with the same ones.
+let loadedConfig = null
 // 'idle' (never asked), 'loading', 'ready' or 'failed' (the last load failed; the next call retries).
 let status = 'idle'
 const pending = new Map()
@@ -72,10 +74,13 @@ function handleMessage(event) {
     }
 }
 
+// A crashed worker takes the loaded model with it. The status says so, so the next Korean
+// sentence is shown without sound and starts a reload in the background instead of waiting.
 function failAll(message) {
     pending.forEach((request) => request.reject(new Error(message)))
     pending.clear()
     loadPromise = null
+    status = 'failed'
     if (worker) {
         worker.terminate?.()
         worker = null
@@ -113,7 +118,10 @@ export function loadLocalKoTts(onProgress) {
     }
     if (!loadPromise) {
         status = 'loading'
-        loadPromise = buildConfig().then((config) => request('load', {config})).then(() => {
+        loadPromise = buildConfig().then((config) => {
+            loadedConfig = config
+            return request('load', {config})
+        }).then(() => {
             status = 'ready'
         }, (error) => {
             loadPromise = null
@@ -134,6 +142,6 @@ export function loadLocalKoTts(onProgress) {
  */
 export async function synthesizeKorean(text) {
     await loadLocalKoTts()
-    const result = await request('synthesize', {config: await buildConfig(), text})
+    const result = await request('synthesize', {config: loadedConfig, text})
     return {samples: result.samples, sampleRate: result.sampleRate}
 }

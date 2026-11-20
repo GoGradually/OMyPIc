@@ -1,5 +1,6 @@
 /** @vitest-environment jsdom */
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
+import {getBackendUrl} from '../../../shared/api/http.js'
 
 vi.mock('../../../shared/api/http.js', () => ({
     getBackendUrl: vi.fn(async () => 'http://localhost:4317')
@@ -109,6 +110,22 @@ describe('local Korean tts', () => {
         expect(posted[1].payload.text).toBe('전반적으로 내용 전달은 좋았습니다.')
     })
 
+    it('builds the model settings once per load, not once per sentence', async () => {
+        respond = (message) => (message.type === 'synthesize'
+            ? {id: message.id, ok: true, samples: new Float32Array([0.1]), sampleRate: 44100}
+            : {id: message.id, ok: true})
+        const {synthesizeKorean} = await import('./localKoTts.js')
+        getBackendUrl.mockClear()
+
+        await synthesizeKorean('첫 번째 문장입니다.')
+        await synthesizeKorean('두 번째 문장입니다.')
+
+        expect(getBackendUrl).toHaveBeenCalledTimes(1)
+        expect(posted.map((message) => message.type)).toEqual(['load', 'synthesize', 'synthesize'])
+        expect(posted[1].payload.config).toEqual(posted[0].payload.config)
+        expect(posted[2].payload.config).toEqual(posted[0].payload.config)
+    })
+
     it('rejects with the worker error and loads again on the next call', async () => {
         respond = (message) => ({id: message.id, ok: false, message: 'HTTP 403 for config.json'})
         const {getLocalKoTtsStatus, loadLocalKoTts} = await import('./localKoTts.js')
@@ -121,6 +138,29 @@ describe('local Korean tts', () => {
 
         expect(posted).toHaveLength(2)
         expect(getLocalKoTtsStatus()).toBe('ready')
+    })
+
+    it('is no longer ready after its worker crashes', async () => {
+        let instance
+        vi.stubGlobal('Worker', class {
+            constructor() {
+                instance = this
+            }
+
+            postMessage(message) {
+                posted.push(message)
+                queueMicrotask(() => this.onmessage({data: {id: message.id, ok: true}}))
+            }
+
+            terminate() {}
+        })
+        const {getLocalKoTtsStatus, loadLocalKoTts} = await import('./localKoTts.js')
+        await loadLocalKoTts()
+        expect(getLocalKoTtsStatus()).toBe('ready')
+
+        instance.onerror({message: 'out of memory'})
+
+        expect(getLocalKoTtsStatus()).toBe('failed')
     })
 
     it('reports its state while it loads and shares one load between callers', async () => {
