@@ -71,6 +71,41 @@ describe('sentence boundaries', () => {
             .toEqual(['He said "Stop."', 'Then he left.', '(It was late.)', 'We went home.'])
     })
 
+    it('keeps a quoted span whole on a line without Hangul, and ends the sentence after it when a new one starts', () => {
+        expect(splitForSpeech('He said "Stop. Now." and left. Then he came back.'))
+            .toEqual(['He said "Stop. Now." and left.', 'Then he came back.'])
+        expect(splitForSpeech('She asked, “Are you sure? Really?” I nodded.'))
+            .toEqual(['She asked, “Are you sure? Really?”', 'I nodded.'])
+        expect(splitForSpeech("I don't know. She said 'Wait. Please.' and smiled."))
+            .toEqual(["I don't know.", "She said 'Wait. Please.' and smiled."])
+    })
+
+    it('keeps a long quoted span within the 220-character limit', () => {
+        const quote = Array.from({length: 30}, (_, index) => `Sentence ${index} is here.`).join(' ')
+        const chunks = splitForSpeech(`He read "${quote}" aloud.`)
+
+        expect(chunks.every((chunk) => chunk.length <= 220)).toBe(true)
+        expect(chunks.join(' ')).toBe(`He read "${quote}" aloud.`)
+    })
+
+    it('splits normally on a line without Hangul whose quote is never closed', () => {
+        expect(splitForSpeech('He said "Stop. Then he left.')).toEqual(['He said "Stop.', 'Then he left.'])
+    })
+
+    it('reads the quoted English start of a Korean sentence with it when the quote is never closed', () => {
+        expect(chunksOf('"I goed to the park. 대신 I went라고 해야 합니다. 다음 문장입니다.')).toEqual([
+            ['"I goed to the park. 대신 I went라고 해야 합니다.', 'ko-KR'],
+            ['다음 문장입니다.', 'ko-KR']
+        ])
+        expect(chunksOf('잘했어요. "Thank you.')).toEqual([['잘했어요. "Thank you.', 'ko-KR']])
+        // An English sentence of its own on a Korean line keeps the English voice.
+        expect(chunksOf('그는 "좋아요. I like it. 라고 했습니다.')).toEqual([
+            ['그는 "좋아요.', 'ko-KR'],
+            ['I like it.', 'en-US'],
+            ['라고 했습니다.', 'ko-KR']
+        ])
+    })
+
     it('never splits between two digits', () => {
         expect(chunksOf('전체 점수는 3.5점 정도이고 IH 수준입니다.')).toEqual([
             ['전체 점수는 3.5점 정도이고 IH 수준입니다.', 'ko-KR']
@@ -86,6 +121,11 @@ describe('sentence boundaries', () => {
             .toEqual(['I like tea, coffee, etc. and juice.', 'I live in the U.S. now.'])
         expect(splitForSpeech('I bought apples, pears, etc. Then I went home.'))
             .toEqual(['I bought apples, pears, etc.', 'Then I went home.'])
+    })
+
+    it('does not split after No. before a number', () => {
+        expect(splitForSpeech('It is No. 3 on the list. I said no. Then I left.'))
+            .toEqual(['It is No. 3 on the list.', 'I said no.', 'Then I left.'])
     })
 
     it('does not split inside a number, an address or a time', () => {
