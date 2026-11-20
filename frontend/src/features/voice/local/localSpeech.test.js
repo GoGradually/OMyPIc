@@ -626,6 +626,32 @@ describe('local speech', () => {
         expect(audioInstances.length).toBe(3)
     })
 
+    it('keeps about 32 MB of synthesized audio, dropping the least recently used first', async () => {
+        // 8 MB of samples per sentence: four fit, a fifth pushes out the one used longest ago.
+        synthesizeEnglish.mockImplementation(async () => ({samples: new Float32Array(2 * 1024 * 1024), sampleRate: ENGLISH_RATE}))
+        const sentences = Array.from({length: 5}, (_, index) => english(`Long sentence ${index}`))
+
+        for (const sentence of sentences.slice(0, 4)) {
+            await prepareLocalSpeech(sentence)
+        }
+        await flush()
+        // Reading the first again makes it the most recently used.
+        await prepareLocalSpeech(sentences[0])
+        await prepareLocalSpeech(sentences[4])
+        await flush()
+        expect(synthesizeEnglish).toHaveBeenCalledTimes(5)
+
+        await prepareLocalSpeech(sentences[0])
+        await prepareLocalSpeech(sentences[2])
+        await prepareLocalSpeech(sentences[4])
+        await flush()
+        expect(synthesizeEnglish).toHaveBeenCalledTimes(5)
+        await prepareLocalSpeech(sentences[1])
+        await flush()
+        expect(synthesizeEnglish).toHaveBeenCalledTimes(6)
+        expect(synthesizeEnglish).toHaveBeenLastCalledWith(sentences[1])
+    })
+
     it('reports preparing and ready around synthesis', async () => {
         const onNotice = vi.fn()
 

@@ -25,28 +25,58 @@ import {
 
 const KOREAN = 'ko-KR'
 const ENGLISH = 'en-US'
-const CACHE_LIMIT = 60
-// sentence -> {promise: Promise<{samples, sampleRate} | null>, settled}. Questions are read twice,
-// so the second pass and any sentence prepared ahead of time play without waiting.
+// Synthesized audio kept for reuse, in bytes of samples (about 3 minutes of Korean, 44.1 kHz float).
+const CACHE_BYTES = 32 * 1024 * 1024
+// sentence -> {promise: Promise<{samples, sampleRate} | null>, settled, bytes}, least recently used
+// first. Questions are read twice, so the second pass and any sentence prepared ahead of time play
+// without waiting. The cache is bounded by the size of its audio, not by a count: a long Korean
+// sentence is several MB.
 const synthesisCache = new Map()
+let cachedBytes = 0
+
+function dropFromCache(sentence) {
+    const entry = synthesisCache.get(sentence)
+    if (entry) {
+        cachedBytes -= entry.bytes
+        synthesisCache.delete(sentence)
+    }
+}
+
+function trimCache(keep) {
+    for (const [sentence, entry] of synthesisCache) {
+        if (cachedBytes <= CACHE_BYTES) {
+            return
+        }
+        if (entry !== keep) {
+            dropFromCache(sentence)
+        }
+    }
+}
 
 function synthesizeCached(sentence, synthesize) {
-    if (synthesisCache.has(sentence)) {
-        return synthesisCache.get(sentence)
+    const cached = synthesisCache.get(sentence)
+    if (cached) {
+        synthesisCache.delete(sentence)
+        synthesisCache.set(sentence, cached)
+        return cached
     }
-    const entry = {settled: false, promise: null}
-    entry.promise = synthesize(sentence).catch(() => {
+    const entry = {settled: false, bytes: 0, promise: null}
+    entry.promise = synthesize(sentence).then((audio) => {
         if (synthesisCache.get(sentence) === entry) {
-            synthesisCache.delete(sentence)
+            entry.bytes = audio?.samples?.byteLength || 0
+            cachedBytes += entry.bytes
+            trimCache(entry)
+        }
+        return audio
+    }).catch(() => {
+        if (synthesisCache.get(sentence) === entry) {
+            dropFromCache(sentence)
         }
         return null
     }).finally(() => {
         entry.settled = true
     })
     synthesisCache.set(sentence, entry)
-    if (synthesisCache.size > CACHE_LIMIT) {
-        synthesisCache.delete(synthesisCache.keys().next().value)
-    }
     return entry
 }
 
@@ -139,7 +169,7 @@ export async function prepareLocalSpeech(text, {allowKoreanModel = false} = {}) 
 export function cancelLocalSpeech() {
     for (const [sentence, entry] of synthesisCache) {
         if (!entry.settled) {
-            synthesisCache.delete(sentence)
+            dropFromCache(sentence)
         }
     }
     cancelQueuedEnglishSynthesis()
