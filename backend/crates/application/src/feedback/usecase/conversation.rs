@@ -32,7 +32,7 @@ impl FeedbackUseCase {
             ));
         }
         let state = self.session_state(command)?;
-        if lock_session(&state)?.is_llm_bootstrapped() {
+        if lock_session(&state).is_llm_bootstrapped() {
             return Ok(());
         }
         let provider = FeedbackModelPolicy::normalize_provider(command.provider.as_deref())?;
@@ -42,9 +42,9 @@ impl FeedbackUseCase {
         }
         let language = self::feedback_language(feedback_language);
         let system_prompt = build_system_prompt(language.value(), &[]);
-        let current = lock_session(&state)?.conversation_state();
+        let current = lock_session(&state).conversation_state();
         let next = client.bootstrap(api_key, command_model(command), &system_prompt, &current)?;
-        let mut session = lock_session(&state)?;
+        let mut session = lock_session(&state);
         session.update_conversation_state(&next);
         session.mark_llm_bootstrapped();
         Ok(())
@@ -59,7 +59,7 @@ impl FeedbackUseCase {
         if client.is_stateless() {
             return Ok(());
         }
-        let mut session = lock_session(state)?;
+        let mut session = lock_session(state);
         if session.should_rebase_conversation(self.conversation_rebase_turns) {
             if session.is_llm_bootstrapped() {
                 session.reset_conversation_state_keeping(false);
@@ -93,7 +93,7 @@ impl FeedbackUseCase {
             );
         }
         let (conversation_state, bootstrapped_before_request) = {
-            let session = lock_session(state)?;
+            let session = lock_session(state);
             (session.conversation_state(), session.is_llm_bootstrapped())
         };
         let request_system_prompt = if bootstrapped_before_request {
@@ -116,18 +116,18 @@ impl FeedbackUseCase {
             return Err(first);
         }
         let reset_state = {
-            let mut session = lock_session(state)?;
+            let mut session = lock_session(state);
             session.reset_conversation_state();
             session.conversation_state()
         };
         if bootstrapped_before_request {
             let next = client.bootstrap(api_key, model, turn.system_prompt, &reset_state)?;
-            let mut session = lock_session(state)?;
+            let mut session = lock_session(state);
             session.update_conversation_state(&next);
             session.mark_llm_bootstrapped();
         }
         let (retry_state, bootstrapped) = {
-            let session = lock_session(state)?;
+            let session = lock_session(state);
             (session.conversation_state(), session.is_llm_bootstrapped())
         };
         client.generate(

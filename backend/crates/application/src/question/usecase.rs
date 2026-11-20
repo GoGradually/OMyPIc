@@ -119,12 +119,10 @@ impl QuestionUseCase {
         let session = self
             .session_store
             .get_or_create(&SessionId::of(session_id)?)?;
-        let response = {
-            let mut session = lock_session(&session)?;
-            validate_selected_group_tags(&session)?;
-            let groups_by_id = self.map_groups_by_id()?;
-            select_next_question(&mut session, &groups_by_id)
-        };
+        validate_selected_group_tags(&lock_session(&session))?;
+        // 세션 잠금을 쥔 채로 DB를 읽지 않는다(같은 세션의 다른 요청이 DB를 기다리게 된다).
+        let groups_by_id = self.map_groups_by_id()?;
+        let response = select_next_question(&mut lock_session(&session), &groups_by_id);
         self.metrics.record_question_next_latency(start.elapsed());
         Ok(response)
     }
@@ -194,6 +192,7 @@ fn try_select_question(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::question::port::QuestionGroupPort;
     use crate::test_support::{
         InMemoryQuestionGroupPort, InMemorySessionStorePort, RecordingMetrics,
     };
@@ -201,6 +200,7 @@ mod tests {
     use omypic_domain::error::AppError;
     use omypic_domain::question::{QuestionGroupId, QuestionItem, QuestionItemId};
     use omypic_domain::session::{SessionId, SessionState};
+    use std::sync::Mutex;
 
     struct Fixture {
         repository: Arc<InMemoryQuestionGroupPort>,
@@ -334,5 +334,66 @@ mod tests {
         let error = f.use_case.next_question("s2").unwrap_err();
 
         assert!(matches!(error, AppError::InvalidState(_)));
+    }
+
+    /// 질문 그룹을 읽는 동안 세션 상태가 잠겨 있었는지 적는 저장소.
+    struct LockProbePort {
+        inner: Arc<InMemoryQuestionGroupPort>,
+        session: Mutex<Option<crate::session::port::SharedSessionState>>,
+        locked_during_read: Mutex<Vec<bool>>,
+    }
+
+    impl QuestionGroupPort for LockProbePort {
+        fn find_all(&self) -> AppResult<Vec<QuestionGroupAggregate>> {
+            if let Some(session) = self.session.lock().unwrap().as_ref() {
+                self.locked_during_read
+                    .lock()
+                    .unwrap()
+                    .push(session.try_lock().is_err());
+            }
+            self.inner.find_all()
+        }
+        fn find_all_by_id(
+            &self,
+            ids: &[QuestionGroupId],
+        ) -> AppResult<Vec<QuestionGroupAggregate>> {
+            self.inner.find_all_by_id(ids)
+        }
+        fn find_by_id(&self, id: &QuestionGroupId) -> AppResult<Option<QuestionGroupAggregate>> {
+            self.inner.find_by_id(id)
+        }
+        fn save(&self, group: QuestionGroupAggregate) -> AppResult<QuestionGroupAggregate> {
+            self.inner.save(group)
+        }
+        fn delete_by_id(&self, id: &QuestionGroupId) -> AppResult<()> {
+            self.inner.delete_by_id(id)
+        }
+        fn delete_all(&self) -> AppResult<()> {
+            self.inner.delete_all()
+        }
+    }
+
+    #[test]
+    fn next_question_does_not_hold_the_session_lock_while_reading_groups() {
+        let g1 = group("g1", "Travel", &["travel"], vec![item("q1", "Q1", None)]);
+        let port = Arc::new(LockProbePort {
+            inner: Arc::new(InMemoryQuestionGroupPort::with_groups(vec![g1])),
+            session: Mutex::new(None),
+            locked_during_read: Mutex::new(Vec::new()),
+        });
+        let session_store = Arc::new(InMemorySessionStorePort::new());
+        let use_case = QuestionUseCase::new(
+            port.clone(),
+            session_store.clone(),
+            Arc::new(RecordingMetrics::new()),
+        );
+        let mut state = SessionState::new(SessionId::of("s1").unwrap());
+        state.configure_question_groups(["travel"], ["g1"]);
+        *port.session.lock().unwrap() = Some(session_store.insert(state));
+
+        let first = use_case.next_question("s1").unwrap();
+
+        assert_eq!(Some("q1".to_string()), first.question_id);
+        assert_eq!(vec![false], *port.locked_during_read.lock().unwrap());
     }
 }

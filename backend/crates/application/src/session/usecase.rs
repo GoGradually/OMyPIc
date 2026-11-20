@@ -34,7 +34,7 @@ impl SessionUseCase {
     /// 모드와 질문 그룹 태그를 적용한다. 모드 변경은 태그 검증보다 먼저 적용된다(Java와 같다).
     pub fn update_mode(&self, command: &ModeUpdateCommand) -> AppResult<SharedSessionState> {
         let state = self.get_or_create(&command.session_id)?;
-        lock_session(&state)?.apply_mode_update(command.mode, command.continuous_batch_size);
+        lock_session(&state).apply_mode_update(command.mode, command.continuous_batch_size);
         let selected_tags = normalize_tags(&command.selected_group_tags);
         if selected_tags.is_empty() {
             return Err(AppError::InvalidGroupTags {
@@ -45,13 +45,13 @@ impl SessionUseCase {
         let all_groups = self.question_group_port.find_all()?;
         validate_selected_tags(&selected_tags, &all_groups)?;
         let candidate_group_ids = shuffled_candidate_group_ids(&all_groups, &selected_tags);
-        lock_session(&state)?.configure_question_groups(&selected_tags, &candidate_group_ids);
+        lock_session(&state).configure_question_groups(&selected_tags, &candidate_group_ids);
         Ok(state)
     }
 
     pub fn append_segment(&self, session_id: &str, text: &str) -> AppResult<()> {
         let state = self.get_or_create(session_id)?;
-        lock_session(&state)?.append_segment(text);
+        lock_session(&state).append_segment(text);
         Ok(())
     }
 }

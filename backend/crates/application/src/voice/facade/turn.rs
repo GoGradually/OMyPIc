@@ -116,7 +116,7 @@ impl VoiceSessionFacade {
                 .deps
                 .session_use_case
                 .get_or_create(&context.session_id)?;
-            let mode = lock_session(&state)?.mode();
+            let mode = lock_session(&state).mode();
             self.advance_without_feedback(context, mode, snapshot.turn_id)
         }));
         context.finish_turn_processing();
@@ -219,7 +219,7 @@ impl VoiceSessionFacade {
             .session_use_case
             .get_or_create(&context.session_id)?;
         let mode = {
-            let mut session = lock_session(&state)?;
+            let mut session = lock_session(&state);
             let mode = session.mode();
             session
                 .set_feedback_language(FeedbackLanguage::of(&context.settings.feedback_language));
@@ -389,7 +389,7 @@ impl VoiceSessionFacade {
         }
         let completed_group = is_continuous_group_completed(&turn_input, next_question, exhausted);
         context.append_continuous_turn(turn_input);
-        let decision = lock_session(state)?.decide_feedback_batch_on_turn(completed_group);
+        let decision = lock_session(state).decide_feedback_batch_on_turn(completed_group);
         let inputs = if decision.emit_feedback() {
             context.poll_all_continuous_turns()
         } else {
@@ -458,7 +458,7 @@ impl VoiceSessionFacade {
         exhausted: bool,
         emitted_feedback: bool,
     ) -> AppResult<()> {
-        if !lock_session(state)?
+        if !lock_session(state)
             .should_generate_residual_continuous_feedback(exhausted, emitted_feedback)
         {
             return Ok(());
@@ -572,7 +572,7 @@ fn turn_panic_error(
 
 fn group_batch_size(mode: ModeType, state: &SharedSessionState) -> AppResult<i32> {
     if mode == ModeType::Continuous {
-        return Ok(lock_session(state)?.continuous_batch_size());
+        return Ok(lock_session(state).continuous_batch_size());
     }
     Ok(1)
 }

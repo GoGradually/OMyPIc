@@ -288,7 +288,7 @@ impl VoiceSessionFacade {
             .deps
             .question_use_case
             .next_question(&context.session_id)?;
-        let mode = lock_session(&state)?.mode();
+        let mode = lock_session(&state).mode();
         let exhausted = is_question_exhausted(&next_question);
         let turn_id = if exhausted { 0 } else { context.next_turn_id() };
         context.emit(

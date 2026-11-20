@@ -136,7 +136,7 @@ impl FeedbackUseCase {
         let state = self.session_state(command)?;
         let language = feedback_language(command.feedback_language.as_deref());
         let input_text = {
-            let mut session = lock_session(&state)?;
+            let mut session = lock_session(&state);
             session.set_feedback_language(language.clone());
             if !session.should_generate_feedback() {
                 return Ok(FeedbackResult::skipped());
@@ -309,7 +309,7 @@ impl FeedbackUseCase {
         turn: &TurnRequest<'_>,
         start: Instant,
     ) -> AppResult<Feedback> {
-        let prompt_context = lock_session(state)?.build_prompt_context();
+        let prompt_context = lock_session(state).build_prompt_context();
         let generated = self.generate_with_conversation_recovery(
             client,
             api_key,
@@ -347,7 +347,7 @@ impl FeedbackUseCase {
             normalized.rulebook_evidence(),
         );
         {
-            let mut session = lock_session(state)?;
+            let mut session = lock_session(state);
             if !client.is_stateless() {
                 session.update_conversation_state(&generated.conversation_state);
             }
