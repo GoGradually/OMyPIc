@@ -184,6 +184,80 @@ describe('local speech', () => {
         expect([firstRate, secondRate]).toEqual([KOREAN_RATE, ENGLISH_RATE])
     })
 
+    it('plays the first sentence while later ones are still being synthesized', async () => {
+        const first = english('Read me first')
+        const second = korean('두 번째 문장')
+        const third = english('Read me third')
+        const releases = {}
+        synthesizeEnglish.mockImplementation((text) => (text === first
+            ? Promise.resolve({samples: new Float32Array([0.5]), sampleRate: ENGLISH_RATE})
+            : new Promise((resolve) => {
+                releases.english = () => resolve({samples: new Float32Array([0.5]), sampleRate: ENGLISH_RATE})
+            })))
+        synthesizeKorean.mockImplementation(() => new Promise((resolve) => {
+            releases.korean = () => resolve({samples: new Float32Array([0.25]), sampleRate: KOREAN_RATE})
+        }))
+        const onNotice = vi.fn()
+        const onEnd = vi.fn()
+
+        speakLocally(`${first} ${second} ${third}`, {onNotice, onEnd})
+        await flush()
+
+        // Every sentence was sent for synthesis at once, and the first one plays already.
+        expect(synthesizeEnglish).toHaveBeenCalledTimes(2)
+        expect(synthesizeKorean).toHaveBeenCalledTimes(1)
+        expect(audioInstances.length).toBe(1)
+        expect(onNotice.mock.calls.map(([notice]) => notice)).toEqual(['preparing', 'ready'])
+
+        // The next one is not ready when the first ends: the learner is told it is being prepared.
+        audioInstances[0].onended()
+        await flush()
+        expect(audioInstances.length).toBe(1)
+        expect(onNotice.mock.calls.map(([notice]) => notice)).toEqual(['preparing', 'ready', 'preparing'])
+
+        // The third is ready before the second, but waits for it.
+        releases.english()
+        await flush()
+        expect(audioInstances.length).toBe(1)
+        releases.korean()
+        await flush()
+        expect(audioInstances.length).toBe(2)
+        audioInstances[1].onended()
+        await flush()
+        expect(audioInstances.length).toBe(3)
+        audioInstances[2].onended()
+        await flush()
+
+        expect(onNotice.mock.calls.map(([notice]) => notice)).toEqual(['preparing', 'ready', 'preparing', 'ready'])
+        const rates = await Promise.all(playedWavs.map(async (blob) => new DataView(await blob.arrayBuffer()).getUint32(24, true)))
+        expect(rates).toEqual([ENGLISH_RATE, KOREAN_RATE, ENGLISH_RATE])
+        expect(onEnd).toHaveBeenCalledTimes(1)
+    })
+
+    it('stop() while waiting for a later sentence prevents its playback', async () => {
+        const first = english('Played before stop')
+        let releaseSecond
+        synthesizeEnglish.mockImplementation((text) => (text === first
+            ? Promise.resolve({samples: new Float32Array([0.5]), sampleRate: ENGLISH_RATE})
+            : new Promise((resolve) => {
+                releaseSecond = () => resolve({samples: new Float32Array([0.5]), sampleRate: ENGLISH_RATE})
+            })))
+        const onEnd = vi.fn()
+        const onUnavailable = vi.fn()
+
+        const stop = speakLocally(`${first} ${english('Never played')}`, {onEnd, onUnavailable})
+        await flush()
+        audioInstances[0].onended()
+        await flush()
+        stop()
+        releaseSecond()
+        await flush()
+
+        expect(audioInstances.length).toBe(1)
+        expect(onEnd).not.toHaveBeenCalled()
+        expect(onUnavailable).not.toHaveBeenCalled()
+    })
+
     it('Korean sentence is skipped silently when the Korean model fails to load and English still plays', async () => {
         getLocalKoTtsStatus.mockReturnValue('failed')
         const onEnd = vi.fn()

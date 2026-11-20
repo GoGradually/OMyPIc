@@ -12,23 +12,28 @@ import {getLocalKoTtsStatus, isLocalKoTtsSupported, loadLocalKoTts, synthesizeKo
 const KOREAN = 'ko-KR'
 const ENGLISH = 'en-US'
 const CACHE_LIMIT = 60
-// sentence -> Promise<{samples, sampleRate} | null>. Questions are read twice, so the second
-// pass and any sentence prepared ahead of time play without waiting.
+// sentence -> {promise: Promise<{samples, sampleRate} | null>, settled}. Questions are read twice,
+// so the second pass and any sentence prepared ahead of time play without waiting.
 const synthesisCache = new Map()
 
 function synthesizeCached(sentence, synthesize) {
     if (synthesisCache.has(sentence)) {
         return synthesisCache.get(sentence)
     }
-    const pending = synthesize(sentence).catch(() => {
-        synthesisCache.delete(sentence)
+    const entry = {settled: false, promise: null}
+    entry.promise = synthesize(sentence).catch(() => {
+        if (synthesisCache.get(sentence) === entry) {
+            synthesisCache.delete(sentence)
+        }
         return null
+    }).finally(() => {
+        entry.settled = true
     })
-    synthesisCache.set(sentence, pending)
+    synthesisCache.set(sentence, entry)
     if (synthesisCache.size > CACHE_LIMIT) {
         synthesisCache.delete(synthesisCache.keys().next().value)
     }
-    return pending
+    return entry
 }
 
 // The Korean model is used only once it is ready. A Korean sentence that comes before that (the
@@ -131,9 +136,9 @@ function playSamples(audio) {
 
 /**
  * Speaks the text and calls onEnd when it is done, or onUnavailable when nothing that should have
- * been heard could be played. onNotice reports 'preparing' (waiting for synthesis), 'ready'
- * (synthesis done, playback starts) and 'korean-unavailable' (Korean sentences shown without
- * sound because the Korean model is not ready). allowKoreanModel lets a Korean sentence start the
+ * been heard could be played. onNotice reports 'preparing' (waiting for the next sentence's
+ * synthesis), 'ready' (it plays) and 'korean-unavailable' (Korean sentences shown without sound
+ * because the Korean model is not ready); 'preparing' and 'ready' can alternate in a long text. allowKoreanModel lets a Korean sentence start the
  * Korean model download; it is true only in a session with Korean feedback. Returns a function
  * that stops it silently.
  */
@@ -146,25 +151,35 @@ export function speakLocally(text, {onEnd, onUnavailable, onNotice, allowKoreanM
         if (plan.some((step) => step.lang === KOREAN && !step.synthesize)) {
             onNotice?.('korean-unavailable')
         }
-        // The whole text is synthesized before it starts, so it plays without pauses between its
-        // sentences and always in sentence order, whichever model finishes first.
-        const modelSteps = plan.filter((step) => step.synthesize)
-        if (modelSteps.length > 0) {
-            onNotice?.('preparing')
-            const audios = await Promise.all(modelSteps.map((step) => synthesizeCached(step.sentence, step.synthesize)))
-            if (cancelled) {
-                return
+        // Every sentence starts synthesizing at once, and each one plays, in sentence order, as
+        // soon as it is ready and the one before it has ended, whichever model finishes first.
+        const entries = plan.map((step) => (step.synthesize ? synthesizeCached(step.sentence, step.synthesize) : null))
+        let notice = null
+        const report = (next) => {
+            if (notice !== next) {
+                notice = next
+                onNotice?.(next)
             }
-            modelSteps.forEach((step, index) => {
-                step.audio = audios[index]
-            })
-            onNotice?.('ready')
         }
 
         let spoken = 0
-        for (const step of plan) {
-            active = step.audio ? playSamples(step.audio) : null
-            if (active && await active.done) {
+        for (const entry of entries) {
+            if (!entry) {
+                continue
+            }
+            if (!entry.settled) {
+                report('preparing')
+            }
+            const audio = await entry.promise
+            if (cancelled) {
+                return
+            }
+            if (!audio) {
+                continue
+            }
+            report('ready')
+            active = playSamples(audio)
+            if (await active.done) {
                 spoken += 1
             }
             if (cancelled) {
