@@ -758,6 +758,44 @@ describe('useVoiceSession', () => {
         vi.useRealTimers()
     })
 
+    it('does not open an event stream for a session stopped while the reconnect waited for the server', async () => {
+        vi.useFakeTimers()
+        try {
+            let answerRecovery
+            recoverVoiceSession.mockImplementationOnce(() => new Promise((resolve) => {
+                answerRecovery = () => resolve(createRecoverySnapshot())
+            }))
+            const onStatus = vi.fn()
+            const {result, unmount} = renderLocalSpeechSession({ttsModel: 'gpt-4o-mini-tts', onStatus})
+            await act(async () => {
+                await result.current.startSession()
+            })
+            act(() => {
+                activeEventSource.emitError()
+            })
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(500)
+            })
+            expect(recoverVoiceSession).toHaveBeenCalledTimes(1)
+            const sourcesBefore = eventSourceInstances.length
+
+            await act(async () => {
+                await result.current.stopSession()
+            })
+            await act(async () => {
+                answerRecovery()
+                await vi.advanceTimersByTimeAsync(5000)
+            })
+
+            expect(eventSourceInstances).toHaveLength(sourcesBefore)
+            expect(onStatus).not.toHaveBeenCalledWith('음성 이벤트 연결이 복구되었습니다.')
+            expect(result.current.voiceConnected).toBe(false)
+            unmount()
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
     it('syncs from recovery snapshot before reconnecting event stream', async () => {
         vi.useFakeTimers()
         const onStatus = vi.fn()

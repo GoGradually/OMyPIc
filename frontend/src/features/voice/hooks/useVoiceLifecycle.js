@@ -1178,9 +1178,19 @@ export function useVoiceLifecycle({
                     reconnectingRef.current = false
                     return
                 }
+                // The learner or the server can stop the session while this waits for the server;
+                // then nothing more is done for it (above all, no event stream is opened again).
+                const stillCurrent = () => sessionActiveRef.current
+                    && voiceSessionIdRef.current === voiceSessionId
+                    && !localStopRef.current
+                    && !serverStopRef.current
                 try {
                     enterRecoveringState()
                     const snapshot = await recoverVoiceSession(voiceSessionId, lastSeenEventIdRef.current)
+                    if (!stillCurrent()) {
+                        reconnectingRef.current = false
+                        return
+                    }
                     replayTtsCutoffEventIdRef.current = Number.isFinite(snapshot?.latestEventId)
                         ? Math.max(0, Number(snapshot.latestEventId))
                         : 0
@@ -1203,6 +1213,10 @@ export function useVoiceLifecycle({
                         ? Math.max(0, Number(snapshot.replayFromEventId))
                         : lastSeenEventIdRef.current
                     const eventsUrl = await getVoiceEventsUrl(voiceSessionId, replayFromEventId)
+                    if (!stillCurrent()) {
+                        reconnectingRef.current = false
+                        return
+                    }
                     closeEventSource()
                     const eventSource = new EventSource(eventsUrl)
                     eventSourceRef.current = eventSource
@@ -1421,6 +1435,7 @@ export function useVoiceLifecycle({
                 // Stop already closed the voice session it found.
                 return
             }
+            closeEventSource()
             const eventSource = new EventSource(eventsUrl)
             eventSourceRef.current = eventSource
             bindSessionEvents(eventSource)
