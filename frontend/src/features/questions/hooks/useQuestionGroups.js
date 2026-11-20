@@ -10,7 +10,8 @@ export function useQuestionGroups({
 
     const learningMode = useLearningMode({sessionId, onStatus})
     const questionManager = useQuestionManager({
-        onGroupsRefreshed: learningMode.refreshTagStats
+        onGroupsRefreshed: learningMode.refreshTagStats,
+        onError: onStatus
     })
 
     const deleteGroup = useCallback(async (groupId) => {

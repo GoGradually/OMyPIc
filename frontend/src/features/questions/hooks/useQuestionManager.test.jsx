@@ -110,3 +110,49 @@ describe('useQuestionManager', () => {
         expect(callApi).toHaveBeenNthCalledWith(1, '/api/question-groups/g2', {method: 'DELETE'})
     })
 })
+
+describe('useQuestionManager failures', () => {
+    beforeEach(() => {
+        vi.clearAllMocks()
+    })
+
+    it('reports a refused question instead of failing silently', async () => {
+        const onError = vi.fn()
+        callApi.mockRejectedValueOnce(new Error('Question group can contain up to 3 questions'))
+        const {result} = renderHook(() => useQuestionManager({onError}))
+        act(() => {
+            result.current.setActiveGroupId('g1')
+            result.current.setNewQuestion('A fourth question?')
+        })
+
+        await act(async () => {
+            await result.current.addQuestion()
+        })
+
+        expect(onError).toHaveBeenCalledWith('질문 추가에 실패했습니다: Question group can contain up to 3 questions')
+        // The text stays in the box so the learner can put it somewhere else.
+        expect(result.current.newQuestion).toBe('A fourth question?')
+    })
+
+    it('reports a failed group change the same way', async () => {
+        const onError = vi.fn()
+        callApi.mockRejectedValue(new Error('Group tags are required'))
+        const {result} = renderHook(() => useQuestionManager({onError}))
+        act(() => {
+            result.current.openCreateGroupModal()
+            result.current.setNewGroupName('여행')
+        })
+
+        await act(async () => {
+            await result.current.createGroup()
+        })
+        await act(async () => {
+            await result.current.deleteGroup('g1')
+        })
+
+        expect(onError.mock.calls.map(([message]) => message)).toEqual([
+            '질문 그룹 추가에 실패했습니다: Group tags are required',
+            '질문 그룹 삭제에 실패했습니다: Group tags are required'
+        ])
+    })
+})

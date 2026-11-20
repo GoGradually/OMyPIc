@@ -13,7 +13,24 @@ function parseTagInput(rawInput) {
     )]
 }
 
-export function useQuestionManager({onGroupsRefreshed} = {}) {
+// Runs one change (create, edit, delete). A refusal from the backend (for example a fourth question
+// in a group) or a network failure is told to onError instead of being lost as an unhandled
+// rejection. Without onError the failure is thrown as before.
+function reportingFailures(action, label, onError) {
+    return async (...args) => {
+        try {
+            return await action(...args)
+        } catch (error) {
+            if (!onError) {
+                throw error
+            }
+            onError(`${label}에 실패했습니다: ${error?.message || '알 수 없는 오류'}`)
+            return undefined
+        }
+    }
+}
+
+export function useQuestionManager({onGroupsRefreshed, onError} = {}) {
     const [questionGroups, setQuestionGroups] = useState([])
     const [activeGroupId, setActiveGroupId] = useState('')
     const [isCreateGroupModalOpen, setIsCreateGroupModalOpen] = useState(false)
@@ -194,6 +211,16 @@ export function useQuestionManager({onGroupsRefreshed} = {}) {
         cancelEditQuestion()
     }, [activeGroupId, cancelEditQuestion])
 
+    // What the screens call: a failure reaches the status bar.
+    const guarded = useMemo(() => ({
+        createGroup: reportingFailures(createGroup, '질문 그룹 추가', onError),
+        deleteGroup: reportingFailures(deleteGroup, '질문 그룹 삭제', onError),
+        saveEditedGroup: reportingFailures(saveEditedGroup, '질문 그룹 수정', onError),
+        addQuestion: reportingFailures(addQuestion, '질문 추가', onError),
+        saveEditedQuestion: reportingFailures(saveEditedQuestion, '질문 수정', onError),
+        removeQuestion: reportingFailures(removeQuestion, '질문 삭제', onError)
+    }), [createGroup, deleteGroup, saveEditedGroup, addQuestion, saveEditedQuestion, removeQuestion, onError])
+
     return {
         questionGroups,
         activeGroupId,
@@ -221,15 +248,15 @@ export function useQuestionManager({onGroupsRefreshed} = {}) {
         refreshQuestionGroups,
         openCreateGroupModal,
         closeCreateGroupModal,
-        createGroup,
+        createGroup: guarded.createGroup,
         openEditGroupModal,
         closeEditGroupModal,
-        deleteGroup,
-        saveEditedGroup,
-        addQuestion,
+        deleteGroup: guarded.deleteGroup,
+        saveEditedGroup: guarded.saveEditedGroup,
+        addQuestion: guarded.addQuestion,
         startEditQuestion,
         cancelEditQuestion,
-        saveEditedQuestion,
-        removeQuestion
+        saveEditedQuestion: guarded.saveEditedQuestion,
+        removeQuestion: guarded.removeQuestion
     }
 }
