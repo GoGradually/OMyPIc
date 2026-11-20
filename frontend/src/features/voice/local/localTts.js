@@ -7,6 +7,9 @@ const DEFAULT_VOICE = 'af_heart'
 let worker = null
 let nextRequestId = 0
 let loadPromise = null
+// 'idle' (never asked), 'loading', 'ready' or 'failed' (the last load failed or the worker crashed;
+// the next call retries). Same meaning as the Korean client's status.
+let status = 'idle'
 const pending = new Map()
 const progressListeners = new Set()
 
@@ -31,6 +34,11 @@ export function isLocalTtsSupported() {
     return typeof Worker !== 'undefined' && typeof WebAssembly !== 'undefined'
 }
 
+/** 'idle', 'loading', 'ready' or 'failed'. */
+export function getLocalTtsStatus() {
+    return status
+}
+
 function handleMessage(event) {
     const data = event.data || {}
     if (data.type === 'progress') {
@@ -51,12 +59,15 @@ function handleMessage(event) {
     }
 }
 
+// A crashed worker takes the loaded model with it, so English sentences are shown without sound
+// until a reload (started in the background by the next English sentence) is done.
 function failAll(message) {
     pending.forEach((request) => request.reject(new Error(message)))
     pending.clear()
     loadPromise = null
+    status = 'failed'
     if (worker) {
-        worker.terminate()
+        worker.terminate?.()
         worker = null
     }
 }
@@ -84,14 +95,19 @@ function request(type, payload) {
  */
 export function loadLocalTts(onProgress) {
     if (!isLocalTtsSupported()) {
+        status = 'failed'
         return Promise.reject(new Error('이 환경에서는 로컬 음성 합성을 실행할 수 없습니다.'))
     }
     if (onProgress) {
         progressListeners.add(onProgress)
     }
     if (!loadPromise) {
-        loadPromise = buildConfig().then((config) => request('load', {config})).catch((error) => {
+        status = 'loading'
+        loadPromise = buildConfig().then((config) => request('load', {config})).then(() => {
+            status = 'ready'
+        }, (error) => {
             loadPromise = null
+            status = 'failed'
             throw error
         })
     }

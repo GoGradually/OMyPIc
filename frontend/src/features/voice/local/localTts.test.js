@@ -101,6 +101,60 @@ describe('local tts synthesis', () => {
     })
 })
 
+describe('local tts status', () => {
+    let respond
+    let instance
+
+    beforeEach(() => {
+        vi.resetModules()
+        respond = (message) => ({id: message.id, ok: true})
+        vi.stubGlobal('Worker', class {
+            constructor() {
+                instance = this
+            }
+
+            postMessage(message) {
+                const reply = respond(message)
+                if (reply) {
+                    queueMicrotask(() => this.onmessage({data: reply}))
+                }
+            }
+
+            terminate() {}
+        })
+    })
+
+    afterEach(() => {
+        vi.unstubAllGlobals()
+    })
+
+    it('is idle, then loading, then ready', async () => {
+        const {getLocalTtsStatus, loadLocalTts} = await import('./localTts.js')
+        expect(getLocalTtsStatus()).toBe('idle')
+
+        const load = loadLocalTts()
+        expect(getLocalTtsStatus()).toBe('loading')
+        await load
+
+        expect(getLocalTtsStatus()).toBe('ready')
+    })
+
+    it('is failed after a failed load or a crash, and loads again on the next call', async () => {
+        respond = (message) => ({id: message.id, ok: false, message: 'HTTP 502'})
+        const {getLocalTtsStatus, loadLocalTts} = await import('./localTts.js')
+
+        await expect(loadLocalTts()).rejects.toThrow('HTTP 502')
+        expect(getLocalTtsStatus()).toBe('failed')
+
+        respond = (message) => ({id: message.id, ok: true})
+        await loadLocalTts()
+        expect(getLocalTtsStatus()).toBe('ready')
+
+        instance.onerror({message: 'out of memory'})
+        expect(getLocalTtsStatus()).toBe('failed')
+    })
+})
+
 describe('redirectHuggingFaceFetch', () => {
     const host = 'http://localhost:4317/api/local-models/'
 

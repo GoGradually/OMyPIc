@@ -6,7 +6,13 @@
 
 import {pcm16ToWav} from '../../../shared/utils/audioCodec.js'
 import {detectSpeechLang, splitForSpeech} from './speechText.js'
-import {cancelQueuedEnglishSynthesis, isLocalTtsSupported, loadLocalTts, synthesizeEnglish} from './localTts.js'
+import {
+    cancelQueuedEnglishSynthesis,
+    getLocalTtsStatus,
+    isLocalTtsSupported,
+    loadLocalTts,
+    synthesizeEnglish
+} from './localTts.js'
 import {
     cancelQueuedKoreanSynthesis,
     getLocalKoTtsStatus,
@@ -61,9 +67,28 @@ function koreanSynthesizer(allowKoreanModel) {
     return null
 }
 
+// Kokoro the same way: used once it is ready. Session start loads it first, so this matters when
+// that load failed or the worker crashed: the English sentence is shown without sound, and one
+// load is started in the background (not one per sentence, and nothing waits for it).
+function englishSynthesizer() {
+    if (!isLocalTtsSupported()) {
+        return null
+    }
+    const status = getLocalTtsStatus()
+    if (status === 'ready') {
+        return synthesizeEnglish
+    }
+    if (status !== 'loading') {
+        loadLocalTts().catch(() => {
+        })
+    }
+    return null
+}
+
 /** One step per sentence: {sentence, lang, synthesize}; synthesize is null when no model can read it. */
 function buildPlan(text, allowKoreanModel) {
     let korean
+    let english
     return splitForSpeech(text).map((sentence) => {
         const lang = detectSpeechLang(sentence)
         if (lang === KOREAN) {
@@ -73,7 +98,10 @@ function buildPlan(text, allowKoreanModel) {
             return {sentence, lang, synthesize: korean}
         }
         if (lang === ENGLISH) {
-            return {sentence, lang, synthesize: isLocalTtsSupported() ? synthesizeEnglish : null}
+            if (english === undefined) {
+                english = englishSynthesizer()
+            }
+            return {sentence, lang, synthesize: english}
         }
         // Only digits, symbols or a script neither voice reads: shown on screen only.
         return {sentence, lang, synthesize: null}
@@ -208,9 +236,11 @@ export function speakLocally(text, {onEnd, onUnavailable, onNotice, allowKoreanM
             }
         }
         active = null
-        // A Korean sentence waiting for its model, or a chunk no voice reads, is expected to be
-        // silent; an English sentence that stayed silent means this device could not play the speech.
-        const expected = plan.filter((step) => step.synthesize || step.lang === ENGLISH)
+        // A sentence waiting for its model to load, or a chunk no voice reads, is expected to be
+        // silent (the session says so); anything else that stayed silent means this device could
+        // not play the speech.
+        const englishUnsupported = !isLocalTtsSupported()
+        const expected = plan.filter((step) => step.synthesize || (step.lang === ENGLISH && englishUnsupported))
         if (expected.length > 0 && spoken === 0) {
             onUnavailable?.()
         } else {

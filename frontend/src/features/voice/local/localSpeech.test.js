@@ -1,7 +1,13 @@
 /** @vitest-environment jsdom */
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import {cancelLocalSpeech, neededLocalTtsModels, prepareLocalSpeech, speakLocally} from './localSpeech.js'
-import {cancelQueuedEnglishSynthesis, isLocalTtsSupported, synthesizeEnglish} from './localTts.js'
+import {
+    cancelQueuedEnglishSynthesis,
+    getLocalTtsStatus,
+    isLocalTtsSupported,
+    loadLocalTts,
+    synthesizeEnglish
+} from './localTts.js'
 import {
     cancelQueuedKoreanSynthesis,
     getLocalKoTtsStatus,
@@ -12,6 +18,7 @@ import {
 
 vi.mock('./localTts.js', () => ({
     isLocalTtsSupported: vi.fn(),
+    getLocalTtsStatus: vi.fn(),
     loadLocalTts: vi.fn(),
     synthesizeEnglish: vi.fn(),
     cancelQueuedEnglishSynthesis: vi.fn()
@@ -96,6 +103,8 @@ describe('local speech', () => {
         })
         window.URL.revokeObjectURL = vi.fn()
         isLocalTtsSupported.mockReturnValue(true)
+        getLocalTtsStatus.mockReturnValue('ready')
+        loadLocalTts.mockResolvedValue(undefined)
         isLocalKoTtsSupported.mockReturnValue(true)
         getLocalKoTtsStatus.mockReturnValue('ready')
         loadLocalKoTts.mockResolvedValue(undefined)
@@ -432,6 +441,50 @@ describe('local speech', () => {
         expect(synthesizeEnglish).toHaveBeenCalledTimes(1)
         expect(onEnd).toHaveBeenCalledTimes(2)
         expect(onUnavailable).not.toHaveBeenCalled()
+    })
+
+    it('shows English sentences without sound while Kokoro is not loaded, and starts one load in the background', async () => {
+        getLocalTtsStatus.mockReturnValue('failed')
+        loadLocalTts.mockImplementation(() => {
+            getLocalTtsStatus.mockReturnValue('loading')
+            return new Promise(() => {
+            })
+        })
+        const onEnd = vi.fn()
+        const onUnavailable = vi.fn()
+        const text = `${english('Tell me about your home')} ${english('What does it look like')} ${korean('한국어 문장')}`
+
+        prepareLocalSpeech(text)
+        speakLocally(text, {onEnd, onUnavailable})
+        await flush()
+
+        // No wait for the model: the question pass ends at once, and the model loads once.
+        expect(synthesizeEnglish).not.toHaveBeenCalled()
+        expect(loadLocalTts).toHaveBeenCalledTimes(1)
+        expect(synthesizeKorean).toHaveBeenCalledTimes(1)
+        expect(await playAll()).toBe(1)
+        expect(onEnd).toHaveBeenCalledTimes(1)
+        expect(onUnavailable).not.toHaveBeenCalled()
+
+        speakLocally(english('Asked while it loads'), {onEnd})
+        await flush()
+        expect(loadLocalTts).toHaveBeenCalledTimes(1)
+        expect(onEnd).toHaveBeenCalledTimes(2)
+    })
+
+    it('uses Kokoro again once its background load is done', async () => {
+        getLocalTtsStatus.mockReturnValue('failed')
+        speakLocally(english('Silent for now'), {})
+        await flush()
+        expect(loadLocalTts).toHaveBeenCalledTimes(1)
+
+        getLocalTtsStatus.mockReturnValue('ready')
+        const sentence = english('Heard now')
+        speakLocally(sentence, {})
+        await flush()
+
+        expect(synthesizeEnglish).toHaveBeenCalledWith(sentence)
+        expect(audioInstances.length).toBe(1)
     })
 
     it('sentence is skipped when its synthesis rejects', async () => {

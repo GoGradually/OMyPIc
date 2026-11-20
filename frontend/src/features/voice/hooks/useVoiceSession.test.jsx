@@ -1940,18 +1940,19 @@ describe('useVoiceSession', () => {
         unmount()
     })
 
-    it('does not start the session when the selected local voice cannot load Kokoro', async () => {
+    it('opens an AI-on session with the questions on screen when the selected local voice cannot load Kokoro', async () => {
         loadLocalTts.mockRejectedValue(new Error('offline'))
         const onStatus = vi.fn()
-        const {result, unmount} = renderLocalSpeechSession({ttsModel: 'local-kokoro', onStatus})
+        const {result, unmount} = renderLocalSpeechSession({ttsModel: 'local-kokoro', feedbackLang: 'en', onStatus})
 
         await act(async () => {
             await result.current.startSession()
         })
 
-        expect(openVoiceSession).not.toHaveBeenCalled()
-        expect(result.current.sessionActive).toBe(false)
-        expect(onStatus).toHaveBeenLastCalledWith(expect.stringContaining('로컬 음성 합성 모델을 불러오지 못했습니다.'))
+        expect(loadLocalTts).toHaveBeenCalledTimes(1)
+        expect(openVoiceSession).toHaveBeenCalledTimes(1)
+        expect(result.current.sessionActive).toBe(true)
+        expect(onStatus).toHaveBeenCalledWith('음성 합성 모델을 불러오지 못해 질문을 화면으로만 보여 드립니다.')
         unmount()
     })
 

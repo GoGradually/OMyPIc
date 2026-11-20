@@ -1243,18 +1243,14 @@ export function useVoiceLifecycle({
     }, [setStatus])
 
     // English (questions) uses Kokoro. The Korean model is needed only for Korean feedback.
-    const prepareLocalTts = useCallback(async ({aiOn, feedbackLanguage}) => {
+    const prepareLocalTts = useCallback(async ({feedbackLanguage}) => {
         const needed = neededLocalTtsModels(feedbackLanguage)
         if (needed.english) {
             try {
                 await loadSpeechModel(loadLocalTts, '영어 음성 합성', '약 90MB')
-            } catch (error) {
-                if (aiOn) {
-                    throw new Error(
-                        `로컬 음성 합성 모델을 불러오지 못했습니다. 네트워크를 확인하거나 설정에서 TTS 모델을 바꿔 주세요. (${error?.message || '알 수 없는 오류'})`
-                    )
-                }
-                // AI off: go on without it. Questions are still shown on screen.
+            } catch (_error) {
+                // The session opens all the same (AI on or off): questions are shown on screen, and
+                // the next English sentence retries the load in the background.
                 setStatus('음성 합성 모델을 불러오지 못해 질문을 화면으로만 보여 드립니다.')
             }
         }
@@ -1317,7 +1313,7 @@ export function useVoiceLifecycle({
             }
             // Speech is read on this device when AI is off or the free local TTS model is selected.
             if (!aiOn || settingsRef.current.ttsModel === LOCAL_TTS_MODEL) {
-                await prepareLocalTts({aiOn, feedbackLanguage})
+                await prepareLocalTts({feedbackLanguage})
             }
 
             const created = await openVoiceSession({
