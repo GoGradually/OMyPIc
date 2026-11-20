@@ -226,10 +226,10 @@ impl LocalModelCache {
         let transfer = |err: &dyn std::fmt::Display| {
             LocalModelError::Upstream(format!("Model download failed: {err}"))
         };
-        let client = reqwest::blocking::Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            .build()
-            .map_err(|err| internal(format!("Failed to build HTTP client: {err}")))?;
+        let client = crate::http_client::build_blocking_client(|| {
+            reqwest::blocking::Client::builder().connect_timeout(CONNECT_TIMEOUT)
+        })
+        .map_err(|err| internal(format!("Failed to build HTTP client: {err}")))?;
         let method = if probe.head {
             reqwest::Method::HEAD
         } else {
@@ -626,14 +626,15 @@ impl DownloadJob {
 
     /// 실패하면 `part`에 받다 만 임시 파일을 남겨 둔다(`finish`가 지운다).
     fn transfer(&self, part: &mut Option<NamedTempFile>) -> Result<(), LocalModelError> {
-        let client = reqwest::blocking::Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            // 블로킹 클라이언트의 제한 시간은 응답 헤더를 기다리는 것과 본문 읽기 한 번씩에
-            // 따로 적용된다(전체 시간이 아니다). 그래서 멈춘 상위 서버를 기다리는 읽기도 끝난다.
-            .timeout(self.idle_timeout)
-            .tcp_keepalive(Some(Duration::from_secs(30)))
-            .build()
-            .map_err(|err| internal(format!("Failed to build HTTP client: {err}")))?;
+        let client = crate::http_client::build_blocking_client(|| {
+            reqwest::blocking::Client::builder()
+                .connect_timeout(CONNECT_TIMEOUT)
+                // 블로킹 클라이언트의 제한 시간은 응답 헤더를 기다리는 것과 본문 읽기 한 번씩에
+                // 따로 적용된다(전체 시간이 아니다). 그래서 멈춘 상위 서버를 기다리는 읽기도 끝난다.
+                .timeout(self.idle_timeout)
+                .tcp_keepalive(Some(Duration::from_secs(30)))
+        })
+        .map_err(|err| internal(format!("Failed to build HTTP client: {err}")))?;
         let mut response = client.get(&self.url).send().map_err(|err| {
             if err.is_timeout() {
                 upstream_failed("timed out waiting for response headers")

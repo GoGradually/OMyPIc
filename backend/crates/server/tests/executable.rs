@@ -182,3 +182,65 @@ fn terminate_signal_exits_promptly_while_a_blocking_request_is_in_flight() {
     );
     drop(upload);
 }
+
+/// 쓸 수 있는 인증서가 하나도 없는 인증서 파일(PEM 형식은 맞고 내용은 인증서가 아니다).
+fn junk_certificate_file(dir: &std::path::Path) -> std::path::PathBuf {
+    let path = dir.join("junk-roots.pem");
+    std::fs::write(
+        &path,
+        "-----BEGIN CERTIFICATE-----\naGVsbG8gd29ybGQsIHRoaXMgaXMgbm90IGEgY2VydGlmaWNhdGU=\n-----END CERTIFICATE-----\n",
+    )
+    .unwrap();
+    path
+}
+
+#[test]
+fn an_unusable_os_certificate_store_does_not_stop_the_server() {
+    use std::io::{Read, Write};
+
+    let dir = tempfile::tempdir().unwrap();
+    let certs = tempfile::tempdir().unwrap();
+    let port = {
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        probe.local_addr().unwrap().port()
+    };
+    let mut child = server_command(dir.path(), port)
+        .env("SSL_CERT_FILE", junk_certificate_file(certs.path()))
+        .env_remove("SSL_CERT_DIR")
+        .spawn()
+        .unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let mut lines = BufReader::new(stderr).lines();
+    let listening = format!("listening on http://127.0.0.1:{port}");
+    let mut seen = Vec::new();
+    loop {
+        let Some(Ok(line)) = lines.next() else {
+            let _ = child.kill();
+            panic!("server exited before listening: {seen:#?}");
+        };
+        seen.push(line.clone());
+        if line.contains(&listening) {
+            break;
+        }
+    }
+    std::thread::spawn(move || for _ in lines.map_while(Result::ok) {});
+    assert!(
+        seen.iter()
+            .filter(|line| line.contains("certificate store"))
+            .count()
+            == 1,
+        "one warning about the certificate store: {seen:#?}"
+    );
+
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    write!(
+        stream,
+        "GET /api/meta/models HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut reply = String::new();
+    stream.read_to_string(&mut reply).unwrap();
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+}

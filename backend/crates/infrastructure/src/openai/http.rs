@@ -35,12 +35,13 @@ pub fn build_http_client_with_limits(
     connect_timeout: Duration,
     response_timeout: Option<Duration>,
 ) -> AppResult<Client> {
-    Client::builder()
-        .connect_timeout(connect_timeout)
-        .timeout(response_timeout)
-        .pool_max_idle_per_host(MAX_IDLE_CONNECTIONS_PER_HOST)
-        .build()
-        .map_err(|err| AppError::Internal(format!("HTTP client build failed: {}", chain(&err))))
+    crate::http_client::build_blocking_client(|| {
+        Client::builder()
+            .connect_timeout(connect_timeout)
+            .timeout(response_timeout)
+            .pool_max_idle_per_host(MAX_IDLE_CONNECTIONS_PER_HOST)
+    })
+    .map_err(|err| AppError::Internal(format!("HTTP client build failed: {}", chain(&err))))
 }
 
 /// 끝 슬래시를 떼고 경로를 붙인다(Spring `UriBuilder`처럼 `//`가 생기지 않는다).

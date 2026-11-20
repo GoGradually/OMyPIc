@@ -861,11 +861,12 @@ impl DownloadJob {
         let transfer = |err: &dyn std::fmt::Display| {
             DownloadError::Transfer(format!("Model download failed: {err}"))
         };
-        let client = reqwest::Client::builder()
-            .connect_timeout(self.header_timeout)
-            .tcp_keepalive(Some(Duration::from_secs(30)))
-            .build()
-            .map_err(|err| transfer(&err))?;
+        let client = crate::http_client::build_async_client(|| {
+            reqwest::Client::builder()
+                .connect_timeout(self.header_timeout)
+                .tcp_keepalive(Some(Duration::from_secs(30)))
+        })
+        .map_err(|err| transfer(&err))?;
         let mut response = tokio::time::timeout(self.header_timeout, client.get(&self.url).send())
             .await
             .map_err(|_| transfer(&"timed out waiting for response headers"))?

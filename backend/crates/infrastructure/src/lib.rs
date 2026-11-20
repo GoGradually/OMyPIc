@@ -4,6 +4,7 @@ pub mod anthropic;
 pub mod config;
 pub mod embedding;
 pub mod executor;
+pub mod http_client;
 pub mod llm;
 pub mod local_models;
 pub mod metrics;
