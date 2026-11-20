@@ -216,6 +216,11 @@ async fn serves_the_file_with_length_and_type_and_caches_it() {
     assert_eq!(first.body, second.body);
     assert_eq!("10", second.headers[header::CONTENT_LENGTH]);
     assert_eq!(1, upstream.hits());
+    // 본문은 길이만큼 보내면 끝나고, 파일을 제자리에 옮기는 것은 그 직후다.
+    wait_until("the file is cached", || {
+        cached_file(setup.dir.path()).is_file()
+    })
+    .await;
     assert_eq!(
         b"0123456789".to_vec(),
         std::fs::read(cached_file(setup.dir.path())).unwrap()
@@ -336,6 +341,8 @@ async fn first_download_sends_headers_and_bytes_before_the_upstream_finishes() {
 
     gate.open();
     assert_eq!(b"56789".to_vec(), read_to_end(&mut body).await.unwrap());
+    // 본문은 길이만큼 보내면 끝나고, 파일을 제자리에 옮기는 것은 그 직후다.
+    wait_until("the file is cached", || cached_file(dir.path()).is_file()).await;
     assert_eq!(
         b"0123456789".to_vec(),
         std::fs::read(cached_file(dir.path())).unwrap()

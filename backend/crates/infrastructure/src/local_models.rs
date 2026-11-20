@@ -1354,11 +1354,11 @@ mod tests {
         // 상위 서버는 쉬지 않고 보내고, 읽는 쪽만 멈춤 한도보다 오래 쉰다.
         let cache = Arc::new(
             cache(&upstream.url, dir.path())
-                .with_timeouts(Duration::from_secs(5), Duration::from_millis(150)),
+                .with_timeouts(Duration::from_secs(5), Duration::from_millis(500)),
         );
 
         let (reader, first) = read_exactly(downloading(open_within(&cache, None)).body, 1);
-        std::thread::sleep(Duration::from_millis(800));
+        std::thread::sleep(Duration::from_millis(1500));
         let mut received = first;
         received.extend(read_rest(reader).unwrap());
 
