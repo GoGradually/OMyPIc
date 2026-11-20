@@ -628,7 +628,7 @@ fn check_path(org: &str, name: &str, revision: &str, file: &str) -> Result<(), L
 /// 비어 있지 않고, `.`/`..`이 아니고, `[A-Za-z0-9._-]+`이고, `MAX_SEGMENT_BYTES` 이하이며, 다음이
 /// 아니어야 한다: 임시 파일(`*.part`, 대소문자 무관: Windows와 macOS의 파일 시스템은 대소문자를
 /// 가리지 않는다), `.`으로 끝나는 이름(Windows가 끝의 `.`을 떼어 다른 이름과 같아진다), Windows
-/// 장치 이름(`con`, `nul`, `com1.json` 등).
+/// 장치 이름(`con`, `nul`, `com0`~`com9`, `lpt0.json` 등).
 fn check_segment(segment: &str) -> Result<(), LocalModelError> {
     let lower = segment.to_ascii_lowercase();
     let valid = !matches!(segment, "" | "." | "..")
@@ -656,7 +656,10 @@ fn is_windows_device_name(lower: &str) -> bool {
                 .strip_prefix("com")
                 .or_else(|| stem.strip_prefix("lpt"));
             numbered.is_some_and(|digit| {
-                matches!(digit, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
+                matches!(
+                    digit,
+                    "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"
+                )
             })
         }
     }
@@ -760,6 +763,15 @@ impl DownloadJob {
             return Err(LocalModelError::Upstream(format!(
                 "Model download was incomplete: got {received} of {} bytes",
                 expected.unwrap_or_default()
+            )));
+        }
+        // 이름을 바꾸기 전에 내용을 디스크에 내린다. 그러지 않으면 전원이 꺼진 뒤 이름만 남은 빈
+        // 파일이나 잘린 파일이 캐시에 들어가고, 캐시는 크기를 보지 않으므로 계속 그 파일을 준다.
+        temp.as_file().sync_all().map_err(write_error)?;
+        let stored = temp.as_file().metadata().map_err(write_error)?.len();
+        if stored != received {
+            return Err(internal(format!(
+                "Model file was not stored completely: {stored} of {received} bytes"
             )));
         }
         drop(response);
@@ -1850,6 +1862,8 @@ mod tests {
             "aux.json",
             "onnx/com1.onnx",
             "lpt9",
+            "com0.json",
+            "onnx/lpt0",
         ] {
             for probe in [None, Some(&ModelFileProbe::default())] {
                 let result = cache.open(REPO, "main", file, probe);
