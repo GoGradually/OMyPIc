@@ -9,6 +9,9 @@ import {createSynthesisQueue} from './synthesisQueue.js'
 let ttsPromise = null
 // The worker's own Cache Storage, before configure() hides it from kokoro-js.
 let browserCaches = null
+// configure() runs again after a failed load; the fetch redirect is installed once per worker, not
+// stacked once per attempt.
+let redirected = false
 const queue = createSynthesisQueue()
 
 function configure(config) {
@@ -20,9 +23,12 @@ function configure(config) {
         env.useBrowserCache = false
         // kokoro-js fetches voices/*.bin from a fixed Hugging Face `main` address; send that to the
         // backend at the pinned revision, and keep no copy of it in Cache Storage.
-        redirectHuggingFaceFetch(self, config.modelHost, config.revision)
-        browserCaches = self.caches
-        Object.defineProperty(self, 'caches', {value: NO_CACHE_STORAGE, configurable: true})
+        if (!redirected) {
+            redirected = true
+            redirectHuggingFaceFetch(self, config.modelHost, config.revision)
+            browserCaches = self.caches
+            Object.defineProperty(self, 'caches', {value: NO_CACHE_STORAGE, configurable: true})
+        }
     } else if (config.modelHost) {
         env.remoteHost = config.modelHost
     }

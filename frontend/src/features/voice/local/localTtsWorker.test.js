@@ -58,7 +58,25 @@ describe('English tts worker synthesis', () => {
         expect(await cache.match('x')).toBeUndefined()
     })
 
-    it('synthesizes one sentence at a time and drops those still waiting when a cancel arrives', async () => {
+    it('redirects the voice address once, however often the load is tried again', async () => {
+        const {KokoroTTS} = await import('kokoro-js')
+        vi.resetModules()
+        const originalFetch = vi.fn(async () => new Response(new Uint8Array(8)))
+        scope = {location: {href: 'http://localhost/worker.js'}, postMessage: vi.fn(), fetch: originalFetch, originalFetch}
+        vi.stubGlobal('self', scope)
+        KokoroTTS.from_pretrained.mockRejectedValueOnce(new Error('offline'))
+        await import('./localTtsWorker.js')
+
+        await send(1, 'load')
+        expect(replies()[0]).toMatchObject({id: 1, ok: false})
+        const redirected = scope.fetch
+        await send(2, 'load')
+
+        expect(replies()[1]).toEqual({id: 2, ok: true})
+        expect(scope.fetch).toBe(redirected)
+    })
+
+it('synthesizes one sentence at a time and drops those still waiting when a cancel arrives', async () => {
         const releases = []
         mocks.generate = (text) => {
             spoken.push(text)
