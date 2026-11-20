@@ -124,7 +124,7 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
-        // 주 웹뷰는 앱 페이지 밖으로 이동하지 않는다.
+        // 어느 웹뷰도(설정 파일이 만드는 주 창 포함) 앱 페이지 밖으로 이동하지 않는다.
         .plugin(
             tauri::plugin::Builder::<tauri::Wry>::new("omypic-navigation")
                 .on_navigation(|webview, url| {
