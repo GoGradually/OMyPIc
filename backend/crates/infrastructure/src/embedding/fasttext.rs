@@ -2359,7 +2359,11 @@ mod tests {
             .with_writer(move || writer.clone())
             .with_ansi(false)
             .finish();
-        tracing::subscriber::with_default(subscriber, f);
+        // 다른 시험 스레드가 구독자 없이 먼저 지나간 로그 자리는 "관심 없음"으로 기억될 수 있다.
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::callsite::rebuild_interest_cache();
+            f()
+        });
         counter.0.load(Ordering::SeqCst)
     }
 

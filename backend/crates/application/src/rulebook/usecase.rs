@@ -534,7 +534,12 @@ mod tests {
             .with_writer(move || writer.clone())
             .with_ansi(false)
             .finish();
-        tracing::subscriber::with_default(subscriber, f);
+        // 다른 시험 스레드가 구독자 없이 먼저 지나간 로그 자리는 "관심 없음"으로 기억될 수 있다.
+        // 이 구독자가 등록된 상태에서 다시 계산해 병렬 시험에서도 로그를 놓치지 않게 한다.
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::callsite::rebuild_interest_cache();
+            f()
+        });
         let bytes = buffer.0.lock().unwrap().clone();
         String::from_utf8(bytes).unwrap()
     }
