@@ -52,6 +52,8 @@ pub trait RulebookPort: Send + Sync {
     fn find_all(&self) -> AppResult<Vec<Rulebook>>;
     fn find_by_id(&self, id: &RulebookId) -> AppResult<Option<Rulebook>>;
     fn save(&self, rulebook: Rulebook) -> AppResult<Rulebook>;
+    /// 있는 행만 덮어쓴다. 행이 없으면(그 사이 지워졌으면) 아무것도 쓰지 않고 `Ok(None)`.
+    fn update(&self, rulebook: Rulebook) -> AppResult<Option<Rulebook>>;
     fn delete_by_id(&self, id: &RulebookId) -> AppResult<()>;
     fn delete_all(&self) -> AppResult<()>;
 }

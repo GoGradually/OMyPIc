@@ -103,13 +103,15 @@ impl RulebookUseCase {
         self.repository.find_all()
     }
 
+    /// 있는 행만 고친다. 찾은 뒤 다른 요청이 지웠으면 `NotFound`이고 행을 다시 만들지 않는다.
     pub fn toggle(&self, id: &str, enabled: bool) -> AppResult<Rulebook> {
+        let not_found = || AppError::NotFound("No value present".to_string());
         let mut rulebook = self
             .repository
             .find_by_id(&RulebookId::of(id)?)?
-            .ok_or_else(|| AppError::NotFound("No value present".to_string()))?;
+            .ok_or_else(not_found)?;
         rulebook.toggle(enabled, Utc::now());
-        self.repository.save(rulebook)
+        self.repository.update(rulebook)?.ok_or_else(not_found)
     }
 
     /// 색인 조각, 행, 파일 순서로 지운다. 중간에 멈춰도 행 없는 조각은 남지 않는다(행만 남으면
@@ -264,6 +266,7 @@ mod tests {
     use omypic_domain::error::AppError;
     use omypic_domain::rulebook::RulebookId;
     use std::collections::HashSet;
+    use std::sync::Mutex;
 
     struct Fixture {
         repository: Arc<InMemoryRulebookPort>,
@@ -559,8 +562,62 @@ mod tests {
         let toggled = f.use_case.toggle("r1", false).unwrap();
 
         assert!(!toggled.is_enabled());
-        assert_eq!(1, f.repository.save_calls());
+        assert_eq!(vec!["update"], f.repository.call_log());
         assert!(!f.repository.rulebooks()[0].is_enabled());
+    }
+
+    /// 찾은 뒤 저장하기 전에 다른 요청이 행을 지운다.
+    struct DeletedWhileToggling {
+        found: Rulebook,
+        rows: Mutex<Vec<Rulebook>>,
+    }
+
+    impl RulebookPort for DeletedWhileToggling {
+        fn find_all(&self) -> AppResult<Vec<Rulebook>> {
+            Ok(self.rows.lock().unwrap().clone())
+        }
+        fn find_by_id(&self, _id: &RulebookId) -> AppResult<Option<Rulebook>> {
+            Ok(Some(self.found.clone()))
+        }
+        fn save(&self, rulebook: Rulebook) -> AppResult<Rulebook> {
+            self.rows.lock().unwrap().push(rulebook.clone());
+            Ok(rulebook)
+        }
+        fn update(&self, rulebook: Rulebook) -> AppResult<Option<Rulebook>> {
+            let rows = self.rows.lock().unwrap();
+            Ok(rows
+                .iter()
+                .any(|r| r.id() == rulebook.id())
+                .then_some(rulebook))
+        }
+        fn delete_by_id(&self, _id: &RulebookId) -> AppResult<()> {
+            Ok(())
+        }
+        fn delete_all(&self) -> AppResult<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn toggle_of_a_rulebook_deleted_meanwhile_is_not_found_and_does_not_bring_it_back() {
+        let repository = Arc::new(DeletedWhileToggling {
+            found: rulebook("r1", "rulebook.md", RulebookScope::Main, None, true),
+            rows: Mutex::new(Vec::new()),
+        });
+        let use_case = RulebookUseCase::new(
+            repository.clone(),
+            Arc::new(InMemoryRulebookIndexPort::new()),
+            Arc::new(InMemoryRulebookFileStore::new()),
+            Arc::new(FakeRagPolicy {
+                max_context_chunks: 3,
+            }),
+            Arc::new(RecordingMetrics::new()),
+        );
+
+        let error = use_case.toggle("r1", false).unwrap_err();
+
+        assert_eq!(AppError::NotFound("No value present".to_string()), error);
+        assert!(repository.rows.lock().unwrap().is_empty());
     }
 
     #[test]

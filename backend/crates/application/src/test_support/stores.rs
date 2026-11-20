@@ -223,6 +223,16 @@ impl RulebookPort for InMemoryRulebookPort {
         Ok(rulebook)
     }
 
+    fn update(&self, rulebook: Rulebook) -> AppResult<Option<Rulebook>> {
+        lock(&self.call_log).push("update");
+        let mut rulebooks = lock(&self.rulebooks);
+        let Some(existing) = rulebooks.iter_mut().find(|r| r.id() == rulebook.id()) else {
+            return Ok(None);
+        };
+        *existing = rulebook.clone();
+        Ok(Some(rulebook))
+    }
+
     fn delete_by_id(&self, id: &RulebookId) -> AppResult<()> {
         if let Some(error) = lock(&self.delete_error).clone() {
             return Err(error);

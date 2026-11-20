@@ -136,6 +136,32 @@ impl RulebookPort for SqliteRulebookAdapter {
         })
     }
 
+    fn update(&self, rulebook: Rulebook) -> AppResult<Option<Rulebook>> {
+        self.db.with_conn(|conn| {
+            let changed = conn
+                .execute(
+                    "UPDATE rulebooks SET filename = ?2, path = ?3, scope = ?4,
+                         question_group = ?5, enabled = ?6, created_at = ?7, updated_at = ?8
+                     WHERE id = ?1",
+                    params![
+                        rulebook.id().value(),
+                        rulebook.filename(),
+                        rulebook.path(),
+                        scope_name(rulebook.scope()),
+                        rulebook.question_group().map(QuestionGroup::value),
+                        rulebook.is_enabled(),
+                        format_ts(rulebook.created_at()),
+                        format_ts(rulebook.updated_at()),
+                    ],
+                )
+                .map_err(db_err)?;
+            if changed == 0 {
+                return Ok(None);
+            }
+            find_by_id(conn, rulebook.id().value())
+        })
+    }
+
     fn delete_by_id(&self, id: &RulebookId) -> AppResult<()> {
         self.db.with_conn(|conn| {
             conn.execute("DELETE FROM rulebooks WHERE id = ?1", params![id.value()])
@@ -178,6 +204,28 @@ mod tests {
             Some(ts()),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn update_overwrites_an_existing_row_and_never_creates_one() {
+        let adapter = adapter();
+        let saved = adapter
+            .save(rulebook("r1", "rules.md", RulebookScope::Main, None))
+            .unwrap();
+        let mut toggled = saved.clone();
+        toggled.toggle(false, ts());
+
+        let updated = adapter.update(toggled).unwrap().expect("row exists");
+        assert!(!updated.is_enabled());
+        assert!(!adapter
+            .find_by_id(saved.id())
+            .unwrap()
+            .unwrap()
+            .is_enabled());
+
+        adapter.delete_by_id(saved.id()).unwrap();
+        assert!(adapter.update(updated).unwrap().is_none());
+        assert!(adapter.find_all().unwrap().is_empty());
     }
 
     #[test]
