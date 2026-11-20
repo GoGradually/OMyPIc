@@ -243,8 +243,8 @@ async function prepareConfirmedReplay({
     })
 }
 
-// The device voice reads a question twice, 3 seconds apart; the answer window opens after the second pass.
-async function finishDeviceVoiceQuestion() {
+// Local speech reads a question twice, 3 seconds apart; the answer window opens after the second pass.
+async function finishLocalSpeechQuestion() {
     vi.useFakeTimers()
     try {
         await act(async () => {
@@ -261,7 +261,7 @@ async function finishDeviceVoiceQuestion() {
     }
 }
 
-async function hearQuestionFromDeviceVoice({turnId = 1, questionId = 'q-1', sequence = turnId} = {}) {
+async function hearQuestionFromLocalSpeech({turnId = 1, questionId = 'q-1', sequence = turnId} = {}) {
     await act(async () => {
         activeEventSource.emit('question.prompt', {
             turnId,
@@ -270,7 +270,7 @@ async function hearQuestionFromDeviceVoice({turnId = 1, questionId = 'q-1', sequ
         })
         activeEventSource.emit('tts.text', {role: 'question', text: `question-${turnId}`, sequence})
     })
-    await finishDeviceVoiceQuestion()
+    await finishLocalSpeechQuestion()
 }
 
 function renderLocalSpeechSession({aiEnabled = true, ttsModel, feedbackLang = 'ko', onStatus = vi.fn()} = {}) {
@@ -300,10 +300,10 @@ function speakAnAnswer() {
     })
 }
 
-// AI off: the question is read by the device voice, nothing is transcribed, and the server only
+// AI off: the question is read by local speech, nothing is transcribed, and the server only
 // acknowledges the end of the answer.
 async function answerWithoutAi({turnId = 1, questionId = 'q-1'} = {}) {
-    await hearQuestionFromDeviceVoice({turnId, questionId})
+    await hearQuestionFromLocalSpeech({turnId, questionId})
     const answersBefore = sendVoiceAnswer.mock.calls.length
     speakAnAnswer()
     await waitFor(() => {
@@ -1684,7 +1684,7 @@ describe('useVoiceSession', () => {
         unmount()
     })
 
-    it('reads the question with the device voice when AI is off, then opens the answer window', async () => {
+    it('reads the question with local speech when AI is off, then opens the answer window', async () => {
         const {result, unmount} = renderHook(() => useVoiceSession({
             sessionId: 's1',
             feedbackModel: 'gpt-4o-mini',
@@ -1716,11 +1716,11 @@ describe('useVoiceSession', () => {
         expect(spokenTexts).toEqual(['question-1'])
         expect(result.current.speechState).toBe('PLAYING_QUESTION_TTS')
 
-        await finishDeviceVoiceQuestion()
+        await finishLocalSpeechQuestion()
 
         expect(spokenTexts).toEqual(['question-1', 'question-1'])
         expect(result.current.speechState).toBe('READY_FOR_ANSWER')
-        // No synthesized audio was played: only the device voice spoke.
+        // No server audio was played: only local speech spoke.
         expect(audioInstances.length).toBe(audioCount)
         unmount()
     })
@@ -1867,7 +1867,7 @@ describe('useVoiceSession', () => {
         await act(async () => {
             activeEventSource.emit('session.ready', {sessionId: 's1', voiceSessionId: 'voice-1'})
         })
-        await hearQuestionFromDeviceVoice({turnId: 1, questionId: 'q-1'})
+        await hearQuestionFromLocalSpeech({turnId: 1, questionId: 'q-1'})
 
         expect(spokenTexts).toEqual(['question-1', 'question-1'])
         expect(result.current.speechState).toBe('READY_FOR_ANSWER')
@@ -1984,7 +1984,7 @@ describe('useVoiceSession', () => {
         expect(loadLocalStt).toHaveBeenCalledTimes(1)
         expect(openVoiceSession).toHaveBeenCalledWith(expect.objectContaining({sttModel: 'local-whisper'}))
 
-        await hearQuestionFromDeviceVoice({turnId: 1, questionId: 'q-1'})
+        await hearQuestionFromLocalSpeech({turnId: 1, questionId: 'q-1'})
         speakAnAnswer()
         await waitFor(() => {
             expect(sendVoiceAnswer).toHaveBeenCalledWith('voice-1', {sequence: 1, text: 'local transcript'}, expect.anything())
@@ -2016,7 +2016,7 @@ describe('useVoiceSession', () => {
         await act(async () => {
             await result.current.startSession()
         })
-        await hearQuestionFromDeviceVoice({turnId: 1, questionId: 'q-1'})
+        await hearQuestionFromLocalSpeech({turnId: 1, questionId: 'q-1'})
         speakAnAnswer()
         await waitFor(() => {
             expect(onStatus).toHaveBeenCalledWith('음성이 인식되지 않아 다시 답변해 주세요.')
@@ -2118,7 +2118,7 @@ describe('useVoiceSession', () => {
             })
             activeEventSource.emit('tts.text', {role: 'question', text: 'question-2', sequence: 2})
         })
-        // The next question waits: the device voice must not talk over the replay.
+        // The next question waits: local speech must not talk over the replay.
         expect(spokenTexts.length).toBe(spokenBeforeNextQuestion)
         expect(result.current.speechState).toBe('WAITING_TTS')
 
