@@ -508,17 +508,20 @@ async function runJob(name, phaseLimits, arg) {
 
 async function warmUp() {
     const deadline = Date.now() + WARMUP_SECONDS * 1000
+    let lastError = ''
     for (let attempt = 1; Date.now() < deadline; attempt++) {
         await openPage()
         let warm
         try {
             warm = await runJob('warmup', {default: Math.max(10, (deadline - Date.now()) / 1000)})
         } catch (error) {
-            if (/reloaded/.test(error.message)) {
-                log(`warm-up ${attempt}: the page reloaded (Vite bundled new dependencies); again`)
-                continue
-            }
-            throw error
+            // While Vite bundles new dependencies it reloads the page. WebKitGTK shows that as a
+            // replaced page; Safari first fails the requests that were in flight ("Load failed").
+            // Either way the next attempt starts from a fresh page, until the warm-up budget ends.
+            lastError = error.message
+            log(`warm-up ${attempt}: ${/reloaded/.test(lastError) ? 'the page reloaded (Vite bundled new dependencies)' : lastError}; again`)
+            await sleep(2000)
+            continue
         }
         // Stable means: every module answered and the page did not reload for 5 s afterwards.
         let stable = warm.bad.length === 0
@@ -530,7 +533,7 @@ async function warmUp() {
         if (stable) return
         await sleep(2000)
     }
-    fail(`the dev server did not settle within ${WARMUP_SECONDS} s (Vite kept reloading or failing modules); see the Vite log`)
+    fail(`the dev server did not settle within ${WARMUP_SECONDS} s (Vite kept reloading or failing modules${lastError ? `; last error: ${lastError}` : ''}); see the Vite log`)
 }
 
 // ---------------------------------------------------------------- the run
