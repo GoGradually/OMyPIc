@@ -9,8 +9,13 @@
 //! 받고, 나중 요청도 같은 `.part`를 처음부터 따라 읽는다. 읽는 쪽이 느리거나 사라져도 받기는
 //! 멈추지 않는다. 받기가 실패하면 따라 읽던 쪽은 오류로 끝난다.
 //!
-//! 상위 서버가 `IDLE_TIMEOUT` 동안 아무것도 보내지 않으면(응답 헤더든 본문이든) 그 읽기가 시간
-//! 초과로 끝나므로 받기 스레드는 언제나 스스로 끝나고, 임시 파일과 연결도 그때 함께 닫힌다.
+//! 응답 헤더가 `HEADER_TIMEOUT` 안에 오지 않거나 본문 사이에 `STALL_TIMEOUT` 동안 아무것도 오지
+//! 않으면 받기가 실패로 끝나므로 받기 스레드는 언제나 스스로 끝나고, 임시 파일과 연결도 그때 함께
+//! 닫힌다. 받기 스레드는 자기 단일 스레드 런타임에서 비동기 클라이언트를 돌리고, 끝날 때 런타임과
+//! 함께 연결을 닫는다.
+//!
+//! HTTP 클라이언트(와 그 안에 읽어 둔 OS 인증서 저장소)는 캐시마다 하나를 처음 쓸 때 만들어 모든
+//! 받기와 정보 요청이 나눠 쓴다. 요청마다 런타임이 다르므로 연결은 요청 사이에 남겨 두지 않는다.
 //!
 //! 캐시에 없고 받는 중도 아닌 파일의 정보 요청(HEAD, 라이브러리가 보내는 `Range: bytes=0-0`)은
 //! 상위 서버에 같은 것을 물어 답하고 아무것도 캐시하지 않는다. 그 밖의 `Range` 요청은 보통 GET처럼
@@ -35,8 +40,11 @@ use crate::config::LocalModelsConfig;
 /// 데이터 폴더 안의 캐시 폴더 이름.
 pub const LOCAL_MODELS_DIR: &str = "local-models";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
-/// 응답 헤더를 기다리는 시간이자 본문 읽기 한 번을 기다리는 시간.
-const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+/// 요청을 보내고 응답 헤더가 올 때까지 기다리는 시간. Hugging Face는 CDN 주소로 재전송하므로 TLS
+/// 연결 두 번이 이 안에 들어간다(HTTPS를 검사하는 프록시 뒤에서는 느리다).
+const HEADER_TIMEOUT: Duration = Duration::from_secs(60);
+/// 응답 헤더 뒤 본문 조각 사이에 기다리는 최대 시간.
+const STALL_TIMEOUT: Duration = Duration::from_secs(30);
 /// 정보 요청(HEAD, `Range: bytes=0-0`)은 연결부터 본문 끝까지 이 시간 안에 끝나야 한다.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 /// 정보 요청의 답으로 옮겨 줄 본문의 한도. `bytes=0-0`의 답은 1바이트다.
@@ -57,10 +65,15 @@ pub struct LocalModelCache {
     upstream: String,
     allowed_repos: Vec<String>,
     root: PathBuf,
-    idle_timeout: Duration,
+    header_timeout: Duration,
+    stall_timeout: Duration,
     in_flight: Flights,
     /// 살아 있는 받기 스레드 수.
     live_downloads: Arc<AtomicUsize>,
+    /// 처음 쓸 때 만드는 HTTP 클라이언트. 비동기 클라이언트라 놓을 때 기다리는 스레드가 없다.
+    client: Mutex<Option<reqwest::Client>>,
+    /// 클라이언트를 만든 횟수(시험용).
+    client_builds: AtomicUsize,
 }
 
 /// 받는 중인 파일 하나. 받기 스레드가 상태를 바꿀 때마다 `changed`로 깨운다.
@@ -92,16 +105,30 @@ impl LocalModelCache {
             upstream: config.upstream.trim_end_matches('/').to_string(),
             allowed_repos: config.allowed_repos.clone(),
             root,
-            idle_timeout: IDLE_TIMEOUT,
+            header_timeout: HEADER_TIMEOUT,
+            stall_timeout: STALL_TIMEOUT,
             in_flight: Arc::new(Mutex::new(HashMap::new())),
             live_downloads: Arc::default(),
+            client: Mutex::new(None),
+            client_builds: AtomicUsize::new(0),
         }
     }
 
     #[cfg(test)]
-    fn with_idle_timeout(mut self, idle_timeout: Duration) -> Self {
-        self.idle_timeout = idle_timeout;
+    fn with_idle_timeout(self, idle_timeout: Duration) -> Self {
+        self.with_timeouts(idle_timeout, idle_timeout)
+    }
+
+    #[cfg(test)]
+    fn with_timeouts(mut self, header: Duration, stall: Duration) -> Self {
+        self.header_timeout = header;
+        self.stall_timeout = stall;
         self
+    }
+
+    #[cfg(test)]
+    fn client_builds(&self) -> usize {
+        self.client_builds.load(Ordering::SeqCst)
     }
 
     #[cfg(test)]
@@ -124,6 +151,25 @@ impl LocalModelCache {
 
     fn flights(&self) -> MutexGuard<'_, HashMap<PathBuf, Arc<Flight>>> {
         lock(&self.in_flight)
+    }
+
+    /// 이 캐시의 HTTP 클라이언트. 처음 부를 때(요청을 처리하는 블로킹 스레드에서) 만든다. 동시에
+    /// 처음 부른 요청들은 잠금에서 기다렸다가 같은 클라이언트를 받는다.
+    fn client(&self) -> Result<reqwest::Client, LocalModelError> {
+        let mut client = lock(&self.client);
+        if let Some(client) = client.as_ref() {
+            return Ok(client.clone());
+        }
+        self.client_builds.fetch_add(1, Ordering::SeqCst);
+        let built = crate::http_client::build_async_client(|| {
+            reqwest::Client::builder()
+                .connect_timeout(CONNECT_TIMEOUT)
+                .tcp_keepalive(Some(Duration::from_secs(30)))
+                // 연결은 그 요청을 돌린 런타임에 묶이고 런타임은 요청마다 다르다.
+                .pool_max_idle_per_host(0)
+        })
+        .map_err(|err| internal(format!("Failed to build HTTP client: {err}")))?;
+        Ok(client.insert(built).clone())
     }
 
     /// 이 파일을 받는 중이면 그 받기를, 캐시에 있으면 `Ready`를, 정보 요청이면 `Probe`를 돌려준다.
@@ -161,11 +207,20 @@ impl LocalModelCache {
             return Ok(Turn::Ready);
         }
 
+        let client = match self.client() {
+            Ok(client) => client,
+            Err(err) => {
+                registration.finish(Err(err.clone()), None);
+                return Err(err);
+            }
+        };
         let job = DownloadJob {
             url: url.to_string(),
             target: path.to_path_buf(),
             flight: flight.clone(),
-            idle_timeout: self.idle_timeout,
+            client,
+            header_timeout: self.header_timeout,
+            stall_timeout: self.stall_timeout,
         };
         let live = LiveDownload::new(self.live_downloads.clone());
         let spawned = std::thread::Builder::new()
@@ -216,92 +271,105 @@ impl LocalModelCache {
 
     /// 캐시에 없는 파일의 정보 요청을 상위 서버에 묻는다. 본문(작다)은 여기서 다 읽어 두므로
     /// 상위 서버의 응답은 이 블로킹 스레드에서 닫힌다. 상위 서버가 범위를 무시하고 전체 파일로
-    /// 답하면 `None`: 보통 GET처럼 받는다.
+    /// 답하면 `None`: 보통 GET처럼 받는다. 연결부터 본문 끝까지 `PROBE_TIMEOUT` 안에 끝나야 한다.
     fn ask_upstream(
         &self,
         url: &str,
         path: &Path,
         probe: &ModelFileProbe,
     ) -> Result<Option<ModelFile>, LocalModelError> {
-        let transfer = |err: &dyn std::fmt::Display| {
-            LocalModelError::Upstream(format!("Model download failed: {err}"))
-        };
-        let client = crate::http_client::build_blocking_client(|| {
-            reqwest::blocking::Client::builder().connect_timeout(CONNECT_TIMEOUT)
-        })
-        .map_err(|err| internal(format!("Failed to build HTTP client: {err}")))?;
-        let method = if probe.head {
-            reqwest::Method::HEAD
-        } else {
-            reqwest::Method::GET
-        };
-        // 요청 하나의 제한 시간은 연결부터 본문 끝까지다.
-        let mut request = client.request(method, url).timeout(PROBE_TIMEOUT);
-        if probe.range.as_deref().is_some_and(is_first_byte_range) {
-            request = request.header(reqwest::header::RANGE, FIRST_BYTE_RANGE);
-        }
-        let mut response = request.send().map_err(|err| transfer(&err))?;
-        let status = response.status();
-        if status == reqwest::StatusCode::NOT_FOUND {
-            return Err(LocalModelError::NotFound(
-                "Model file not found upstream".to_string(),
-            ));
-        }
-        let satisfiable = status != reqwest::StatusCode::RANGE_NOT_SATISFIABLE;
-        if !status.is_success() && satisfiable {
-            return Err(LocalModelError::Upstream(format!(
-                "Model download failed with status {}",
-                status.as_u16()
-            )));
-        }
-        if !probe.head && status == reqwest::StatusCode::OK {
-            return Ok(None);
-        }
-        let content_range = response
+        let client = self.client()?;
+        let runtime = current_thread_runtime()?;
+        let asked = runtime.block_on(async {
+            tokio::time::timeout(PROBE_TIMEOUT, ask_upstream(&client, url, path, probe)).await
+        });
+        drop(runtime);
+        asked.unwrap_or_else(|_| Err(upstream_failed("timed out")))
+    }
+}
+
+async fn ask_upstream(
+    client: &reqwest::Client,
+    url: &str,
+    path: &Path,
+    probe: &ModelFileProbe,
+) -> Result<Option<ModelFile>, LocalModelError> {
+    let method = if probe.head {
+        reqwest::Method::HEAD
+    } else {
+        reqwest::Method::GET
+    };
+    let mut request = client.request(method, url);
+    if probe.range.as_deref().is_some_and(is_first_byte_range) {
+        request = request.header(reqwest::header::RANGE, FIRST_BYTE_RANGE);
+    }
+    let mut response = request.send().await.map_err(upstream_failed)?;
+    let status = response.status();
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Err(LocalModelError::NotFound(
+            "Model file not found upstream".to_string(),
+        ));
+    }
+    let satisfiable = status != reqwest::StatusCode::RANGE_NOT_SATISFIABLE;
+    if !status.is_success() && satisfiable {
+        return Err(LocalModelError::Upstream(format!(
+            "Model download failed with status {}",
+            status.as_u16()
+        )));
+    }
+    if !probe.head && status == reqwest::StatusCode::OK {
+        return Ok(None);
+    }
+    let content_range = response
+        .headers()
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    // HEAD와 416에는 보낼 본문이 없다.
+    let (content_length, body) = if probe.head {
+        // HEAD의 `content_length()`는 본문 크기(0)라서 헤더를 직접 읽는다.
+        let length = response
             .headers()
-            .get(reqwest::header::CONTENT_RANGE)
+            .get(reqwest::header::CONTENT_LENGTH)
             .and_then(|value| value.to_str().ok())
-            .map(str::to_string);
-        // HEAD와 416에는 보낼 본문이 없다.
-        let (content_length, body) = if probe.head {
-            // HEAD의 `content_length()`는 본문 크기(0)라서 헤더를 직접 읽는다.
-            let length = response
-                .headers()
-                .get(reqwest::header::CONTENT_LENGTH)
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.parse::<u64>().ok());
-            (length, Vec::new())
-        } else if !satisfiable {
-            (None, Vec::new())
-        } else {
-            let too_large = || {
-                LocalModelError::Upstream("Model probe reply is larger than expected".to_string())
-            };
-            if response
-                .content_length()
-                .is_some_and(|length| length > PROBE_BODY_LIMIT)
-            {
-                return Err(too_large());
-            }
-            let mut body = Vec::new();
-            (&mut response)
-                .take(PROBE_BODY_LIMIT + 1)
-                .read_to_end(&mut body)
-                .map_err(|err| transfer(&err))?;
+            .and_then(|value| value.parse::<u64>().ok());
+        (length, Vec::new())
+    } else if !satisfiable {
+        (None, Vec::new())
+    } else {
+        let too_large =
+            || LocalModelError::Upstream("Model probe reply is larger than expected".to_string());
+        if response
+            .content_length()
+            .is_some_and(|length| length > PROBE_BODY_LIMIT)
+        {
+            return Err(too_large());
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(upstream_failed)? {
+            body.extend_from_slice(&chunk);
             if body.len() as u64 > PROBE_BODY_LIMIT {
                 return Err(too_large());
             }
-            (Some(body.len() as u64), body)
-        };
-        drop(response);
-        Ok(Some(ModelFile::Upstream(UpstreamModelReply {
-            status: status.as_u16(),
-            content_type: content_type_of(path).to_string(),
-            content_length,
-            content_range,
-            body: Box::new(std::io::Cursor::new(body)),
-        })))
-    }
+        }
+        (Some(body.len() as u64), body)
+    };
+    drop(response);
+    Ok(Some(ModelFile::Upstream(UpstreamModelReply {
+        status: status.as_u16(),
+        content_type: content_type_of(path).to_string(),
+        content_length,
+        content_range,
+        body: Box::new(std::io::Cursor::new(body)),
+    })))
+}
+
+/// 받기 하나나 정보 요청 하나를 돌리는 런타임. 놓으면 그 요청의 연결도 닫힌다.
+fn current_thread_runtime() -> Result<tokio::runtime::Runtime, LocalModelError> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|err| internal(format!("Failed to start the model download: {err}")))
 }
 
 impl LocalModelFiles for LocalModelCache {
@@ -612,36 +680,35 @@ struct DownloadJob {
     url: String,
     target: PathBuf,
     flight: Arc<Flight>,
-    idle_timeout: Duration,
+    client: reqwest::Client,
+    header_timeout: Duration,
+    stall_timeout: Duration,
 }
 
 impl DownloadJob {
-    /// 받고 나서 결과로 받기를 끝낸다. 상위 서버의 응답과 HTTP 클라이언트(와 그 내부 스레드)는
-    /// 결과를 알리기 전에 이 스레드에서 닫는다.
+    /// 받고 나서 결과로 받기를 끝낸다. 상위 서버의 응답과 연결(런타임과 함께)은 결과를 알리기 전에
+    /// 이 스레드에서 닫는다.
     fn run(self, registration: Registration) {
         let mut part = None;
-        let result = self.transfer(&mut part);
+        let result = match current_thread_runtime() {
+            Ok(runtime) => {
+                let result = runtime.block_on(self.transfer(&mut part));
+                drop(runtime);
+                result
+            }
+            Err(err) => Err(err),
+        };
+        drop(self.client);
         registration.finish(result, part);
     }
 
     /// 실패하면 `part`에 받다 만 임시 파일을 남겨 둔다(`finish`가 지운다).
-    fn transfer(&self, part: &mut Option<NamedTempFile>) -> Result<(), LocalModelError> {
-        let client = crate::http_client::build_blocking_client(|| {
-            reqwest::blocking::Client::builder()
-                .connect_timeout(CONNECT_TIMEOUT)
-                // 블로킹 클라이언트의 제한 시간은 응답 헤더를 기다리는 것과 본문 읽기 한 번씩에
-                // 따로 적용된다(전체 시간이 아니다). 그래서 멈춘 상위 서버를 기다리는 읽기도 끝난다.
-                .timeout(self.idle_timeout)
-                .tcp_keepalive(Some(Duration::from_secs(30)))
-        })
-        .map_err(|err| internal(format!("Failed to build HTTP client: {err}")))?;
-        let mut response = client.get(&self.url).send().map_err(|err| {
-            if err.is_timeout() {
-                upstream_failed("timed out waiting for response headers")
-            } else {
-                upstream_failed(err)
-            }
-        })?;
+    async fn transfer(&self, part: &mut Option<NamedTempFile>) -> Result<(), LocalModelError> {
+        let mut response =
+            tokio::time::timeout(self.header_timeout, self.client.get(&self.url).send())
+                .await
+                .map_err(|_| upstream_failed("timed out waiting for response headers"))?
+                .map_err(upstream_failed)?;
         let status = response.status();
         if status == reqwest::StatusCode::NOT_FOUND {
             return Err(LocalModelError::NotFound(
@@ -675,21 +742,16 @@ impl DownloadJob {
         self.flight.changed.notify_all();
 
         let mut received = 0_u64;
-        let mut buffer = vec![0_u8; 64 * 1024];
         loop {
-            let read = match response.read(&mut buffer) {
-                Ok(read) => read,
-                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(err) if is_timeout(&err) => {
-                    return Err(upstream_failed("stalled: no data received"))
-                }
-                Err(err) => return Err(upstream_failed(err)),
-            };
-            if read == 0 {
+            let chunk = tokio::time::timeout(self.stall_timeout, response.chunk())
+                .await
+                .map_err(|_| upstream_failed("stalled: no data received"))?
+                .map_err(upstream_failed)?;
+            let Some(chunk) = chunk else {
                 break;
-            }
-            temp.write_all(&buffer[..read]).map_err(write_error)?;
-            received += read as u64;
+            };
+            temp.write_all(&chunk).map_err(write_error)?;
+            received += chunk.len() as u64;
             self.flight.state().written = received;
             self.flight.changed.notify_all();
         }
@@ -701,7 +763,6 @@ impl DownloadJob {
             )));
         }
         drop(response);
-        drop(client);
         // 이름 바꾸기와 완료 표시를 한 잠금 안에서 한다(`follow`가 이것을 믿는다).
         let mut state = self.flight.state();
         let temp = part.take().expect("the temporary file was created above");
@@ -720,15 +781,6 @@ impl DownloadJob {
 
 fn upstream_failed(reason: impl std::fmt::Display) -> LocalModelError {
     LocalModelError::Upstream(format!("Model download failed: {reason}"))
-}
-
-/// 블로킹 응답의 읽기가 제한 시간에 걸렸는가.
-fn is_timeout(err: &std::io::Error) -> bool {
-    err.kind() == std::io::ErrorKind::TimedOut
-        || err
-            .get_ref()
-            .and_then(|inner| inner.downcast_ref::<reqwest::Error>())
-            .is_some_and(reqwest::Error::is_timeout)
 }
 
 #[cfg(test)]
@@ -1930,5 +1982,77 @@ mod tests {
         let target = cache_file(dir.path(), "model.onnx");
         wait_until("the file is cached", || target.is_file());
         assert_eq!(2, upstream.requests().len(), "probe, then the download");
+    }
+
+    #[test]
+    fn the_header_wait_is_longer_than_the_stall_limit_between_body_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        // 응답 헤더는 0.8초 뒤에 온다(재전송 뒤 CDN과 TLS 연결 두 번). 본문은 헤더 뒤 바로 온다.
+        // `stalled`는 헤더 뒤 일부만 보내고 0.8초 멈춘다.
+        let upstream = FakeUpstream::start(|head, stream| {
+            if head.contains("stalled") {
+                stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n01234",
+                    )
+                    .unwrap();
+                stream.flush().unwrap();
+                std::thread::sleep(Duration::from_millis(800));
+                let _ = stream.write_all(b"56789");
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(800));
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+        });
+        let cache = cache(&upstream.url, dir.path())
+            .with_timeouts(Duration::from_millis(2000), Duration::from_millis(400));
+
+        let slow_headers = fetch(&cache, "slow.onnx");
+        assert_eq!(
+            b"ok".to_vec(),
+            std::fs::read(slow_headers.unwrap().path).unwrap(),
+            "a header wait within the header limit succeeds"
+        );
+        assert_eq!(
+            Err(LocalModelError::Upstream(
+                "Model download failed: stalled: no data received".to_string()
+            )),
+            fetch(&cache, "stalled.onnx")
+        );
+    }
+
+    #[test]
+    fn the_production_limits_give_the_headers_sixty_seconds_and_a_stall_thirty() {
+        assert_eq!(Duration::from_secs(60), HEADER_TIMEOUT);
+        assert_eq!(Duration::from_secs(30), STALL_TIMEOUT);
+    }
+
+    #[test]
+    fn one_http_client_serves_every_probe_and_download_of_a_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let upstream = FakeUpstream::start(|head, stream| {
+            let reply: &[u8] = if head.starts_with("head ") {
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n"
+            } else {
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+            };
+            let _ = stream.write_all(reply);
+        });
+        let cache = cache(&upstream.url, dir.path());
+        assert_eq!(0, cache.client_builds(), "built lazily");
+
+        for file in ["a.onnx", "b.onnx"] {
+            let ModelFile::Upstream(reply) = probe(&cache, file, true, None).unwrap() else {
+                panic!("a probe of an uncached file is relayed");
+            };
+            assert_eq!(200, reply.status);
+            fetch(&cache, file).unwrap();
+        }
+        fetch(&cache, "c.onnx").unwrap();
+
+        assert_eq!(5, upstream.requests().len());
+        assert_eq!(1, cache.client_builds());
+        wait_until("download threads end", || cache.live_downloads() == 0);
     }
 }
