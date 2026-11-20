@@ -16,7 +16,9 @@ use omypic_application::question::usecase::QuestionUseCase;
 use omypic_application::rulebook::port::RulebookPort;
 use omypic_application::rulebook::usecase::RulebookUseCase;
 use omypic_application::session::usecase::SessionUseCase;
-use omypic_application::shared::local_model::{CachedModelFile, LocalModelError, LocalModelFiles};
+use omypic_application::shared::local_model::{
+    LocalModelError, LocalModelFiles, ModelFile, ModelFileProbe,
+};
 use omypic_application::stt::usecase::SttUseCase;
 use omypic_application::test_support::{
     FakeApiKeyProbePort, FakeFeedbackPolicy, FakeRagPolicy, FakeSttPolicy, FakeTtsGateway,
@@ -52,7 +54,13 @@ pub const DEFAULT_ALLOWED_ORIGINS: [&str; 5] = [
 struct NoLocalModels;
 
 impl LocalModelFiles for NoLocalModels {
-    fn fetch(&self, repo: &str, _: &str, _: &str) -> Result<CachedModelFile, LocalModelError> {
+    fn open(
+        &self,
+        repo: &str,
+        _: &str,
+        _: &str,
+        _: Option<&ModelFileProbe>,
+    ) -> Result<ModelFile, LocalModelError> {
         Err(LocalModelError::NotAllowed(format!(
             "Repository '{repo}' is not allowed"
         )))
