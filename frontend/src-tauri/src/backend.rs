@@ -11,6 +11,9 @@ use omypic_server::{RunningServer, RUNTIME_SHUTDOWN_TIMEOUT};
 
 use crate::paths;
 
+/// 내장 Backend가 읽지 않는 환경 변수. 빈 포트에 뜨므로 잘못된 값이어도 시작을 막지 않는다.
+const IGNORED_ENV: &[&str] = &["OMYPIC_PORT"];
+
 /// 환경 변수(`lookup`)로 설정을 읽고, 데이터 폴더(`OMYPIC_DATA_DIR`가 없으면
 /// `<config_dir>/omypic-frontend/omypic-data`)와 번들 임베딩 모델을 채운다.
 pub fn build_config(
@@ -18,7 +21,15 @@ pub fn build_config(
     config_dir: Option<PathBuf>,
     resource_dir: Option<&Path>,
 ) -> anyhow::Result<AppConfig> {
-    let mut config = AppConfig::from_env_with(&lookup).map_err(|err| anyhow::anyhow!("{err}"))?;
+    let backend_env = |name: &str| {
+        if IGNORED_ENV.contains(&name) {
+            None
+        } else {
+            lookup(name)
+        }
+    };
+    let mut config =
+        AppConfig::from_env_with(backend_env).map_err(|err| anyhow::anyhow!("{err}"))?;
     config.data_dir = paths::resolve_data_dir(lookup("OMYPIC_DATA_DIR"), config_dir)
         .to_string_lossy()
         .into_owned();
@@ -153,8 +164,26 @@ mod tests {
 
     #[test]
     fn invalid_env_is_a_config_error() {
-        let err = build_config(lookup(&[("OMYPIC_PORT", "nope")]), None, None).unwrap_err();
-        assert!(err.to_string().contains("OMYPIC_PORT"), "{err}");
+        let err = build_config(
+            lookup(&[("OMYPIC_OPENAI_TIMEOUT_SECONDS", "nope")]),
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("OMYPIC_OPENAI_TIMEOUT_SECONDS"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn the_port_variable_is_ignored_even_when_invalid() {
+        // 내장 Backend는 빈 포트에 뜨므로 `OMYPIC_PORT`를 읽지 않는다.
+        for value in ["nope", "99999", "8080"] {
+            let config = build_config(lookup(&[("OMYPIC_PORT", value)]), None, None)
+                .unwrap_or_else(|err| panic!("{value}: {err}"));
+            assert_eq!(AppConfig::default().port, config.port, "{value}");
+        }
     }
 
     #[test]

@@ -198,7 +198,7 @@ npm run build:desktop
   - 기본값: 미지정. 지정하면 데스크톱 앱이 내장 Backend를 띄우지 않고 그 주소를 씁니다(개발용).
 - `OMYPIC_PORT`
   - 기본값: `4317` (단독 `omypic-server`가 `127.0.0.1:<port>`에 리슨)
-  - 데스크톱 앱의 내장 Backend는 이 값을 쓰지 않고 빈 포트를 골라 프런트엔드에 알려 줍니다.
+  - 데스크톱 앱의 내장 Backend는 이 값을 읽지 않고(잘못된 값이어도 무시합니다) 빈 포트를 골라 프런트엔드에 알려 줍니다.
 - `OMYPIC_DATA_DIR`
   - 기본값: 단독 실행은 `<홈>/OMyPIc`, 데스크톱 앱은 `<OS 설정 폴더>/omypic-frontend/omypic-data`
   - SQLite 파일(`omypic.db`), 룰북 파일, 임베딩 모델, `local-models/`, `logs/`가 이 폴더에 저장됩니다.
