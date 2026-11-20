@@ -762,6 +762,23 @@ describe('local speech', () => {
         expect(localSpeechCacheSize()).toEqual({entries: 0, bytes: 0})
     })
 
+    it('keeps the cached audio of a voice whose release was refused', async () => {
+        // The English voice is busy, so only the Korean one is released.
+        releaseLocalTts.mockReturnValue(false)
+        releaseLocalKoTts.mockReturnValue(true)
+        const englishSentence = english('Still needed for the replay')
+        const koreanSentence = korean('이 문장은 다시 합성합니다')
+        await prepareLocalSpeech(`${englishSentence} ${koreanSentence}`)
+        await flush()
+
+        expect(releaseLocalSpeechModels({english: true, korean: true})).toEqual({english: false, korean: true})
+
+        await prepareLocalSpeech(`${englishSentence} ${koreanSentence}`)
+        await flush()
+        expect(synthesizeEnglish).toHaveBeenCalledTimes(1)
+        expect(synthesizeKorean).toHaveBeenCalledTimes(2)
+    })
+
     it('is busy while either voice is', () => {
         isLocalTtsBusy.mockReturnValue(false)
         isLocalKoTtsBusy.mockReturnValue(true)

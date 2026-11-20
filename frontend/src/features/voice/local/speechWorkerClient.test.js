@@ -180,6 +180,20 @@ describe('speech worker client', () => {
             expect(client.release()).toBe(true)
         })
 
+        it('is not left busy when posting a request to the worker throws', async () => {
+            const client = makeClient(FakeWorker)
+            await client.load()
+            workers[0].postMessage = () => {
+                throw new Error('could not be cloned')
+            }
+
+            await expect(client.run('synthesize', (config) => ({config, text: 'a'}), {timeoutMs: 1000}))
+                .rejects.toThrow('could not be cloned')
+
+            expect(client.isBusy()).toBe(false)
+            expect(client.release()).toBe(true)
+        })
+
         it('returns false when there is nothing to release', () => {
             const client = makeClient(FakeWorker)
             expect(client.release()).toBe(false)

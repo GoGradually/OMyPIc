@@ -139,7 +139,14 @@ export function createSpeechWorkerClient({createWorker, buildConfig, texts}) {
         return new Promise((resolve, reject) => {
             const id = ++nextRequestId
             pending.set(id, {resolve, reject, timeoutMs})
-            ensureWorker().postMessage({id, type, payload}, transfer)
+            try {
+                ensureWorker().postMessage({id, type, payload}, transfer)
+            } catch (error) {
+                // Nothing was sent, so nothing will answer: without this the client stays busy forever.
+                pending.delete(id)
+                reject(error)
+                return
+            }
             if (timeoutMs) {
                 armWatchdog(false)
             }

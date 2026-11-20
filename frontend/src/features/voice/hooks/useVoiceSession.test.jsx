@@ -2229,6 +2229,41 @@ describe('useVoiceSession', () => {
         unmount()
     })
 
+    it('does not start a new session while the previous one is still stopping', async () => {
+        const {result, unmount} = renderLocalSpeechSession({ttsModel: 'gpt-4o-mini-tts'})
+        await act(async () => {
+            await result.current.startSession()
+        })
+        expect(result.current.sessionActive).toBe(true)
+        // The server takes a while to confirm the stop.
+        let confirmStop
+        stopVoiceSession.mockImplementationOnce(() => new Promise((resolve) => {
+            confirmStop = resolve
+        }))
+
+        let stopping
+        await act(async () => {
+            stopping = result.current.stopSession()
+        })
+        expect(result.current.sessionPhase).toBe('STOPPING')
+        await act(async () => {
+            await result.current.startSession()
+        })
+        expect(openVoiceSession).toHaveBeenCalledTimes(1)
+
+        await act(async () => {
+            confirmStop()
+            await stopping
+        })
+        expect(result.current.sessionPhase).toBe('IDLE')
+        await act(async () => {
+            await result.current.startSession()
+        })
+        expect(openVoiceSession).toHaveBeenCalledTimes(2)
+        expect(result.current.sessionActive).toBe(true)
+        unmount()
+    })
+
     it('stops the question an abandoned start was already reading', async () => {
         const tracks = [{stop: vi.fn(), readyState: 'live', label: 'Mock Mic'}]
         let grantMicrophone

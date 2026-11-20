@@ -194,7 +194,8 @@ export function releaseLocalSpeechModels({english = false, korean = false} = {})
     }
     for (const [sentence, entry] of synthesisCache) {
         const lang = detectSpeechLang(sentence)
-        if (entry.settled && ((english && lang === ENGLISH) || (korean && lang === KOREAN))) {
+        // Only of a voice that really went away: a busy voice keeps its model, so its audio stays usable.
+        if (entry.settled && ((released.english && lang === ENGLISH) || (released.korean && lang === KOREAN))) {
             dropFromCache(sentence)
         }
     }

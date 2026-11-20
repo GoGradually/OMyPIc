@@ -113,6 +113,7 @@ export function useVoiceLifecycle({
     // True while startSession runs (the models can take minutes to download), so a second press of
     // Start does not open a second session.
     const sessionStartingRef = useRef(false)
+    const sessionStoppingRef = useRef(false)
     const speechStateRef = useRef(SPEECH_STATE.IDLE)
     const localStopRef = useRef(false)
     const serverStopRef = useRef(false)
@@ -1035,27 +1036,34 @@ export function useVoiceLifecycle({
         }
 
         localStopRef.current = notifyServer
-        resetReconnectState()
-        setSessionPhase('STOPPING')
-        updateSpeechState(SPEECH_STATE.STOPPING)
-        resetPendingAudio()
-        sessionActiveRef.current = false
-        setSessionActive(false)
-        stopCapture('', {preserveReplay})
+        // Until this stop has finished, a new start would have its session id and event stream wiped
+        // by the cleanup below.
+        sessionStoppingRef.current = true
+        try {
+            resetReconnectState()
+            setSessionPhase('STOPPING')
+            updateSpeechState(SPEECH_STATE.STOPPING)
+            resetPendingAudio()
+            sessionActiveRef.current = false
+            setSessionActive(false)
+            stopCapture('', {preserveReplay})
 
-        const voiceSessionId = voiceSessionIdRef.current
-        if (notifyServer && voiceSessionId) {
-            await stopVoiceSession(voiceSessionId, {forced, reason}).catch(() => {
-            })
+            const voiceSessionId = voiceSessionIdRef.current
+            if (notifyServer && voiceSessionId) {
+                await stopVoiceSession(voiceSessionId, {forced, reason}).catch(() => {
+                })
+            }
+
+            closeEventSource()
+            voiceSessionIdRef.current = ''
+            currentQuestionIdRef.current = ''
+            currentQuestionTurnIdRef.current = 0
+            replayCandidateRef.current = null
+            lastSeenEventIdRef.current = 0
+            replayTtsCutoffEventIdRef.current = 0
+        } finally {
+            sessionStoppingRef.current = false
         }
-
-        closeEventSource()
-        voiceSessionIdRef.current = ''
-        currentQuestionIdRef.current = ''
-        currentQuestionTurnIdRef.current = 0
-        replayCandidateRef.current = null
-        lastSeenEventIdRef.current = 0
-        replayTtsCutoffEventIdRef.current = 0
         setVoiceConnected(false)
         setSessionPhase('IDLE')
         updateSpeechState(SPEECH_STATE.IDLE)
@@ -1331,7 +1339,7 @@ export function useVoiceLifecycle({
     }, [loadSpeechModel])
 
     const startSession = useCallback(async () => {
-        if (sessionActiveRef.current || sessionStartingRef.current) {
+        if (sessionActiveRef.current || sessionStartingRef.current || sessionStoppingRef.current) {
             return
         }
 
