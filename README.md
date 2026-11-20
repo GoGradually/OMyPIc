@@ -184,6 +184,7 @@ npm run build:desktop
 #### 공통
 
 - API Key는 다시 입력해야 할 수 있습니다. 0.3.0은 0.2.x와 같은 OS 보안 저장소 항목을 읽도록 만들었지만 Windows와 macOS에서 확인하지는 못했습니다.
+- 화면에서 고른 설정(피드백 모델, STT 모델, TTS 모델, AI 스위치, 답변 후 내 응답 자동 재생)은 앱 화면(웹뷰)이 저장하는데, 0.3.0은 0.2.x가 저장한 값을 읽지 않습니다. 업그레이드한 뒤 설정에서 다시 고르세요. TTS 기본값은 유료 OpenAI 모델(`gpt-4o-mini-tts`)이므로, OpenAI API Key가 있으면 0.2.x에서 기기 음성을 쓰던 사용자도 유료 음성으로 세션을 시작합니다. 무료 음성은 `local-kokoro`입니다.
 - 룰북 파일이 UTF-8이 아닌 백업은 가져오기가 거부되고, 메시지에 해당 파일 이름이 나옵니다. 그 룰북을 UTF-8로 저장해 다시 내보내거나 가져오세요.
 
 ## 5) 환경 변수
@@ -320,17 +321,22 @@ Claude API에는 음성 인식/합성 기능이 없습니다. 그래서 STT/TTS�
     - `VITE_OMYPIC_LOCAL_STT_MODEL` (기본값: `Xenova/whisper-base.en`)
     - `VITE_OMYPIC_LOCAL_STT_HOST` (기본값: 앱의 Backend `/api/local-models/` 경로. 사내 미러나 앱에 동봉한 모델 경로를 지정할 때 사용)
     - `VITE_OMYPIC_LOCAL_STT_PATH_TEMPLATE` (기본값: `{model}/`, `VITE_OMYPIC_LOCAL_STT_HOST`를 지정했을 때만 적용)
+  - 데스크톱 앱에서 `VITE_OMYPIC_LOCAL_*_HOST`로 다른 주소를 쓰려면 그 주소를 Tauri CSP(`frontend/src-tauri/tauri.conf.json`의 `connect-src`)에도 넣어야 합니다. 넣지 않으면 앱이 그 주소로 요청하지 못합니다.
+  - Backend 경로를 그대로 쓰면서 `VITE_OMYPIC_LOCAL_*_MODEL`로 다른 모델을 고르면 그 저장소를 `OMYPIC_LOCAL_MODEL_REPOS`에도 넣어야 합니다(`VITE_OMYPIC_LOCAL_KO_TTS_MODEL` 포함).
 - 기기에서 읽어 주기(`local-kokoro`, AI OFF 세션)
   - 서버는 오디오 대신 읽을 문장을 `tts.text` 이벤트로 보내고, 앱이 문장 단위로 읽습니다.
   - 문장마다 언어를 판별해 그 언어의 모델로만 읽습니다. 한글이 한 글자라도 있는 문장은 한국어 문장이고(영어를 인용한 한국어 문장 포함) 문장 전체를 한국어 모델이 읽습니다. 영어 문장을 한국어 모델로, 한국어 문장을 영어 모델로 읽지 않습니다.
-  - 모델을 쓸 수 없는 문장은 소리 없이 화면에만 보여 주고 세션을 계속합니다.
+  - 모델을 쓸 수 없는 문장은 소리 없이 화면에만 보여 주고 세션을 계속합니다. 영어 모델(Kokoro)을 불러오지 못해도 세션은 열리고(AI ON 포함), 질문을 화면으로 보여 주며 실전 연습 패널에 그 사실을 표시합니다. 다음 영어 문장이 올 때 뒤에서 다시 불러옵니다.
+  - 숫자(`3.5`), 약어(`Mr.`), 따옴표 안의 문장에서는 문장을 나누지 않습니다. 번호(`1.`)나 이모지만 있는 조각은 옆 문장에 붙여 읽고, 한자나 가나만 있는 문장은 읽지 않습니다.
   - 예전 설정값 `device-voice`(운영체제 내장 음성)는 없어졌습니다. 저장된 설정이 `device-voice`이면 `local-kokoro`로 읽습니다.
 - `local-kokoro`
   - 영어 문장은 Kokoro 모델(`onnx-community/Kokoro-82M-v1.0-ONNX`, `kokoro-js`)로, 한국어 문장은 Supertonic 2 모델(`onnx-community/Supertonic-TTS-2-ONNX`, 음성 `F2`)로 합성해 읽습니다. 둘 다 렌더러의 Web Worker에서 ONNX Runtime WebAssembly로 실행합니다.
-  - Supertonic 2 모델의 라이선스는 OpenRAIL-M입니다.
+  - 모델과 라이선스
+    - Supertonic 2: Supertone Inc.가 만든 모델로 OpenRAIL-M 라이선스입니다([LICENSE](https://huggingface.co/Supertone/supertonic-2/blob/main/LICENSE)). 이 모델은 라이선스의 사용 제한(Attachment A, Use Restrictions)을 지키는 범위에서만 쓸 수 있습니다.
+    - Kokoro: hexgrad의 Kokoro-82M으로 Apache-2.0 라이선스입니다.
   - 처음 사용할 때 모델 파일을 Backend가 Hugging Face에서 내려받아 `<데이터 폴더>/local-models`에 보관하고, 이후에는 그 파일을 읽습니다. 내려받는 크기는 Kokoro가 약 90MB, Supertonic 2가 약 263MB입니다.
-  - 한국어 모델은 AI가 켜져 있고 피드백 언어가 한국어인 세션에서만 세션 시작 때 내려받습니다. 그 밖의 세션에서는 한국어 문장을 소리 없이 화면에만 보여 줍니다.
-  - CPU에서 합성하므로 문장을 준비하는 데 시간이 걸립니다. 문장이 도착하는 즉시 합성을 시작하고, 같은 문장은 다시 합성하지 않습니다(질문 두 번째 재생은 즉시).
+  - 한국어 모델은 AI가 켜져 있고 피드백 언어가 한국어인 세션에서만 받습니다. 세션 시작과 함께 뒤에서 불러오고, 세션은 그 모델을 기다리지 않고 열립니다. 준비될 때까지 한국어 문장은 소리 없이 화면에 보여 주고, 실전 연습 패널에 준비 상황(받은 비율)이나 불러오지 못한 사실을 계속 표시합니다. 그 밖의 세션에서는 한국어 문장을 소리 없이 화면에만 보여 줍니다.
+  - CPU에서 합성하므로 문장을 준비하는 데 시간이 걸립니다. 문장이 도착하는 즉시 모든 문장의 합성을 시작하고, 앞 문장부터 준비되는 대로 순서대로 재생합니다(긴 피드백도 첫 문장이 합성되면 바로 들립니다). 같은 문장은 다시 합성하지 않습니다(질문 두 번째 재생은 즉시). 세션을 끝내면 아직 시작하지 않은 합성은 버립니다.
   - 영어 모델 빌드 시 환경 변수: `VITE_OMYPIC_LOCAL_TTS_MODEL`(기본값 `onnx-community/Kokoro-82M-v1.0-ONNX`), `VITE_OMYPIC_LOCAL_TTS_VOICE`(기본값 `af_heart`), `VITE_OMYPIC_LOCAL_TTS_HOST`(기본값: 앱의 Backend `/api/local-models/` 경로), `VITE_OMYPIC_LOCAL_TTS_PATH_TEMPLATE`.
   - 한국어 모델 빌드 시 환경 변수: `VITE_OMYPIC_LOCAL_KO_TTS_MODEL`(기본값 `onnx-community/Supertonic-TTS-2-ONNX`), `VITE_OMYPIC_LOCAL_KO_TTS_VOICE`(기본값 `F2`), `VITE_OMYPIC_LOCAL_KO_TTS_HOST`(기본값: 앱의 Backend `/api/local-models/` 경로), `VITE_OMYPIC_LOCAL_KO_TTS_PATH_TEMPLATE`.
 
