@@ -30,6 +30,25 @@ function reportProgress(event) {
     self.postMessage({type: 'progress', file: event.file || '', progress: event.progress})
 }
 
+// The ONNX export of this model also returns every attention map (the encoder's: six of
+// 8 x 1500 x 1500 floats, about 430 MB) on each run. Nothing reads them (they are only for
+// word-level timestamps), yet they made a transcription take about 900 MB more memory. Each model
+// part is asked for its other outputs only.
+function skipAttentionOutputs(transcriber) {
+    for (const session of Object.values(transcriber?.model?.sessions || {})) {
+        if (!Array.isArray(session?.outputNames) || typeof session.run !== 'function') {
+            continue
+        }
+        const fetches = session.outputNames.filter((name) => !name.includes('attentions'))
+        if (fetches.length === session.outputNames.length) {
+            continue
+        }
+        const run = session.run.bind(session)
+        session.run = (feeds, requested, options) => run(feeds, requested ?? fetches, options)
+    }
+    return transcriber
+}
+
 function load(config) {
     if (!transcriberPromise) {
         configure(config)
@@ -38,7 +57,7 @@ function load(config) {
             device: 'wasm',
             revision: config.revision,
             progress_callback: reportProgress
-        }).catch((error) => {
+        }).then(skipAttentionOutputs).catch((error) => {
             transcriberPromise = null
             throw error
         })
