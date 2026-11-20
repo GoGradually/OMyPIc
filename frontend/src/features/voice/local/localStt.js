@@ -4,6 +4,8 @@ import {createSpeechWorkerClient} from './speechWorkerClient.js'
 
 const WHISPER_SAMPLE_RATE = 16000
 const DEFAULT_MODEL = 'Xenova/whisper-base.en'
+// The commit of DEFAULT_MODEL every install loads, so an upstream change cannot change it silently.
+const DEFAULT_REVISION = '95bf40a508535962c6483ead40270b2e32267508'
 
 function readEnv(name) {
     return (import.meta.env && import.meta.env[name]) || ''
@@ -13,8 +15,10 @@ function readEnv(name) {
 // worker turns off the library's browser cache for those loads (backendHosted).
 async function buildConfig() {
     const hostOverride = readEnv('VITE_OMYPIC_LOCAL_STT_HOST')
+    const model = readEnv('VITE_OMYPIC_LOCAL_STT_MODEL') || DEFAULT_MODEL
     return {
-        model: readEnv('VITE_OMYPIC_LOCAL_STT_MODEL') || DEFAULT_MODEL,
+        model,
+        revision: readEnv('VITE_OMYPIC_LOCAL_STT_REVISION') || (model === DEFAULT_MODEL ? DEFAULT_REVISION : 'main'),
         modelHost: hostOverride || `${await getBackendUrl()}/api/local-models/`,
         modelPathTemplate: readEnv('VITE_OMYPIC_LOCAL_STT_PATH_TEMPLATE'),
         backendHosted: !hostOverride

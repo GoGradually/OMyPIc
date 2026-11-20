@@ -36,8 +36,24 @@ describe('local tts model host', () => {
         expect(posted[0].payload.config).toMatchObject({
             model: 'onnx-community/Kokoro-82M-v1.0-ONNX',
             modelHost: 'http://localhost:4317/api/local-models/',
+            revision: '1939ad2a8e416c0acfeecc08a694d14ef25f2231',
             backendHosted: true
         })
+    })
+
+    it('uses the revision a build variable names, and main for another model unless one is named', async () => {
+        vi.stubEnv('VITE_OMYPIC_LOCAL_TTS_REVISION', 'abc123')
+        let {loadLocalTts} = await import('./localTts.js')
+        await loadLocalTts()
+        expect(posted[0].payload.config.revision).toBe('abc123')
+
+        vi.unstubAllEnvs()
+        vi.resetModules()
+        posted = []
+        vi.stubEnv('VITE_OMYPIC_LOCAL_TTS_MODEL', 'mirror/kokoro')
+        ;({loadLocalTts} = await import('./localTts.js'))
+        await loadLocalTts()
+        expect(posted[0].payload.config.revision).toBe('main')
     })
 
     it('keeps the configured host and path template when an override is set', async () => {
@@ -232,6 +248,19 @@ describe('redirectHuggingFaceFetch', () => {
         expect(original).toHaveBeenCalledWith(
             'http://localhost:4317/api/local-models/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/af_heart.bin',
             {method: 'GET'}
+        )
+    })
+
+    it('fetches the fixed main voice address at the pinned revision', async () => {
+        const scope = scopeWithFetch()
+        const original = scope.fetch
+        redirectHuggingFaceFetch(scope, host, '1939ad2a8e416c0acfeecc08a694d14ef25f2231')
+
+        await scope.fetch('https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/af_heart.bin')
+
+        expect(original).toHaveBeenCalledWith(
+            'http://localhost:4317/api/local-models/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/1939ad2a8e416c0acfeecc08a694d14ef25f2231/voices/af_heart.bin',
+            undefined
         )
     })
 

@@ -1,10 +1,10 @@
 /** @vitest-environment node */
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 
-const mocks = vi.hoisted(() => ({generate: null}))
+const mocks = vi.hoisted(() => ({generate: null, env: {backends: {onnx: {wasm: {}}}}}))
 
 vi.mock('@huggingface/transformers', () => ({
-    env: {backends: {onnx: {wasm: {}}}}
+    env: mocks.env
 }))
 vi.mock('kokoro-js', () => ({
     KokoroTTS: {from_pretrained: vi.fn(async () => ({generate: (...args) => mocks.generate(...args)}))}
@@ -15,6 +15,7 @@ const CONFIG = {
     voice: 'af_heart',
     modelHost: 'http://localhost:4317/api/local-models/',
     modelPathTemplate: '',
+    revision: '1939ad2a8e416c0acfeecc08a694d14ef25f2231',
     backendHosted: true
 }
 
@@ -33,7 +34,8 @@ describe('English tts worker synthesis', () => {
     beforeEach(async () => {
         vi.resetModules()
         spoken = []
-        scope = {location: {href: 'http://localhost/worker.js'}, postMessage: vi.fn(), fetch: vi.fn()}
+        const originalFetch = vi.fn(async () => new Response(new Uint8Array(8)))
+        scope = {location: {href: 'http://localhost/worker.js'}, postMessage: vi.fn(), fetch: originalFetch, originalFetch}
         vi.stubGlobal('self', scope)
         await import('./localTtsWorker.js')
         await send(1, 'load')
@@ -41,6 +43,19 @@ describe('English tts worker synthesis', () => {
 
     afterEach(() => {
         vi.unstubAllGlobals()
+    })
+
+    it('fetches the model files and the voice at the pinned revision, without a second copy in the browser', async () => {
+        expect(mocks.env.remotePathTemplate).toBe('{model}/resolve/1939ad2a8e416c0acfeecc08a694d14ef25f2231/')
+        await scope.fetch('https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/af_heart.bin')
+        expect(scope.originalFetch).toHaveBeenCalledWith(
+            'http://localhost:4317/api/local-models/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/1939ad2a8e416c0acfeecc08a694d14ef25f2231/voices/af_heart.bin',
+            undefined
+        )
+        // kokoro-js would otherwise keep the voice under its main address in Cache Storage.
+        const cache = await scope.caches.open('kokoro-voices')
+        await cache.put('x', new Response('y'))
+        expect(await cache.match('x')).toBeUndefined()
     })
 
     it('synthesizes one sentence at a time and drops those still waiting when a cancel arrives', async () => {

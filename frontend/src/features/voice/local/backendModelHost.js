@@ -12,14 +12,22 @@ const HUGGING_FACE = 'https://huggingface.co/'
 /** The Cache Storage name kokoro-js 1.2.1 keeps its voice files in. */
 export const KOKORO_VOICE_CACHE = 'kokoro-voices'
 
-export function redirectHuggingFaceFetch(scope, modelHost) {
+/**
+ * Sends requests for huggingface.co to modelHost. With a revision, the fixed `resolve/main/`
+ * address kokoro-js builds is fetched at that revision instead.
+ */
+export function redirectHuggingFaceFetch(scope, modelHost, revision = '') {
     const originalFetch = scope.fetch.bind(scope)
     scope.fetch = async (input, init) => {
         const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input?.url
         if (typeof url !== 'string' || !url.startsWith(HUGGING_FACE)) {
             return originalFetch(input, init)
         }
-        const target = modelHost + url.slice(HUGGING_FACE.length)
+        let path = url.slice(HUGGING_FACE.length)
+        if (revision) {
+            path = path.replace(/\/resolve\/main\//u, `/resolve/${encodeURIComponent(revision)}/`)
+        }
+        const target = modelHost + path
         const response = await originalFetch(typeof input === 'string' || input instanceof URL ? target : new Request(target, input), init)
         if (!response.ok) {
             throw new Error(`Model file download failed: HTTP ${response.status} for ${url}`)
@@ -62,3 +70,31 @@ export async function dropBrokenVoiceCache(cacheStorage) {
         return 0
     }
 }
+
+/**
+ * The env.remotePathTemplate for a model: Hugging Face's own layout at the given revision when the
+ * backend serves the files, else the configured template, its `{revision}` filled in as well (the
+ * Kokoro library does not pass a revision on).
+ */
+export function modelPathTemplate({backendHosted, modelPathTemplate: template, revision}) {
+    const base = backendHosted ? '{model}/resolve/{revision}/' : (template || '{model}/')
+    return base.replaceAll('{revision}', encodeURIComponent(revision || 'main'))
+}
+
+/**
+ * A Cache Storage that stores nothing. kokoro-js keeps its voice files under their fixed `main`
+ * address in Cache Storage and reads that copy first; when the backend serves the files (already
+ * on disk, at the pinned revision) the worker gives kokoro-js this instead.
+ */
+export const NO_CACHE_STORAGE = Object.freeze({
+    open: async () => ({
+        match: async () => undefined,
+        put: async () => {
+        },
+        delete: async () => false,
+        keys: async () => []
+    }),
+    delete: async () => false,
+    has: async () => false,
+    keys: async () => []
+})

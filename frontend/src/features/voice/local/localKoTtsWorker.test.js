@@ -1,10 +1,10 @@
 /** @vitest-environment node */
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 
-const mocks = vi.hoisted(() => ({tts: null}))
+const mocks = vi.hoisted(() => ({tts: null, env: {backends: {onnx: {wasm: {}}}}}))
 
 vi.mock('@huggingface/transformers', () => ({
-    env: {backends: {onnx: {wasm: {}}}},
+    env: mocks.env,
     pipeline: vi.fn(async () => (...args) => mocks.tts(...args))
 }))
 
@@ -15,6 +15,7 @@ const CONFIG = {
     options: {},
     modelHost: 'http://localhost:4317/api/local-models/',
     modelPathTemplate: '',
+    revision: '68d4d9420d0e0e51d14656e1ec5c9b091490b49e',
     backendHosted: true,
     voiceUrl: 'http://localhost:4317/api/local-models/onnx-community/Supertonic-TTS-2-ONNX/resolve/main/voices/F2.bin'
 }
@@ -42,6 +43,14 @@ describe('Korean tts worker voice file', () => {
         const replies = await loadWith(new Response(new Uint8Array(16), {headers: {'content-type': 'application/octet-stream'}}))
 
         expect(replies).toEqual([{id: 1, ok: true}])
+    })
+
+    it('fetches the model files at the pinned revision', async () => {
+        const {pipeline} = await import('@huggingface/transformers')
+        await loadWith(new Response(new Uint8Array(16), {headers: {'content-type': 'application/octet-stream'}}))
+
+        expect(mocks.env.remotePathTemplate).toBe('{model}/resolve/68d4d9420d0e0e51d14656e1ec5c9b091490b49e/')
+        expect(pipeline).toHaveBeenCalledWith('text-to-speech', CONFIG.model, expect.objectContaining({revision: CONFIG.revision}))
     })
 
     it('fails the load when the backend answers with a JSON body', async () => {

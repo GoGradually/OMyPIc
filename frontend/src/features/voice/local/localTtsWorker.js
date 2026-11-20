@@ -2,26 +2,32 @@
 // so questions are read in a native English voice. No API is called.
 import {env} from '@huggingface/transformers'
 import {KokoroTTS} from 'kokoro-js'
-import {dropBrokenVoiceCache, redirectHuggingFaceFetch} from './backendModelHost.js'
+import {dropBrokenVoiceCache, KOKORO_VOICE_CACHE, modelPathTemplate, NO_CACHE_STORAGE, redirectHuggingFaceFetch} from './backendModelHost.js'
 import {ortWasmPaths} from './ortWasm.js'
 import {createSynthesisQueue} from './synthesisQueue.js'
 
 let ttsPromise = null
+// The worker's own Cache Storage, before configure() hides it from kokoro-js.
+let browserCaches = null
 const queue = createSynthesisQueue()
 
-function configure({modelHost, modelPathTemplate, backendHosted}) {
+function configure(config) {
     env.allowLocalModels = false
-    if (backendHosted) {
+    if (config.backendHosted) {
         // The backend serves the files from Hugging Face's own path layout and keeps them on disk,
         // so only the host changes and the browser needs no second copy.
-        env.remoteHost = modelHost
+        env.remoteHost = config.modelHost
         env.useBrowserCache = false
-        // kokoro-js fetches voices/*.bin from a fixed Hugging Face address; send that to the backend too.
-        redirectHuggingFaceFetch(self, modelHost)
-    } else if (modelHost) {
-        env.remoteHost = modelHost
-        env.remotePathTemplate = modelPathTemplate || '{model}/'
+        // kokoro-js fetches voices/*.bin from a fixed Hugging Face `main` address; send that to the
+        // backend at the pinned revision, and keep no copy of it in Cache Storage.
+        redirectHuggingFaceFetch(self, config.modelHost, config.revision)
+        browserCaches = self.caches
+        Object.defineProperty(self, 'caches', {value: NO_CACHE_STORAGE, configurable: true})
+    } else if (config.modelHost) {
+        env.remoteHost = config.modelHost
     }
+    // kokoro-js does not pass a revision on, so the pinned revision is written into the path.
+    env.remotePathTemplate = modelPathTemplate(config)
     env.backends.onnx.wasm.wasmPaths = ortWasmPaths(self.location.href)
 }
 
@@ -32,11 +38,24 @@ function reportProgress(event) {
     self.postMessage({type: 'progress', file: event.file || '', progress: event.progress})
 }
 
+async function forgetCachedVoices(config) {
+    if (!config.backendHosted) {
+        await dropBrokenVoiceCache(self.caches)
+        return
+    }
+    try {
+        await browserCaches?.delete?.(KOKORO_VOICE_CACHE)
+    } catch (_error) {
+        // Nothing to free.
+    }
+}
+
 function load(config) {
     if (!ttsPromise) {
         configure(config)
-        // A failed voice download stored by an earlier run would otherwise be read back every time.
-        ttsPromise = dropBrokenVoiceCache(self.caches).then(() => KokoroTTS.from_pretrained(config.model, {
+        // Voice files an earlier build kept in Cache Storage are not read any more (backend) or are
+        // checked, so a failed download stored as a voice is not read back every time (mirror).
+        ttsPromise = forgetCachedVoices(config).then(() => KokoroTTS.from_pretrained(config.model, {
             dtype: 'q8',
             device: 'wasm',
             progress_callback: reportProgress

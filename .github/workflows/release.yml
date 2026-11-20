@@ -185,28 +185,28 @@ jobs:
         run: |
           base=http://127.0.0.1:4317/api/local-models
           for file in \
-            Xenova/whisper-base.en/resolve/main/config.json \
-            Xenova/whisper-base.en/resolve/main/generation_config.json \
-            Xenova/whisper-base.en/resolve/main/preprocessor_config.json \
-            Xenova/whisper-base.en/resolve/main/tokenizer.json \
-            Xenova/whisper-base.en/resolve/main/tokenizer_config.json \
-            Xenova/whisper-base.en/resolve/main/onnx/encoder_model_quantized.onnx \
-            Xenova/whisper-base.en/resolve/main/onnx/decoder_model_merged_quantized.onnx \
-            onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/config.json \
-            onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/tokenizer.json \
-            onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/tokenizer_config.json \
-            onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/onnx/model_quantized.onnx \
-            onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/af_heart.bin \
-            onnx-community/Supertonic-TTS-2-ONNX/resolve/main/config.json \
-            onnx-community/Supertonic-TTS-2-ONNX/resolve/main/tokenizer.json \
-            onnx-community/Supertonic-TTS-2-ONNX/resolve/main/tokenizer_config.json \
-            onnx-community/Supertonic-TTS-2-ONNX/resolve/main/onnx/text_encoder.onnx \
-            onnx-community/Supertonic-TTS-2-ONNX/resolve/main/onnx/text_encoder.onnx_data \
-            onnx-community/Supertonic-TTS-2-ONNX/resolve/main/onnx/latent_denoiser.onnx \
-            onnx-community/Supertonic-TTS-2-ONNX/resolve/main/onnx/latent_denoiser.onnx_data \
-            onnx-community/Supertonic-TTS-2-ONNX/resolve/main/onnx/voice_decoder.onnx \
-            onnx-community/Supertonic-TTS-2-ONNX/resolve/main/onnx/voice_decoder.onnx_data \
-            onnx-community/Supertonic-TTS-2-ONNX/resolve/main/voices/F2.bin; do
+            Xenova/whisper-base.en/resolve/95bf40a508535962c6483ead40270b2e32267508/config.json \
+            Xenova/whisper-base.en/resolve/95bf40a508535962c6483ead40270b2e32267508/generation_config.json \
+            Xenova/whisper-base.en/resolve/95bf40a508535962c6483ead40270b2e32267508/preprocessor_config.json \
+            Xenova/whisper-base.en/resolve/95bf40a508535962c6483ead40270b2e32267508/tokenizer.json \
+            Xenova/whisper-base.en/resolve/95bf40a508535962c6483ead40270b2e32267508/tokenizer_config.json \
+            Xenova/whisper-base.en/resolve/95bf40a508535962c6483ead40270b2e32267508/onnx/encoder_model_quantized.onnx \
+            Xenova/whisper-base.en/resolve/95bf40a508535962c6483ead40270b2e32267508/onnx/decoder_model_merged_quantized.onnx \
+            onnx-community/Kokoro-82M-v1.0-ONNX/resolve/1939ad2a8e416c0acfeecc08a694d14ef25f2231/config.json \
+            onnx-community/Kokoro-82M-v1.0-ONNX/resolve/1939ad2a8e416c0acfeecc08a694d14ef25f2231/tokenizer.json \
+            onnx-community/Kokoro-82M-v1.0-ONNX/resolve/1939ad2a8e416c0acfeecc08a694d14ef25f2231/tokenizer_config.json \
+            onnx-community/Kokoro-82M-v1.0-ONNX/resolve/1939ad2a8e416c0acfeecc08a694d14ef25f2231/onnx/model_quantized.onnx \
+            onnx-community/Kokoro-82M-v1.0-ONNX/resolve/1939ad2a8e416c0acfeecc08a694d14ef25f2231/voices/af_heart.bin \
+            onnx-community/Supertonic-TTS-2-ONNX/resolve/68d4d9420d0e0e51d14656e1ec5c9b091490b49e/config.json \
+            onnx-community/Supertonic-TTS-2-ONNX/resolve/68d4d9420d0e0e51d14656e1ec5c9b091490b49e/tokenizer.json \
+            onnx-community/Supertonic-TTS-2-ONNX/resolve/68d4d9420d0e0e51d14656e1ec5c9b091490b49e/tokenizer_config.json \
+            onnx-community/Supertonic-TTS-2-ONNX/resolve/68d4d9420d0e0e51d14656e1ec5c9b091490b49e/onnx/text_encoder.onnx \
+            onnx-community/Supertonic-TTS-2-ONNX/resolve/68d4d9420d0e0e51d14656e1ec5c9b091490b49e/onnx/text_encoder.onnx_data \
+            onnx-community/Supertonic-TTS-2-ONNX/resolve/68d4d9420d0e0e51d14656e1ec5c9b091490b49e/onnx/latent_denoiser.onnx \
+            onnx-community/Supertonic-TTS-2-ONNX/resolve/68d4d9420d0e0e51d14656e1ec5c9b091490b49e/onnx/latent_denoiser.onnx_data \
+            onnx-community/Supertonic-TTS-2-ONNX/resolve/68d4d9420d0e0e51d14656e1ec5c9b091490b49e/onnx/voice_decoder.onnx \
+            onnx-community/Supertonic-TTS-2-ONNX/resolve/68d4d9420d0e0e51d14656e1ec5c9b091490b49e/onnx/voice_decoder.onnx_data \
+            onnx-community/Supertonic-TTS-2-ONNX/resolve/68d4d9420d0e0e51d14656e1ec5c9b091490b49e/voices/F2.bin; do
             curl -fsS --max-time 300 -o /dev/null -w "%{http_code} %{size_download} bytes $file\n" "$base/$file"
           done
       # safaridriver --enable turns on Remote Automation (Apple, "Testing with WebDriver in Safari").

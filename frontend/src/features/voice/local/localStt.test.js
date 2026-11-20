@@ -63,6 +63,7 @@ describe('local stt model host', () => {
         expect(posted[0].payload.config).toMatchObject({
             model: 'Xenova/whisper-base.en',
             modelHost: 'http://localhost:4317/api/local-models/',
+            revision: '95bf40a508535962c6483ead40270b2e32267508',
             backendHosted: true
         })
     })

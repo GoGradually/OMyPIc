@@ -2,22 +2,24 @@
 // Lives in a worker because a transcription takes seconds and would freeze the UI otherwise.
 import {env, pipeline} from '@huggingface/transformers'
 import {ortWasmPaths} from './ortWasm.js'
+import {modelPathTemplate} from './backendModelHost.js'
 
 const WHISPER_SAMPLE_RATE = 16000
 let transcriberPromise = null
 
-function configure({modelHost, modelPathTemplate, backendHosted}) {
+function configure(config) {
     env.allowLocalModels = false
-    if (backendHosted) {
+    if (config.backendHosted) {
         // The backend serves the files from Hugging Face's own path layout and keeps them on disk,
         // so only the host changes and the browser needs no second copy.
-        env.remoteHost = modelHost
+        env.remoteHost = config.modelHost
         env.useBrowserCache = false
-    } else if (modelHost) {
+    } else if (config.modelHost) {
         // A mirror or a bundled copy of the model, laid out like the Hugging Face repository.
-        env.remoteHost = modelHost
-        env.remotePathTemplate = modelPathTemplate || '{model}/'
+        env.remoteHost = config.modelHost
     }
+    // Always the pinned revision, so every install runs the same model files.
+    env.remotePathTemplate = modelPathTemplate(config)
     env.backends.onnx.wasm.wasmPaths = ortWasmPaths(self.location.href)
 }
 
@@ -34,6 +36,7 @@ function load(config) {
         transcriberPromise = pipeline('automatic-speech-recognition', config.model, {
             dtype: 'q8',
             device: 'wasm',
+            revision: config.revision,
             progress_callback: reportProgress
         }).catch((error) => {
             transcriberPromise = null

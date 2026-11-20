@@ -4,6 +4,9 @@ import {getBackendUrl} from '../../../shared/api/http.js'
 import {createSpeechWorkerClient} from './speechWorkerClient.js'
 
 const KO_TTS_MODEL = 'onnx-community/Supertonic-TTS-2-ONNX'
+// The commit of KO_TTS_MODEL every install loads (voice file included), so an upstream change
+// cannot change the voice silently.
+const KO_TTS_REVISION = '68d4d9420d0e0e51d14656e1ec5c9b091490b49e'
 // The only dtype this repository has; another one makes the library look for files that are not there.
 const KO_TTS_DTYPE = 'fp32'
 const KO_TTS_VOICE = 'F2'
@@ -15,10 +18,10 @@ function readEnv(name) {
 
 // The library fetches the voice file from the exact address it is given (not through its model
 // host), so the address is built here from the same host and path layout as the model files.
-function voiceUrlOf({model, voice, modelHost, modelPathTemplate, backendHosted}) {
+function voiceUrlOf({model, revision, voice, modelHost, modelPathTemplate, backendHosted}) {
     const path = backendHosted
-        ? `${model}/resolve/main/`
-        : (modelPathTemplate || '{model}/').replace('{model}', model).replace('{revision}', 'main')
+        ? `${model}/resolve/${encodeURIComponent(revision)}/`
+        : (modelPathTemplate || '{model}/').replace('{model}', model).replace('{revision}', encodeURIComponent(revision))
     return `${modelHost}${path}voices/${voice}.bin`
 }
 
@@ -26,13 +29,15 @@ function voiceUrlOf({model, voice, modelHost, modelPathTemplate, backendHosted})
 // keeps them on disk, so the worker turns off the library's browser cache (backendHosted).
 async function buildConfig() {
     const hostOverride = readEnv('VITE_OMYPIC_LOCAL_KO_TTS_HOST')
+    const model = readEnv('VITE_OMYPIC_LOCAL_KO_TTS_MODEL') || KO_TTS_MODEL
     const config = {
-        model: readEnv('VITE_OMYPIC_LOCAL_KO_TTS_MODEL') || KO_TTS_MODEL,
+        model,
         dtype: KO_TTS_DTYPE,
         voice: readEnv('VITE_OMYPIC_LOCAL_KO_TTS_VOICE') || KO_TTS_VOICE,
         options: {...KO_TTS_OPTIONS},
         modelHost: hostOverride || `${await getBackendUrl()}/api/local-models/`,
         modelPathTemplate: readEnv('VITE_OMYPIC_LOCAL_KO_TTS_PATH_TEMPLATE'),
+        revision: readEnv('VITE_OMYPIC_LOCAL_KO_TTS_REVISION') || (model === KO_TTS_MODEL ? KO_TTS_REVISION : 'main'),
         backendHosted: !hostOverride
     }
     return {...config, voiceUrl: voiceUrlOf(config)}

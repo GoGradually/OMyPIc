@@ -2,23 +2,25 @@
 // by a Korean voice. No API is called. Messages are the same as localTtsWorker.js.
 import {env, pipeline} from '@huggingface/transformers'
 import {ortWasmPaths} from './ortWasm.js'
-import {isVoiceFile} from './backendModelHost.js'
+import {isVoiceFile, modelPathTemplate} from './backendModelHost.js'
 import {createSynthesisQueue} from './synthesisQueue.js'
 
 let ttsPromise = null
 const queue = createSynthesisQueue()
 
-function configure({modelHost, modelPathTemplate, backendHosted}) {
+function configure(config) {
     env.allowLocalModels = false
-    if (backendHosted) {
+    if (config.backendHosted) {
         // The backend serves the files from Hugging Face's own path layout and keeps them on disk,
         // so only the host changes and the browser needs no second copy.
-        env.remoteHost = modelHost
+        env.remoteHost = config.modelHost
         env.useBrowserCache = false
-    } else if (modelHost) {
-        env.remoteHost = modelHost
-        env.remotePathTemplate = modelPathTemplate || '{model}/'
+    } else if (config.modelHost) {
+        // A mirror or a bundled copy of the model, laid out like the Hugging Face repository.
+        env.remoteHost = config.modelHost
     }
+    // Always the pinned revision, so every install runs the same model files.
+    env.remotePathTemplate = modelPathTemplate(config)
     env.backends.onnx.wasm.wasmPaths = ortWasmPaths(self.location.href)
 }
 
@@ -52,6 +54,7 @@ function load(config) {
             pipeline('text-to-speech', config.model, {
                 device: 'wasm',
                 dtype: config.dtype,
+                revision: config.revision,
                 progress_callback: reportProgress
             }),
             fetchVoice(config.voiceUrl)

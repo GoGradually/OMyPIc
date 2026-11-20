@@ -324,6 +324,12 @@ Claude API에는 음성 인식/합성 기능이 없습니다. 그래서 STT/TTS�
     - `VITE_OMYPIC_LOCAL_STT_MODEL` (기본값: `Xenova/whisper-base.en`)
     - `VITE_OMYPIC_LOCAL_STT_HOST` (기본값: 앱의 Backend `/api/local-models/` 경로. 사내 미러나 앱에 동봉한 모델 경로를 지정할 때 사용)
     - `VITE_OMYPIC_LOCAL_STT_PATH_TEMPLATE` (기본값: `{model}/`, `VITE_OMYPIC_LOCAL_STT_HOST`를 지정했을 때만 적용)
+  - 세 모델은 Hugging Face 저장소의 커밋을 고정해 받습니다. 그래서 설치마다 같은 모델 파일을 쓰고, 저장소가 바뀌어도 음성이나 인식 결과가 몰래 바뀌지 않습니다.
+    - `Xenova/whisper-base.en`: `95bf40a508535962c6483ead40270b2e32267508`
+    - `onnx-community/Kokoro-82M-v1.0-ONNX`: `1939ad2a8e416c0acfeecc08a694d14ef25f2231`(음성 파일 `voices/af_heart.bin` 포함)
+    - `onnx-community/Supertonic-TTS-2-ONNX`: `68d4d9420d0e0e51d14656e1ec5c9b091490b49e`(음성 파일 `voices/F2.bin` 포함)
+    - 빌드 시 환경 변수 `VITE_OMYPIC_LOCAL_STT_REVISION`, `VITE_OMYPIC_LOCAL_TTS_REVISION`, `VITE_OMYPIC_LOCAL_KO_TTS_REVISION`으로 바꿀 수 있습니다. `VITE_OMYPIC_LOCAL_*_MODEL`로 다른 모델을 고르고 커밋을 정하지 않으면 `main`을 받습니다. `VITE_OMYPIC_LOCAL_*_PATH_TEMPLATE`의 `{revision}`에도 이 커밋이 들어갑니다.
+    - 파일은 `<데이터 폴더>/local-models/<저장소>/<커밋>/`에 보관합니다. 이전 버전이 `main/` 아래에 받아 둔 파일은 더 읽지 않고 그대로 남습니다(지워도 됩니다). Kokoro 음성 파일은 브라우저 저장소(Cache Storage)에 따로 두지 않고, 이전 버전이 넣어 둔 사본은 지웁니다.
   - 데스크톱 앱에서 `VITE_OMYPIC_LOCAL_*_HOST`로 다른 주소를 쓰려면 그 주소를 Tauri CSP(`frontend/src-tauri/tauri.conf.json`의 `connect-src`)에도 넣어야 합니다. 넣지 않으면 앱이 그 주소로 요청하지 못합니다.
   - Backend 경로를 그대로 쓰면서 `VITE_OMYPIC_LOCAL_*_MODEL`로 다른 모델을 고르면 그 저장소를 `OMYPIC_LOCAL_MODEL_REPOS`에도 넣어야 합니다(`VITE_OMYPIC_LOCAL_KO_TTS_MODEL` 포함).
 - 기기에서 읽어 주기(`local-kokoro`, AI OFF 세션)

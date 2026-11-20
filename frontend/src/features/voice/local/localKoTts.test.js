@@ -53,9 +53,28 @@ describe('local Korean tts', () => {
             options: {num_inference_steps: 5, speed: 1.05},
             modelHost: 'http://localhost:4317/api/local-models/',
             modelPathTemplate: '',
+            revision: '68d4d9420d0e0e51d14656e1ec5c9b091490b49e',
             backendHosted: true,
-            voiceUrl: 'http://localhost:4317/api/local-models/onnx-community/Supertonic-TTS-2-ONNX/resolve/main/voices/F2.bin'
+            voiceUrl: 'http://localhost:4317/api/local-models/onnx-community/Supertonic-TTS-2-ONNX/resolve/68d4d9420d0e0e51d14656e1ec5c9b091490b49e/voices/F2.bin'
         })
+    })
+
+    it('uses the revision a build variable names, and main for another model unless one is named', async () => {
+        vi.stubEnv('VITE_OMYPIC_LOCAL_KO_TTS_REVISION', 'abc123')
+        let {loadLocalKoTts} = await import('./localKoTts.js')
+        await loadLocalKoTts()
+        expect(posted[0].payload.config).toMatchObject({
+            revision: 'abc123',
+            voiceUrl: 'http://localhost:4317/api/local-models/onnx-community/Supertonic-TTS-2-ONNX/resolve/abc123/voices/F2.bin'
+        })
+
+        vi.unstubAllEnvs()
+        vi.resetModules()
+        posted = []
+        vi.stubEnv('VITE_OMYPIC_LOCAL_KO_TTS_MODEL', 'mirror/ko-tts')
+        ;({loadLocalKoTts} = await import('./localKoTts.js'))
+        await loadLocalKoTts()
+        expect(posted[0].payload.config.revision).toBe('main')
     })
 
     it('lets build variables override the model, voice, host and path template', async () => {
