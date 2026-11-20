@@ -4,6 +4,7 @@ import {env, pipeline} from '@huggingface/transformers'
 // Same bundled ONNX Runtime binary as the speech recognizer (see localSttWorker.js).
 import ortFactoryUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.mjs?url'
 import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url'
+import {isVoiceFile} from './backendModelHost.js'
 
 let ttsPromise = null
 // One synthesis at a time: requests for several sentences arrive together.
@@ -43,7 +44,7 @@ async function fetchVoice(url) {
         throw new Error(`Voice file download failed: HTTP ${response.status} for ${url}`)
     }
     const buffer = await response.arrayBuffer()
-    if (buffer.byteLength === 0 || buffer.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0) {
+    if (!isVoiceFile(response, buffer.byteLength)) {
         throw new Error(`Voice file is not a voice (${buffer.byteLength} bytes): ${url}`)
     }
     return new Float32Array(buffer)

@@ -1,6 +1,6 @@
 // kokoro-js downloads its voice files (voices/*.bin) from a hard-coded Hugging Face address
 // (kokoro-js 1.2.1), bypassing env.remoteHost. When the backend serves the model files, this
-// sends those requests to the backend as well. Only used inside the speech synthesis worker.
+// sends those requests to the backend as well. Only used inside the speech synthesis workers.
 //
 // kokoro-js does not check the response status: it stores whatever body it got in the Cache
 // Storage `kokoro-voices` as a status-200 entry and reads that entry first on every later run.
@@ -29,7 +29,7 @@ export function redirectHuggingFaceFetch(scope, modelHost) {
 }
 
 // A voice file is raw float32 data. The backend's failures are JSON (or text) bodies.
-function isVoiceFile(response, size) {
+export function isVoiceFile(response, size) {
     const type = (response.headers.get('content-type') || '').toLowerCase()
     if (type.includes('json') || type.startsWith('text/')) {
         return false
