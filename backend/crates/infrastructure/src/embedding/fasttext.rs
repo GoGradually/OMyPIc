@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use flate2::read::MultiGzDecoder;
 use regex::Regex;
@@ -22,13 +22,19 @@ use crate::config::RagConfig;
 const PROVIDER_NAME: &str = "fasttext";
 const DOWNLOAD_STALL_SECONDS: u64 = 60;
 const EMBED_CACHE_MAX_ENTRIES: usize = 1000;
+/// 모델을 읽거나 받지 못한 뒤 다시 시도하기까지 기다리는 시간. 그동안은 같은 실패를 돌려준다.
+const LOAD_RETRY_COOLDOWN: Duration = Duration::from_secs(30);
 
 type Vectors = HashMap<String, Vec<f32>>;
 
 enum ModelState {
     Pending,
     Ready(Arc<Vectors>),
-    Failed(AppError),
+    /// 실패는 `retry_cooldown`이 지날 때까지만 기억한다(그 뒤 첫 요청이 다시 시도한다).
+    Failed {
+        error: AppError,
+        at: Instant,
+    },
 }
 
 pub struct FastTextEmbeddingAdapter {
@@ -39,6 +45,7 @@ pub struct FastTextEmbeddingAdapter {
     state: Mutex<ModelState>,
     /// 본문이 이만큼 한 바이트도 안 오면 내려받기를 실패로 본다.
     stall_timeout: Duration,
+    retry_cooldown: Duration,
 }
 
 impl FastTextEmbeddingAdapter {
@@ -51,12 +58,19 @@ impl FastTextEmbeddingAdapter {
             cache: Mutex::new(EmbedCache::default()),
             state: Mutex::new(ModelState::Pending),
             stall_timeout: Duration::from_secs(DOWNLOAD_STALL_SECONDS),
+            retry_cooldown: LOAD_RETRY_COOLDOWN,
         }
     }
 
     #[cfg(test)]
     fn with_stall_timeout(mut self, stall_timeout: Duration) -> Self {
         self.stall_timeout = stall_timeout;
+        self
+    }
+
+    #[cfg(test)]
+    fn with_retry_cooldown(mut self, retry_cooldown: Duration) -> Self {
+        self.retry_cooldown = retry_cooldown;
         self
     }
 
@@ -91,15 +105,23 @@ impl FastTextEmbeddingAdapter {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let ModelState::Pending = *state {
+        let should_load = match &*state {
+            ModelState::Pending => true,
+            ModelState::Ready(_) => false,
+            ModelState::Failed { at, .. } => at.elapsed() >= self.retry_cooldown,
+        };
+        if should_load {
             *state = match self.load_model() {
                 Ok(vectors) => ModelState::Ready(Arc::new(vectors)),
-                Err(err) => ModelState::Failed(err),
+                Err(error) => ModelState::Failed {
+                    error,
+                    at: Instant::now(),
+                },
             };
         }
         match &*state {
             ModelState::Ready(vectors) => Ok(Some(vectors.clone())),
-            ModelState::Failed(failure) => self.handle_initialization_failure(failure),
+            ModelState::Failed { error, .. } => self.handle_initialization_failure(error),
             ModelState::Pending => unreachable!("모델 상태는 위에서 정해졌다"),
         }
     }
@@ -221,6 +243,7 @@ impl FastTextEmbeddingAdapter {
             model_path: model_path.to_path_buf(),
             expected: expected.to_string(),
             connect_timeout: header_timeout,
+            io_timeout: header_timeout.max(stall_timeout),
             cancel: cancel.clone(),
         };
         std::thread::spawn(move || {
@@ -328,7 +351,8 @@ impl EmbeddingPort for FastTextEmbeddingAdapter {
             return Ok(cached);
         }
         let computed = match self.ensure_vectors()? {
-            None => self.hash_fallback.embed_text(text),
+            // 모델을 쓸 수 있게 되면 진짜 벡터를 돌려주도록 대체 벡터는 캐시하지 않는다.
+            None => return Ok(self.hash_fallback.embed_text(text)),
             Some(loaded) => self.embed_from_model_or_fallback(text, &loaded),
         };
         self.lock_cache().put(cache_key, computed.clone());
@@ -372,6 +396,8 @@ struct DownloadJob {
     model_path: PathBuf,
     expected: String,
     connect_timeout: Duration,
+    /// 응답 헤더와 본문 조각 하나를 기다리는 최대 시간.
+    io_timeout: Duration,
     cancel: Arc<AtomicBool>,
 }
 
@@ -380,9 +406,11 @@ impl DownloadJob {
         let transfer = |err: &dyn std::fmt::Display| {
             DownloadError::Transfer(format!("Model download failed: {err}"))
         };
+        // 블로킹 클라이언트의 `timeout`은 응답 헤더 기다리기와 본문 `read` 한 번마다 따로 걸린다.
+        // 지켜보는 쪽이 포기한 뒤에도 이 스레드가 멈춘 연결을 붙잡고 있지 않게 한다.
         let client = reqwest::blocking::Client::builder()
             .connect_timeout(self.connect_timeout)
-            .timeout(None)
+            .timeout(Some(self.io_timeout))
             .tcp_keepalive(Some(Duration::from_secs(30)))
             .build()
             .map_err(|err| transfer(&err))?;
@@ -1095,5 +1123,107 @@ mod tests {
         assert_eq!(EMBED_CACHE_MAX_ENTRIES, cache.entries.len());
         assert!(cache.get("k1").is_none());
         assert!(cache.get("k0").is_some());
+    }
+
+    #[test]
+    fn failed_model_load_is_retried_once_the_cooldown_has_passed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ko.vec");
+        let sha = sha256_hex(MODEL.as_bytes());
+        let waiting = adapter(rag(&path, &sha), dir.path());
+        let retrying = adapter(rag(&path, &sha), dir.path()).with_retry_cooldown(Duration::ZERO);
+        assert!(waiting.embed("hello").is_err());
+        assert!(retrying.embed("hello").is_err());
+
+        // The user fixes the setup (here: the model file appears).
+        std::fs::write(&path, MODEL).unwrap();
+
+        assert!(waiting.embed("hello").is_err(), "inside the cooldown");
+        assert_eq!(vec![1.0, 0.0, 0.0], retrying.embed("hello").unwrap());
+    }
+
+    #[test]
+    fn hash_fallback_vectors_are_not_cached_while_the_model_is_unavailable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ko.vec");
+        let mut config = rag(&path, &sha256_hex(MODEL.as_bytes()));
+        config.allow_hash_fallback = true;
+        let adapter = adapter(config, dir.path()).with_retry_cooldown(Duration::ZERO);
+        assert_eq!(
+            LocalHashEmbeddingAdapter::new(3).embed_text("hello"),
+            adapter.embed("hello").unwrap()
+        );
+
+        std::fs::write(&path, MODEL).unwrap();
+
+        assert_eq!(vec![1.0, 0.0, 0.0], adapter.embed("hello").unwrap());
+    }
+
+    /// 첫 연결에는 헤더와 본문 몇 바이트만 보내고 멈춘 뒤, 클라이언트가 연결을 놓는지 본다
+    /// (`released`). 두 번째 연결에는 본문을 다 보낸다.
+    fn stall_then_serve_server(
+        body: &'static [u8],
+    ) -> (
+        String,
+        std::sync::mpsc::Receiver<bool>,
+        std::thread::JoinHandle<()>,
+    ) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/ko.vec", listener.local_addr().unwrap());
+        let (released_tx, released_rx) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let (mut stalled, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 2048];
+            let _ = stalled.read(&mut request);
+            stalled.write_all(head.as_bytes()).unwrap();
+            stalled.write_all(&body[..4]).unwrap();
+            stalled.flush().unwrap();
+            stalled
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut rest = [0_u8; 16];
+            // 0 bytes or a reset: the client closed its side. A timeout: it is still holding on.
+            let released = !matches!(
+                stalled.read(&mut rest),
+                Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock
+                    || err.kind() == std::io::ErrorKind::TimedOut
+            );
+            let _ = released_tx.send(released);
+
+            let (mut served, _) = listener.accept().unwrap();
+            let _ = served.read(&mut request);
+            served.write_all(head.as_bytes()).unwrap();
+            served.write_all(body).unwrap();
+        });
+        (url, released_rx, handle)
+    }
+
+    #[test]
+    fn stalled_download_releases_its_connection_and_is_retried_later() {
+        let dir = tempfile::tempdir().unwrap();
+        let body: &'static str = "2 3\nhello 1 0 0\nworld 0 1 0\n";
+        let (url, released, server) = stall_then_serve_server(body.as_bytes());
+        let path = dir.path().join("ko.vec");
+        let mut config = rag(&path, &sha256_hex(body.as_bytes()));
+        config.download_url = url;
+        config.download_timeout_seconds = 1;
+        let adapter = adapter(config, dir.path())
+            .with_stall_timeout(Duration::from_millis(300))
+            .with_retry_cooldown(Duration::ZERO);
+
+        assert!(adapter.embed("hello").is_err());
+        assert_eq!(
+            Ok(true),
+            released.recv_timeout(Duration::from_secs(10)),
+            "the abandoned download worker must let go of the stalled connection"
+        );
+
+        assert_eq!(vec![1.0, 0.0, 0.0], adapter.embed("hello").unwrap());
+        server.join().unwrap();
+        assert_eq!(1, std::fs::read_dir(dir.path()).unwrap().count());
     }
 }
