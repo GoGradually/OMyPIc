@@ -246,8 +246,14 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(
-            weak.upgrade().is_none(),
+        // A sweep that is running right now holds a strong reference for a moment: poll briefly.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while weak.strong_count() > 0 && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            0,
+            weak.strong_count(),
             "the sweep task still owns the voice session use case"
         );
         tokio::time::timeout(Duration::from_secs(2), sweep)

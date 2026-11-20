@@ -249,17 +249,18 @@ fn on_first_log<R>(
 }
 
 #[test]
-fn a_client_that_reattaches_while_the_reaper_decides_is_not_stopped_on_its_new_stream() {
+fn a_client_that_reattaches_right_after_the_reaper_decided_is_told_the_session_stopped() {
     let c = Arc::new(clocked());
     let id = c.use_case.open(&ai_off_command("s1")).unwrap();
     let first = attach(&c, &id);
     c.use_case.unregister_sink(&id, &first);
     c.advance(IDLE_MS);
 
-    // The reaper logs right after it has decided to stop the session. A client reattaching at
-    // that moment must either keep a running session or be told that it stopped.
+    // The reaper logs right after it has decided to stop the session; deciding and closing are
+    // one step, so a client reattaching at that moment finds the session already closed. It must
+    // be told that it stopped, not be left on a stream that never gets another event.
     let reattached = Arc::new(RecordingSink::new());
-    let was_running = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let was_running = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let hook = {
         let (c, id, reattached, was_running) = (
             Arc::clone(&c),
@@ -282,18 +283,14 @@ fn a_client_that_reattaches_while_the_reaper_decides_is_not_stopped_on_its_new_s
         c.use_case.reap_idle_sessions()
     });
 
-    let snapshot = c.use_case.recover(&id, Some(0)).unwrap();
-    if was_running.load(Ordering::SeqCst) {
-        assert!(
-            snapshot.active,
-            "the reattached session was stopped by the reaper on its new stream"
-        );
-    } else {
-        assert!(snapshot.stopped);
-        assert!(reattached
-            .event_names()
-            .contains(&"session.stopped".to_string()));
-    }
+    assert!(
+        !was_running.load(Ordering::SeqCst),
+        "the session was still running after the reaper decided to stop it"
+    );
+    assert!(c.use_case.recover(&id, Some(0)).unwrap().stopped);
+    assert!(reattached
+        .event_names()
+        .contains(&"session.stopped".to_string()));
 }
 
 /// 24kHz 16비트 모노 10초(약 480KB, base64로 약 640KB). 서버 TTS가 질문 하나에 돌려주는 크기.
