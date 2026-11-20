@@ -17,6 +17,8 @@ sha2.workspace = true
 regex.workspace = true
 tempfile.workspace = true
 uuid.workspace = true
+# fastText 모델을 내려받는 전용 스레드의 런타임(제한 시간과 취소).
+tokio.workspace = true
 
 [dev-dependencies]
 httpmock.workspace = true

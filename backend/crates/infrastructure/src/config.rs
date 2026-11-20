@@ -65,6 +65,9 @@ pub struct RagConfig {
     pub download_retry_max: u32,
     pub allow_hash_fallback: bool,
     pub model_max_vocab: usize,
+    /// `OMYPIC_RAG_MODEL_IDLE_RELEASE_MS`, 기본 600000. 읽은 fastText 벡터(약 240MB)를 이만큼
+    /// 임베딩 요청이 없으면 놓는다. 다음 요청이 파일에서 다시 읽는다. 0이면 놓지 않는다.
+    pub model_idle_release_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -190,6 +193,7 @@ impl Default for AppConfig {
                 download_retry_max: 2,
                 allow_hash_fallback: false,
                 model_max_vocab: 200_000,
+                model_idle_release_ms: 600_000,
             },
             feedback: FeedbackConfig {
                 summary_max_chars: 400,
@@ -289,6 +293,10 @@ impl AppConfig {
         env.set_bool(
             "OMYPIC_RAG_ALLOW_HASH_FALLBACK",
             &mut rag.allow_hash_fallback,
+        )?;
+        env.set(
+            "OMYPIC_RAG_MODEL_IDLE_RELEASE_MS",
+            &mut rag.model_idle_release_ms,
         )?;
 
         let openai = &mut config.integrations.openai;
@@ -732,6 +740,7 @@ mod tests {
         assert_eq!(2, config.rag.download_retry_max);
         assert!(!config.rag.allow_hash_fallback);
         assert_eq!(200_000, config.rag.model_max_vocab);
+        assert_eq!(600_000, config.rag.model_idle_release_ms);
         assert_eq!(400, config.feedback.summary_max_chars);
         assert_eq!(0.8, config.feedback.example_min_ratio);
         assert_eq!(1.2, config.feedback.example_max_ratio);
@@ -769,6 +778,7 @@ mod tests {
             ("OMYPIC_RAG_MODEL_SHA256", "abc123"),
             ("OMYPIC_RAG_DOWNLOAD_URL", "https://example.com/ko.vec.gz"),
             ("OMYPIC_RAG_ALLOW_HASH_FALLBACK", "true"),
+            ("OMYPIC_RAG_MODEL_IDLE_RELEASE_MS", "0"),
             ("OMYPIC_OPENAI_BASE_URL", "http://openai.local"),
             ("OMYPIC_OPENAI_RESPONSES_ENABLED", "false"),
             ("OMYPIC_OPENAI_CONVERSATION_REBASE_TURNS", "9"),
@@ -790,6 +800,7 @@ mod tests {
         assert_eq!("ko.vec.gz", config.rag.model_version);
         assert_eq!("abc123", config.rag.model_sha256);
         assert_eq!("https://example.com/ko.vec.gz", config.rag.download_url);
+        assert_eq!(0, config.rag.model_idle_release_ms);
         assert!(config.rag.allow_hash_fallback);
         let openai = &config.integrations.openai;
         assert_eq!("http://openai.local", openai.base_url);
@@ -820,6 +831,7 @@ mod tests {
             ("OMYPIC_PORT", "abc"),
             ("OMYPIC_PORT", "70000"),
             ("OMYPIC_RAG_ALLOW_HASH_FALLBACK", "maybe"),
+            ("OMYPIC_RAG_MODEL_IDLE_RELEASE_MS", "-1"),
             ("OMYPIC_OPENAI_CONVERSATION_REBASE_TURNS", "-1"),
             ("OMYPIC_ANTHROPIC_MAX_TOKENS", "1.5"),
         ] {
