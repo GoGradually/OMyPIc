@@ -156,6 +156,7 @@ npm run build:desktop
 - `local-models/`: 로컬 Whisper/Kokoro/Supertonic 모델 파일(Backend가 내려받아 보관)
 - `logs/omypic.log`: 앱 로그. 시작할 때 5 MB를 넘었으면 `omypic.log.1`로 옮기고 새로 씁니다. API Key는 기록하지 않습니다.
 - 룰북 파일, 임베딩 모델
+- 룰북 파일은 이 폴더 기준 경로로 기록되므로 폴더를 통째로 옮기거나 복원해도 그대로 찾습니다. 파일이 빠진 룰북은 내보내기에서 빠지고(백업의 `manifest.json`에 `missingRulebookFiles`로 남습니다) 나머지는 그대로 내보냅니다.
 
 ### 0.2.x에서 올 때 (Upgrading from 0.2.x)
 
@@ -230,11 +231,19 @@ npm run build:desktop
 - `OMYPIC_LOCAL_MODEL_REPOS`
   - 기본값: `Xenova/whisper-base.en,onnx-community/Kokoro-82M-v1.0-ONNX,onnx-community/Supertonic-TTS-2-ONNX`
   - Backend가 내려받아 줄 모델 저장소(`org/name`, 쉼표로 구분, 대소문자 구분). 목록에 없는 저장소는 403입니다.
+- `OMYPIC_VOICE_IDLE_TIMEOUT_MS`
+  - 기본값: `600000` (10분)
+  - 이벤트 스트림이 끊긴 채(창을 닫았거나 앱이 죽은 경우) 이 시간 동안 아무 일도 없는 음성 세션은 Backend가 `idle_timeout`으로 멈춥니다. 그 안에 다시 연결하면 세션이 이어집니다.
+- `OMYPIC_VOICE_RECOVERY_RETENTION_MS`
+  - 기본값: `600000` (10분). 멈춘 음성 세션을 복구 조회용으로 남겨 두는 시간입니다.
+- `OMYPIC_VOICE_STOPPED_CONTEXT_MAX`
+  - 기본값: `1000`. 남겨 두는 멈춘 음성 세션의 최대 수입니다.
 - `RUST_LOG`
   - 로그 수준. 기본값: `info`. 데스크톱 앱은 stderr와 `logs/omypic.log`에 함께 기록합니다.
 
 별도 설정이 없으면 룰북 검색에 처음 쓸 때 모델이 자동 다운로드됩니다.
 모델 파일이 크기 때문에(약 1.27GB) 네트워크 환경에 따라 첫 사용 때 시간이 걸릴 수 있습니다.
+모델을 읽거나 받지 못하면 30초 동안은 같은 오류를 돌려주고, 그 뒤의 요청이 다시 시도합니다(앱을 다시 시작하지 않아도 됩니다).
 
 ## 6) 코드서명 정책
 
