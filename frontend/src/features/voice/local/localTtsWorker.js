@@ -4,8 +4,10 @@ import {env} from '@huggingface/transformers'
 import {KokoroTTS} from 'kokoro-js'
 import {dropBrokenVoiceCache, redirectHuggingFaceFetch} from './backendModelHost.js'
 import {ortWasmPaths} from './ortWasm.js'
+import {createSynthesisQueue} from './synthesisQueue.js'
 
 let ttsPromise = null
+const queue = createSynthesisQueue()
 
 function configure({modelHost, modelPathTemplate, backendHosted}) {
     env.allowLocalModels = false
@@ -48,13 +50,21 @@ function load(config) {
 
 self.onmessage = async (event) => {
     const {id, type, payload} = event.data || {}
+    if (type === 'cancel') {
+        queue.cancelThrough(payload?.through)
+        return
+    }
     try {
         const tts = await load(payload.config)
         if (type === 'load') {
             self.postMessage({id, ok: true})
             return
         }
-        const output = await tts.generate(payload.text, {voice: payload.config.voice})
+        const output = await queue.enqueue(id, () => tts.generate(payload.text, {voice: payload.config.voice}))
+        if (!output) {
+            self.postMessage({id, ok: false, cancelled: true})
+            return
+        }
         const samples = output.audio
         self.postMessage({id, ok: true, samples, sampleRate: output.sampling_rate}, [samples.buffer])
     } catch (error) {

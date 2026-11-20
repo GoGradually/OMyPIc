@@ -6,8 +6,14 @@
 
 import {pcm16ToWav} from '../../../shared/utils/audioCodec.js'
 import {detectSpeechLang, splitForSpeech} from './speechText.js'
-import {isLocalTtsSupported, loadLocalTts, synthesizeEnglish} from './localTts.js'
-import {getLocalKoTtsStatus, isLocalKoTtsSupported, loadLocalKoTts, synthesizeKorean} from './localKoTts.js'
+import {cancelQueuedEnglishSynthesis, isLocalTtsSupported, loadLocalTts, synthesizeEnglish} from './localTts.js'
+import {
+    cancelQueuedKoreanSynthesis,
+    getLocalKoTtsStatus,
+    isLocalKoTtsSupported,
+    loadLocalKoTts,
+    synthesizeKorean
+} from './localKoTts.js'
 
 const KOREAN = 'ko-KR'
 const ENGLISH = 'en-US'
@@ -93,6 +99,21 @@ export async function prepareLocalSpeech(text, {allowKoreanModel = false} = {}) 
     buildPlan(text, allowKoreanModel)
         .filter((step) => step.synthesize)
         .forEach((step) => synthesizeCached(step.sentence, step.synthesize))
+}
+
+/**
+ * Stops the synthesis of everything not yet started, for every text spoken or prepared so far
+ * (the learner stopped, so nothing queued will be played). Sentences asked for after this call are
+ * synthesized afresh, not handed the cancelled requests.
+ */
+export function cancelLocalSpeech() {
+    for (const [sentence, entry] of synthesisCache) {
+        if (!entry.settled) {
+            synthesisCache.delete(sentence)
+        }
+    }
+    cancelQueuedEnglishSynthesis()
+    cancelQueuedKoreanSynthesis()
 }
 
 function floatToWavBytes(samples, sampleRate) {

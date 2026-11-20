@@ -218,4 +218,44 @@ describe('local Korean tts', () => {
         expect(instance).toBeTruthy()
         expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({progress: 40}))
     })
+
+    it('asks the worker to drop the sentences it has not started, and settles them', async () => {
+        const answers = []
+        respond = (message) => {
+            if (message.type === 'synthesize') {
+                answers.push(message)
+                return undefined
+            }
+            return message.type === 'load' ? {id: message.id, ok: true} : undefined
+        }
+        let instance
+        vi.stubGlobal('Worker', class {
+            constructor() {
+                instance = this
+            }
+
+            postMessage(message) {
+                posted.push(message)
+                const reply = respond(message)
+                if (reply) {
+                    queueMicrotask(() => this.onmessage({data: reply}))
+                }
+            }
+        })
+        const {cancelQueuedKoreanSynthesis, synthesizeKorean} = await import('./localKoTts.js')
+        // Nothing to cancel before the worker exists.
+        cancelQueuedKoreanSynthesis()
+        expect(posted).toHaveLength(0)
+
+        const first = synthesizeKorean('첫 문장입니다.')
+        const second = synthesizeKorean('둘째 문장입니다.')
+        await vi.waitFor(() => expect(answers).toHaveLength(2))
+        cancelQueuedKoreanSynthesis()
+
+        expect(posted[posted.length - 1]).toEqual({type: 'cancel', payload: {through: answers[1].id}})
+        instance.onmessage({data: {id: answers[0].id, ok: true, samples: new Float32Array([0.1]), sampleRate: 44100}})
+        instance.onmessage({data: {id: answers[1].id, ok: false, cancelled: true}})
+        await expect(first).resolves.toMatchObject({sampleRate: 44100})
+        await expect(second).rejects.toMatchObject({cancelled: true})
+    })
 })

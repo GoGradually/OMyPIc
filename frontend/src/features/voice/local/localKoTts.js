@@ -69,6 +69,8 @@ function handleMessage(event) {
     pending.delete(data.id)
     if (data.ok) {
         request.resolve(data)
+    } else if (data.cancelled) {
+        request.reject(Object.assign(new Error('음성 합성을 취소했습니다.'), {cancelled: true}))
     } else {
         request.reject(new Error(data.message || '한국어 음성 합성에 실패했습니다.'))
     }
@@ -144,4 +146,12 @@ export async function synthesizeKorean(text) {
     await loadLocalKoTts()
     const result = await request('synthesize', {config: loadedConfig, text})
     return {samples: result.samples, sampleRate: result.sampleRate}
+}
+
+/**
+ * Drops every sentence sent so far that the worker has not started synthesizing; their promises
+ * reject with an error whose `cancelled` is true. Sentences sent after this call are not affected.
+ */
+export function cancelQueuedKoreanSynthesis() {
+    worker?.postMessage({type: 'cancel', payload: {through: nextRequestId}})
 }

@@ -3,10 +3,10 @@
 import {env, pipeline} from '@huggingface/transformers'
 import {ortWasmPaths} from './ortWasm.js'
 import {isVoiceFile} from './backendModelHost.js'
+import {createSynthesisQueue} from './synthesisQueue.js'
 
 let ttsPromise = null
-// One synthesis at a time: requests for several sentences arrive together.
-let queue = Promise.resolve()
+const queue = createSynthesisQueue()
 
 function configure({modelHost, modelPathTemplate, backendHosted}) {
     env.allowLocalModels = false
@@ -65,21 +65,30 @@ function load(config) {
 
 async function synthesize({tts, voice}, {text, config}) {
     // The language is chosen by the tag around the whole sentence; without it Korean breaks up.
-    const output = await tts(`<ko>${text}</ko>`, {speaker_embeddings: voice, ...config.options})
+    // A tag inside the sentence would break it the same way, so brackets are taken out.
+    const sentence = String(text).replace(/[<>]/g, '')
+    const output = await tts(`<ko>${sentence}</ko>`, {speaker_embeddings: voice, ...config.options})
     return {samples: output.audio, sampleRate: output.sampling_rate}
 }
 
 self.onmessage = async (event) => {
     const {id, type, payload} = event.data || {}
+    if (type === 'cancel') {
+        queue.cancelThrough(payload?.through)
+        return
+    }
     try {
         const model = await load(payload.config)
         if (type === 'load') {
             self.postMessage({id, ok: true})
             return
         }
-        const run = queue.then(() => synthesize(model, payload))
-        queue = run.catch(() => {})
-        const {samples, sampleRate} = await run
+        const output = await queue.enqueue(id, () => synthesize(model, payload))
+        if (!output) {
+            self.postMessage({id, ok: false, cancelled: true})
+            return
+        }
+        const {samples, sampleRate} = output
         self.postMessage({id, ok: true, samples, sampleRate}, [samples.buffer])
     } catch (error) {
         self.postMessage({id, ok: false, message: error?.message || String(error)})

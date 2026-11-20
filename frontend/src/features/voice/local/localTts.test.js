@@ -55,6 +55,52 @@ describe('local tts model host', () => {
     })
 })
 
+describe('local tts synthesis', () => {
+    let posted
+    let instance
+
+    beforeEach(() => {
+        posted = []
+        vi.resetModules()
+        vi.stubGlobal('Worker', class {
+            constructor() {
+                instance = this
+            }
+
+            postMessage(message) {
+                posted.push(message)
+                if (message.type === 'load') {
+                    queueMicrotask(() => this.onmessage({data: {id: message.id, ok: true}}))
+                }
+            }
+
+            terminate() {}
+        })
+    })
+
+    afterEach(() => {
+        vi.unstubAllGlobals()
+    })
+
+    it('asks the worker to drop the sentences it has not started, and settles them', async () => {
+        const {cancelQueuedEnglishSynthesis, synthesizeEnglish} = await import('./localTts.js')
+        cancelQueuedEnglishSynthesis()
+        expect(posted).toHaveLength(0)
+
+        const first = synthesizeEnglish('First.')
+        const second = synthesizeEnglish('Second.')
+        await vi.waitFor(() => expect(posted.filter((message) => message.type === 'synthesize')).toHaveLength(2))
+        const [one, two] = posted.filter((message) => message.type === 'synthesize')
+        cancelQueuedEnglishSynthesis()
+
+        expect(posted[posted.length - 1]).toEqual({type: 'cancel', payload: {through: two.id}})
+        instance.onmessage({data: {id: one.id, ok: true, samples: new Float32Array([0.5]), sampleRate: 24000}})
+        instance.onmessage({data: {id: two.id, ok: false, cancelled: true}})
+        await expect(first).resolves.toMatchObject({sampleRate: 24000})
+        await expect(second).rejects.toMatchObject({cancelled: true})
+    })
+})
+
 describe('redirectHuggingFaceFetch', () => {
     const host = 'http://localhost:4317/api/local-models/'
 

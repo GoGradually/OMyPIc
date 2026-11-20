@@ -1,6 +1,6 @@
 import {useCallback, useRef} from 'react'
 import {fromBase64} from '../../../shared/utils/audioCodec.js'
-import {prepareLocalSpeech, speakLocally} from '../local/localSpeech.js'
+import {cancelLocalSpeech, prepareLocalSpeech, speakLocally} from '../local/localSpeech.js'
 
 const QUESTION_REPEAT_DELAY_MS = 3000
 
@@ -38,6 +38,8 @@ export function useTtsPlaybackQueue({
             ttsCancelSpeechRef.current()
             ttsCancelSpeechRef.current = null
         }
+        // Nothing queued will be played; its synthesis would only delay what comes next.
+        cancelLocalSpeech()
         const activeAudio = ttsActiveAudioRef.current
         if (!activeAudio) {
             return

@@ -10,7 +10,14 @@ import {
     sendVoiceAudioChunk,
     stopVoiceSession
 } from '../../../shared/api/http.js'
-import {loadLocalKoTts, loadLocalTts, neededLocalTtsModels, prepareLocalSpeech, speakLocally} from '../local/localSpeech.js'
+import {
+    cancelLocalSpeech,
+    loadLocalKoTts,
+    loadLocalTts,
+    neededLocalTtsModels,
+    prepareLocalSpeech,
+    speakLocally
+} from '../local/localSpeech.js'
 import {loadLocalStt, transcribePcm16} from '../local/localStt.js'
 
 vi.mock('../../../shared/api/http.js', () => ({
@@ -25,6 +32,7 @@ vi.mock('../../../shared/api/http.js', () => ({
 vi.mock('../local/localSpeech.js', () => ({
     speakLocally: vi.fn(),
     prepareLocalSpeech: vi.fn(),
+    cancelLocalSpeech: vi.fn(),
     neededLocalTtsModels: vi.fn(),
     loadLocalTts: vi.fn(),
     loadLocalKoTts: vi.fn()
@@ -1722,6 +1730,31 @@ describe('useVoiceSession', () => {
         expect(result.current.speechState).toBe('READY_FOR_ANSWER')
         // No server audio was played: only local speech spoke.
         expect(audioInstances.length).toBe(audioCount)
+        unmount()
+    })
+
+    it('drops the queued on-device synthesis when the session stops', async () => {
+        const stopSpeech = vi.fn()
+        speakLocally.mockImplementation((text, callbacks) => {
+            spokenTexts.push(text)
+            speechCallbacks.push(callbacks)
+            return stopSpeech
+        })
+        const {result, unmount} = renderLocalSpeechSession({aiEnabled: false, ttsModel: 'gpt-4o-mini-tts'})
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+        await act(async () => {
+            activeEventSource.emit('tts.text', {role: 'question', text: 'question-1', sequence: 1})
+        })
+        cancelLocalSpeech.mockClear()
+        await act(async () => {
+            await result.current.stopSession()
+        })
+
+        expect(stopSpeech).toHaveBeenCalled()
+        expect(cancelLocalSpeech).toHaveBeenCalled()
         unmount()
     })
 

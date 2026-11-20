@@ -1,13 +1,20 @@
 /** @vitest-environment jsdom */
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
-import {neededLocalTtsModels, prepareLocalSpeech, speakLocally} from './localSpeech.js'
-import {isLocalTtsSupported, synthesizeEnglish} from './localTts.js'
-import {getLocalKoTtsStatus, isLocalKoTtsSupported, loadLocalKoTts, synthesizeKorean} from './localKoTts.js'
+import {cancelLocalSpeech, neededLocalTtsModels, prepareLocalSpeech, speakLocally} from './localSpeech.js'
+import {cancelQueuedEnglishSynthesis, isLocalTtsSupported, synthesizeEnglish} from './localTts.js'
+import {
+    cancelQueuedKoreanSynthesis,
+    getLocalKoTtsStatus,
+    isLocalKoTtsSupported,
+    loadLocalKoTts,
+    synthesizeKorean
+} from './localKoTts.js'
 
 vi.mock('./localTts.js', () => ({
     isLocalTtsSupported: vi.fn(),
     loadLocalTts: vi.fn(),
-    synthesizeEnglish: vi.fn()
+    synthesizeEnglish: vi.fn(),
+    cancelQueuedEnglishSynthesis: vi.fn()
 }))
 
 vi.mock('../../../shared/api/http.js', () => ({
@@ -18,7 +25,8 @@ vi.mock('./localKoTts.js', () => ({
     isLocalKoTtsSupported: vi.fn(),
     getLocalKoTtsStatus: vi.fn(),
     loadLocalKoTts: vi.fn(),
-    synthesizeKorean: vi.fn()
+    synthesizeKorean: vi.fn(),
+    cancelQueuedKoreanSynthesis: vi.fn()
 }))
 
 let audioInstances = []
@@ -495,6 +503,36 @@ describe('local speech', () => {
         expect(audioInstances[0].paused).toBe(true)
         expect(audioInstances.length).toBe(1)
         expect(onEnd).not.toHaveBeenCalled()
+    })
+
+    it('cancelLocalSpeech drops queued synthesis in both workers, and the next run synthesizes again', async () => {
+        const sentence = english('Asked again after stop')
+        const cancelled = Object.assign(new Error('cancelled'), {cancelled: true})
+        let rejectFirst
+        synthesizeEnglish.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+            rejectFirst = () => reject(cancelled)
+        }))
+        const onEnd = vi.fn()
+
+        const stop = speakLocally(sentence, {})
+        await flush()
+        stop()
+        cancelLocalSpeech()
+
+        expect(cancelQueuedEnglishSynthesis).toHaveBeenCalledTimes(1)
+        expect(cancelQueuedKoreanSynthesis).toHaveBeenCalledTimes(1)
+
+        // The new run does not get the cancelled request, and its own result is kept in the cache.
+        speakLocally(sentence, {onEnd})
+        rejectFirst()
+        await flush()
+        expect(synthesizeEnglish).toHaveBeenCalledTimes(2)
+        expect(audioInstances.length).toBe(1)
+        await playAll()
+        expect(onEnd).toHaveBeenCalledTimes(1)
+        speakLocally(sentence, {})
+        await flush()
+        expect(synthesizeEnglish).toHaveBeenCalledTimes(2)
     })
 
     it('second read of the same sentence reuses the cached audio', async () => {
