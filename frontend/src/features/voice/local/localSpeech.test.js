@@ -295,6 +295,58 @@ describe('local speech', () => {
         expect(onUnavailable).not.toHaveBeenCalled()
     })
 
+    it('reads a feedback text in on-screen order with the right voice, starting before the last sentence is synthesized', async () => {
+        counter += 1
+        const example = [
+            `I usually go to a small cafe near my house ${counter}.`,
+            'It has a cozy atmosphere.',
+            'I went there yesterday and ordered an iced americano for $4.50.',
+            'Well, the coffee was excellent.',
+            'I often read a book there.',
+            'I really recommend this place.'
+        ]
+        const korean = [
+            `전반적으로 질문에 맞게 답했고 내용 전달도 좋았습니다 ${counter}.`,
+            '다만 과거 시제에서 실수가 반복되었습니다.',
+            'Grammar: "I goed to the cafe yesterday."는 "I went to the cafe yesterday."로 고쳐야 합니다.',
+            'Expression: "very good" 대신 "excellent"처럼 더 구체적인 형용사를 써 보세요.',
+            'Logic: 이유를 말한 뒤에 예시를 1가지 이상 덧붙이면 더 설득력 있게 들립니다.',
+            '1. Filler: well - 생각할 시간이 필요할 때 문장 앞에 넣어 보세요.',
+            '2. Adjective: cozy - 카페 분위기를 묘사할 때 씁니다.',
+            '3. Adverb: usually - 습관을 말할 때 "I usually order tea."처럼 씁니다.'
+        ]
+        const text = [`${korean[0]} ${korean[1]}`, ...korean.slice(2), example.join(' ')].join('\n')
+        let releaseLast
+        synthesizeEnglish.mockImplementation((sentence) => (sentence === example[5]
+            ? new Promise((resolve) => {
+                releaseLast = () => resolve({samples: new Float32Array([0.5]), sampleRate: ENGLISH_RATE})
+            })
+            : Promise.resolve({samples: new Float32Array([0.5]), sampleRate: ENGLISH_RATE})))
+        const onEnd = vi.fn()
+
+        speakLocally(text, {onEnd})
+        await flush()
+
+        expect(synthesizeKorean.mock.calls.map(([sentence]) => sentence)).toEqual(korean)
+        expect(synthesizeEnglish.mock.calls.map(([sentence]) => sentence)).toEqual(example)
+        // The first Korean sentence plays while the last English one is still being synthesized.
+        expect(audioInstances.length).toBe(1)
+        for (let index = 0; index < 13; index += 1) {
+            audioInstances[index].onended()
+            await flush()
+        }
+        expect(audioInstances.length).toBe(13)
+        releaseLast()
+        await flush()
+        expect(audioInstances.length).toBe(14)
+        audioInstances[13].onended()
+        await flush()
+
+        const rates = await Promise.all(playedWavs.map(async (blob) => new DataView(await blob.arrayBuffer()).getUint32(24, true)))
+        expect(rates).toEqual([...korean.map(() => KOREAN_RATE), ...example.map(() => ENGLISH_RATE)])
+        expect(onEnd).toHaveBeenCalledTimes(1)
+    })
+
     it('Korean sentence is skipped silently when the Korean model fails to load and English still plays', async () => {
         getLocalKoTtsStatus.mockReturnValue('failed')
         const onEnd = vi.fn()
