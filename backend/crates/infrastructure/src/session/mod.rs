@@ -19,7 +19,8 @@ struct Sessions {
 }
 
 /// 세션 상태를 메모리에만 보관한다. 세션 id는 클라이언트가 정하므로 상한(`capacity`)을 넘으면
-/// 가장 오래 쓰지 않은 상태부터 버린다. 버린 세션 id가 다시 오면 새 상태로 시작한다.
+/// 지금 아무도 쥐고 있지 않은 상태 가운데 가장 오래 쓰지 않은 것부터 버린다. 버린 세션 id가
+/// 다시 오면 새 상태로 시작한다.
 pub struct InMemorySessionStore {
     sessions: Mutex<Sessions>,
     capacity: usize,
@@ -74,15 +75,23 @@ impl SessionStorePort for InMemorySessionStore {
             entry.last_used = now;
             return Ok(Arc::clone(&entry.state));
         }
-        if sessions.entries.len() >= self.capacity {
-            let oldest = sessions
+        while sessions.entries.len() >= self.capacity {
+            // 다른 곳에서 아직 쥔 상태(진행 중인 턴 등)는 버리지 않는다. 버리면 그쪽이 고아가 된
+            // 상태에 쓰고, 같은 id로 새 상태가 따로 생긴다. 모두 쓰는 중이면 잠시 상한을 넘긴다.
+            let oldest_unused = sessions
                 .entries
                 .iter()
+                .filter(|(_, entry)| Arc::strong_count(&entry.state) == 1)
                 .min_by_key(|(_, entry)| entry.last_used)
                 .map(|(id, _)| id.clone());
-            if let Some(oldest) = oldest {
-                sessions.entries.remove(&oldest);
-            }
+            let Some(oldest) = oldest_unused else {
+                break;
+            };
+            sessions.entries.remove(&oldest);
+            tracing::debug!(
+                session_id = oldest.value(),
+                "Evicted the least recently used session state"
+            );
         }
         let state = Arc::new(Mutex::new(SessionState::new(session_id.clone())));
         sessions.entries.insert(
@@ -144,6 +153,44 @@ mod tests {
             &store.get_or_create(&id("s1")).unwrap()
         ));
         assert_eq!(2, store.len());
+    }
+
+    #[test]
+    fn a_state_still_in_use_is_never_evicted() {
+        let store = InMemorySessionStore::with_capacity(2);
+        let id = |value: &str| SessionId::of(value).unwrap();
+
+        // s1 is the least recently used but a running turn still holds it.
+        let held = store.get_or_create(&id("s1")).unwrap();
+        store.get_or_create(&id("s2")).unwrap();
+        store.get_or_create(&id("s3")).unwrap();
+
+        assert!(Arc::ptr_eq(&held, &store.get_or_create(&id("s1")).unwrap()));
+        assert_eq!(2, store.len());
+    }
+
+    #[test]
+    fn the_store_grows_past_its_capacity_while_every_state_is_in_use() {
+        let store = InMemorySessionStore::with_capacity(2);
+        let id = |value: &str| SessionId::of(value).unwrap();
+
+        let held: Vec<_> = ["s1", "s2", "s3"]
+            .iter()
+            .map(|value| store.get_or_create(&id(value)).unwrap())
+            .collect();
+
+        assert_eq!(3, store.len());
+        assert!(Arc::ptr_eq(
+            &held[0],
+            &store.get_or_create(&id("s1")).unwrap()
+        ));
+        drop(held);
+        store.get_or_create(&id("s4")).unwrap();
+        assert_eq!(
+            2,
+            store.len(),
+            "unused states are evicted again once released"
+        );
     }
 
     #[test]
