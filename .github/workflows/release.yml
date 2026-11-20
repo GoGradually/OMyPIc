@@ -13,6 +13,11 @@ on:
         description: 'Version to draft a release for, for example 0.3.0. Leave empty to only build the installers.'
         required: false
         default: ''
+      mac_voice_smoke:
+        description: 'Also run the voice smoke check in Safari on macOS (the on-device speech models in the system WebKit). Independent of the build and the release.'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -124,3 +129,103 @@ jobs:
           fi
           case "$tag" in *-*) flags="$flags --prerelease" ;; esac
           gh release create "$tag" --draft --generate-notes $flags --title "OMyPIc $tag" installers/*
+
+  # Optional (manual run with mac_voice_smoke ticked): loads the three on-device speech models in
+  # Safari, which runs on the same system WebKit as the app's WKWebView, and checks load time,
+  # audio and memory (frontend/scripts/voice-smoke.mjs). On a tag push the input is empty, so
+  # this job is skipped. It does not gate the build or the release.
+  mac-voice-smoke:
+    if: inputs.mac_voice_smoke == true
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Show macOS and Safari versions
+        run: |
+          sw_vers
+          echo "Safari $(/usr/bin/defaults read /Applications/Safari.app/Contents/Info CFBundleShortVersionString)"
+          safaridriver --version || true
+      # Installs the toolchain pinned by rust-toolchain.toml.
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Build backend
+        run: cargo build -p omypic-server
+      - name: Start backend
+        run: |
+          mkdir -p "$RUNNER_TEMP/voice-smoke/data"
+          OMYPIC_DATA_DIR="$RUNNER_TEMP/voice-smoke/data" OMYPIC_RAG_PROVIDER=hash \
+            nohup target/debug/omypic-server > "$RUNNER_TEMP/voice-smoke/backend.log" 2>&1 &
+      # Bound to 127.0.0.1 because the check opens http://127.0.0.1:5173 and macOS may resolve
+      # localhost to ::1 only. The page reaches the backend at its dev default http://localhost:4317.
+      - name: Start Vite dev server
+        working-directory: frontend
+        run: nohup npm run dev:web -- --host 127.0.0.1 > "$RUNNER_TEMP/voice-smoke/vite.log" 2>&1 &
+      - name: Wait for backend and dev server
+        run: |
+          for url in http://127.0.0.1:4317/api/meta/models http://127.0.0.1:5173/; do
+            for i in $(seq 1 60); do
+              curl -fsS -o /dev/null "$url" && break
+              if [ "$i" = 60 ]; then echo "$url did not answer within 120 s" >&2; exit 1; fi
+              sleep 2
+            done
+            echo "$url is up"
+          done
+      # The backend downloads the model files from Hugging Face on first use. Fetching them here
+      # keeps the download out of the measured load times.
+      - name: Download the speech models through the backend
+        run: |
+          base=http://127.0.0.1:4317/api/local-models
+          for file in \
+            Xenova/whisper-base.en/resolve/main/config.json \
+            Xenova/whisper-base.en/resolve/main/generation_config.json \
+            Xenova/whisper-base.en/resolve/main/preprocessor_config.json \
+            Xenova/whisper-base.en/resolve/main/tokenizer.json \
+            Xenova/whisper-base.en/resolve/main/tokenizer_config.json \
+            Xenova/whisper-base.en/resolve/main/onnx/encoder_model_quantized.onnx \
+            Xenova/whisper-base.en/resolve/main/onnx/decoder_model_merged_quantized.onnx \
+            onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/config.json \
+            onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/tokenizer.json \
+            onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/tokenizer_config.json \
+            onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/onnx/model_quantized.onnx \
+            onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/af_heart.bin \
+            onnx-community/Supertonic-TTS-2-ONNX/resolve/main/config.json \
+            onnx-community/Supertonic-TTS-2-ONNX/resolve/main/tokenizer.json \
+            onnx-community/Supertonic-TTS-2-ONNX/resolve/main/tokenizer_config.json \
+            onnx-community/Supertonic-TTS-2-ONNX/resolve/main/onnx/text_encoder.onnx \
+            onnx-community/Supertonic-TTS-2-ONNX/resolve/main/onnx/text_encoder.onnx_data \
+            onnx-community/Supertonic-TTS-2-ONNX/resolve/main/onnx/latent_denoiser.onnx \
+            onnx-community/Supertonic-TTS-2-ONNX/resolve/main/onnx/latent_denoiser.onnx_data \
+            onnx-community/Supertonic-TTS-2-ONNX/resolve/main/onnx/voice_decoder.onnx \
+            onnx-community/Supertonic-TTS-2-ONNX/resolve/main/onnx/voice_decoder.onnx_data \
+            onnx-community/Supertonic-TTS-2-ONNX/resolve/main/voices/F2.bin; do
+            curl -fsS --max-time 300 -o /dev/null -w "%{http_code} %{size_download} bytes $file\n" "$base/$file"
+          done
+      # safaridriver --enable turns on Remote Automation (Apple, "Testing with WebDriver in Safari").
+      # The defaults keys are the same switch as Develop > Allow Remote Automation; harmless if unused.
+      - name: Enable Safari automation
+        run: |
+          defaults write com.apple.Safari IncludeDevelopMenu -bool true || true
+          defaults write com.apple.Safari AllowRemoteAutomation -bool true || true
+          sudo safaridriver --enable
+      - name: Voice smoke check
+        working-directory: frontend
+        run: node scripts/voice-smoke.mjs --driver safari --out "$RUNNER_TEMP/voice-smoke/voice-smoke.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mac-voice-smoke
+          path: |
+            ${{ runner.temp }}/voice-smoke/voice-smoke.json
+            ${{ runner.temp }}/voice-smoke/backend.log
+            ${{ runner.temp }}/voice-smoke/vite.log
+          if-no-files-found: warn
+          retention-days: 14
