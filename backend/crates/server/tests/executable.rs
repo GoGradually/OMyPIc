@@ -204,26 +204,40 @@ fn an_unusable_os_certificate_store_does_not_stop_the_server() {
         let probe = TcpListener::bind("127.0.0.1:0").unwrap();
         probe.local_addr().unwrap().port()
     };
-    let mut child = server_command(dir.path(), port)
-        .env("SSL_CERT_FILE", junk_certificate_file(certs.path()))
-        .env_remove("SSL_CERT_DIR")
-        .spawn()
-        .unwrap();
-    let stderr = child.stderr.take().unwrap();
-    let mut lines = BufReader::new(stderr).lines();
+    /// 시험이 어디서 끝나든 서버 프로세스를 남기지 않는다.
+    struct KillOnDrop(std::process::Child);
+    impl Drop for KillOnDrop {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut child = KillOnDrop(
+        server_command(dir.path(), port)
+            .env("SSL_CERT_FILE", junk_certificate_file(certs.path()))
+            .env_remove("SSL_CERT_DIR")
+            .spawn()
+            .unwrap(),
+    );
+    // 로그는 다른 스레드가 읽어 넘긴다. 서버가 멈춰 있어도 시험이 끝없이 기다리지 않는다.
+    let stderr = child.0.stderr.take().unwrap();
+    let (line_tx, line_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            let _ = line_tx.send(line);
+        }
+    });
     let listening = format!("listening on http://127.0.0.1:{port}");
     let mut seen = Vec::new();
     loop {
-        let Some(Ok(line)) = lines.next() else {
-            let _ = child.kill();
-            panic!("server exited before listening: {seen:#?}");
-        };
+        let line = line_rx
+            .recv_timeout(Duration::from_secs(60))
+            .unwrap_or_else(|err| panic!("server did not start listening ({err}): {seen:#?}"));
         seen.push(line.clone());
         if line.contains(&listening) {
             break;
         }
     }
-    std::thread::spawn(move || for _ in lines.map_while(Result::ok) {});
     assert!(
         seen.iter()
             .filter(|line| line.contains("certificate store"))
@@ -233,6 +247,9 @@ fn an_unusable_os_certificate_store_does_not_stop_the_server() {
     );
 
     let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .unwrap();
     write!(
         stream,
         "GET /api/meta/models HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
@@ -240,7 +257,5 @@ fn an_unusable_os_certificate_store_does_not_stop_the_server() {
     .unwrap();
     let mut reply = String::new();
     stream.read_to_string(&mut reply).unwrap();
-    let _ = child.kill();
-    let _ = child.wait();
     assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
 }

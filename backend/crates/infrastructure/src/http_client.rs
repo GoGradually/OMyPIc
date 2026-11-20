@@ -18,6 +18,7 @@ pub fn build_blocking_client(
 ) -> reqwest::Result<reqwest::blocking::Client> {
     with_native_roots_fallback(
         &NATIVE_ROOTS_UNUSABLE,
+        is_native_store_error,
         || make().build(),
         || make().tls_built_in_native_certs(false).build(),
     )
@@ -29,16 +30,24 @@ pub fn build_async_client(
 ) -> reqwest::Result<reqwest::Client> {
     with_native_roots_fallback(
         &NATIVE_ROOTS_UNUSABLE,
+        is_native_store_error,
         || make().build(),
         || make().tls_built_in_native_certs(false).build(),
     )
 }
 
-/// `with_native`로 만들어 보고, 실패하면 `without_native`로 만든다. 두 번째가 성공하면 `unusable`을
-/// 세우고(처음 세울 때만 경고를 남긴다) 다음부터는 바로 `without_native`로 만든다. 둘 다 실패하면
-/// 두 번째 오류를 돌려준다(OS 저장소와 상관없는 설정 오류다).
+/// OS 인증서 저장소 때문에 난 만들기 오류인가("zero valid certificates found in native root store").
+fn is_native_store_error(err: &reqwest::Error) -> bool {
+    crate::openai::http::chain(err).contains("native root")
+}
+
+/// `with_native`로 만들어 보고, 실패하면 `without_native`로 만든다. 둘 다 실패하면 두 번째 오류를
+/// 돌려준다(OS 저장소와 상관없는 설정 오류다). 첫 실패가 OS 저장소 탓(`is_store_error`)이면
+/// `unusable`을 세워 다음부터는 바로 `without_native`로 만든다(처음 세울 때만 경고를 남긴다). 다른
+/// 이유로 한 번 실패한 것(예: 스레드를 띄우지 못함)으로는 OS 저장소를 끄지 않는다.
 fn with_native_roots_fallback<C>(
     unusable: &AtomicBool,
+    is_store_error: impl FnOnce(&reqwest::Error) -> bool,
     with_native: impl FnOnce() -> reqwest::Result<C>,
     without_native: impl FnOnce() -> reqwest::Result<C>,
 ) -> reqwest::Result<C> {
@@ -50,7 +59,12 @@ fn with_native_roots_fallback<C>(
         Err(err) => err,
     };
     let client = without_native()?;
-    if !unusable.swap(true, Ordering::Relaxed) {
+    if !is_store_error(&native_error) {
+        tracing::warn!(
+            "Building an HTTP client with the OS certificate store failed ({}); this client uses the built-in root certificates only",
+            crate::openai::http::chain(&native_error)
+        );
+    } else if !unusable.swap(true, Ordering::Relaxed) {
         tracing::warn!(
             "The OS certificate store is unusable ({}); using the built-in root certificates only",
             crate::openai::http::chain(&native_error)
@@ -79,6 +93,7 @@ mod tests {
 
         let built = with_native_roots_fallback(
             &unusable,
+            |_| true,
             || {
                 native_tries.set(native_tries.get() + 1);
                 Err::<&str, _>(builder_error())
@@ -90,6 +105,7 @@ mod tests {
 
         let again = with_native_roots_fallback(
             &unusable,
+            |_| true,
             || {
                 native_tries.set(native_tries.get() + 1);
                 Ok("native")
@@ -103,17 +119,42 @@ mod tests {
     #[test]
     fn a_working_native_build_is_used_and_a_failing_fallback_reports_its_error() {
         let unusable = AtomicBool::new(false);
-        let built = with_native_roots_fallback(&unusable, || Ok("native"), || Ok("built-in"));
+        let built =
+            with_native_roots_fallback(&unusable, |_| true, || Ok("native"), || Ok("built-in"));
         assert_eq!("native", built.unwrap());
         assert!(!unusable.load(Ordering::Relaxed));
 
         let failed = with_native_roots_fallback::<()>(
             &unusable,
+            |_| true,
             || Err(builder_error()),
             || Err(builder_error()),
         );
         assert!(failed.unwrap_err().is_builder());
         assert!(!unusable.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn a_failure_that_is_not_about_the_store_falls_back_without_turning_the_store_off() {
+        let unusable = AtomicBool::new(false);
+        let native_tries = Cell::new(0);
+        let attempt = || {
+            with_native_roots_fallback(
+                &unusable,
+                is_native_store_error,
+                || {
+                    native_tries.set(native_tries.get() + 1);
+                    Err::<&str, _>(builder_error())
+                },
+                || Ok("built-in roots"),
+            )
+        };
+
+        assert_eq!("built-in roots", attempt().unwrap());
+        assert_eq!("built-in roots", attempt().unwrap());
+
+        assert!(!unusable.load(Ordering::Relaxed));
+        assert_eq!(2, native_tries.get(), "the OS store is tried again");
     }
 
     const CHILD_MARKER: &str = "OMYPIC_TLS_FALLBACK_CHILD";
