@@ -615,6 +615,18 @@ mod tests {
             adapter(&db, three_dim())
                 .index_rulebook_chunks(&rid("r1"), "r1.md", &["near".to_string()])
                 .unwrap();
+            // Opening removes chunks without a rulebook row, so the row has to exist.
+            db.with_conn(|c| {
+                c.execute(
+                    "INSERT INTO rulebooks (id, filename, path, scope, question_group, enabled,
+                         created_at, updated_at)
+                     VALUES ('r1', 'r1.md', 'rulebooks/r1.md', 'MAIN', NULL, 1,
+                         '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                    [],
+                )
+                .map_err(db_err)
+            })
+            .unwrap();
         }
         let db = Database::open(&path).unwrap();
         let result = adapter(&db, three_dim())

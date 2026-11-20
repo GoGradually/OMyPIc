@@ -72,7 +72,15 @@ CREATE TABLE rulebook_index_meta (
 /// `user_version`을 현재 버전까지 올린다. 0이면 스키마를 새로 만든다. 모든 단계는 한
 /// 트랜잭션 안에서 하므로 중간에 실패하면 아무것도 바뀌지 않는다. `data_dir`는 데이터베이스가
 /// 든 데이터 폴더다(메모리 데이터베이스면 `None`).
+///
+/// 버전과 상관없이 열 때마다 룰북 행이 없는 색인 조각을 지운다(업로드가 색인을 쓴 뒤 행을
+/// 쓰기 전에 프로세스가 죽으면 남는다).
 pub fn migrate(conn: &Connection, data_dir: Option<&Path>) -> AppResult<()> {
+    upgrade(conn, data_dir)?;
+    delete_orphan_chunks(conn)
+}
+
+fn upgrade(conn: &Connection, data_dir: Option<&Path>) -> AppResult<()> {
     match read_version(conn)? {
         CURRENT_VERSION => return Ok(()),
         version if !(0..CURRENT_VERSION).contains(&version) => return Err(unsupported(version)),
@@ -120,12 +128,20 @@ fn migrate_to_v2(conn: &Connection, data_dir: Option<&Path>) -> AppResult<()> {
             }
         }
     }
-    conn.execute(
-        "DELETE FROM rulebook_chunks WHERE rulebook_id IS NULL
-             OR rulebook_id NOT IN (SELECT id FROM rulebooks)",
-        [],
-    )
-    .map_err(db_err)?;
+    delete_orphan_chunks(conn)
+}
+
+fn delete_orphan_chunks(conn: &Connection) -> AppResult<()> {
+    let removed = conn
+        .execute(
+            "DELETE FROM rulebook_chunks WHERE rulebook_id IS NULL
+                 OR rulebook_id NOT IN (SELECT id FROM rulebooks)",
+            [],
+        )
+        .map_err(db_err)?;
+    if removed > 0 {
+        tracing::info!("Removed {removed} rulebook index chunks without a rulebook");
+    }
     Ok(())
 }
 
@@ -153,6 +169,12 @@ fn read_version(conn: &Connection) -> AppResult<i64> {
 }
 
 fn unsupported(version: i64) -> AppError {
+    if version > CURRENT_VERSION {
+        return AppError::InvalidState(format!(
+            "Unsupported database version: {version}. A newer OMyPIc created this database; \
+             this version reads up to version {CURRENT_VERSION}. Update OMyPIc to open it."
+        ));
+    }
     AppError::InvalidState(format!("Unsupported database version: {version}"))
 }
 
@@ -237,6 +259,65 @@ mod tests {
         let db = crate::sqlite::Database::open(&dir.path().join("omypic.db")).unwrap();
         db.with_conn(|conn| {
             assert_eq!(2, read_version(conn)?);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn a_database_from_a_newer_omypic_is_refused_with_a_message_that_says_so() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA user_version = 3").unwrap();
+
+        let err = migrate(&conn, None).unwrap_err();
+
+        assert_eq!(
+            AppError::InvalidState(
+                "Unsupported database version: 3. A newer OMyPIc created this database; \
+                 this version reads up to version 2. Update OMyPIc to open it."
+                    .to_string()
+            ),
+            err
+        );
+        let negative = Connection::open_in_memory().unwrap();
+        negative.execute_batch("PRAGMA user_version = -1").unwrap();
+        assert_eq!(
+            AppError::InvalidState("Unsupported database version: -1".to_string()),
+            migrate(&negative, None).unwrap_err()
+        );
+    }
+
+    #[test]
+    fn orphan_index_chunks_are_removed_on_every_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("omypic.db");
+        drop(crate::sqlite::Database::open(&db_path).unwrap());
+        {
+            // Left behind at the current version, e.g. by a crash between the index write and
+            // the row write of an upload.
+            let conn = Connection::open(&db_path).unwrap();
+            insert_rulebook(&conn, "kept", "rulebooks/kept.md");
+            insert_chunk(&conn, "kept");
+            insert_chunk(&conn, "orphan");
+            conn.execute(
+                "INSERT INTO rulebook_chunks (rulebook_id, filename, position, text, embedding)
+                 VALUES (NULL, 'x.md', 0, 'text', x'00')",
+                [],
+            )
+            .unwrap();
+        }
+
+        let db = crate::sqlite::Database::open(&db_path).unwrap();
+
+        db.with_conn(|conn| {
+            let owners: Vec<Option<String>> = conn
+                .prepare("SELECT rulebook_id FROM rulebook_chunks")
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            assert_eq!(vec![Some("kept".to_string())], owners);
             Ok(())
         })
         .unwrap();

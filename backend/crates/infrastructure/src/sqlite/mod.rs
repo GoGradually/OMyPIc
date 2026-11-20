@@ -138,7 +138,11 @@ mod tests {
 
         let err = Database::open(&path).err().expect("must fail");
         assert_eq!(
-            AppError::InvalidState("Unsupported database version: 99".to_string()),
+            AppError::InvalidState(
+                "Unsupported database version: 99. A newer OMyPIc created this database; \
+                 this version reads up to version 2. Update OMyPIc to open it."
+                    .to_string()
+            ),
             err
         );
     }
