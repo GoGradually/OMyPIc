@@ -309,7 +309,7 @@ impl VoiceSessionFacade {
     }
 
     /// AI가 꺼진 세션: STT, 합성 API, LLM을 부르지 않는다. 다음 질문은 글로 가고 클라이언트가
-    /// 기기 음성으로 읽는다.
+    /// 로컬 Kokoro 음성으로 읽는다.
     fn advance_without_feedback(
         self: &Arc<Self>,
         context: &Arc<RuntimeContext>,
