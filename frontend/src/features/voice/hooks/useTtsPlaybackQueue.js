@@ -14,9 +14,8 @@ export function useTtsPlaybackQueue({
                                         updateSpeechState,
                                         onQuestionPlaybackCompleted,
                                         onTtsFailure,
-                                        onDeviceVoiceUnavailable,
+                                        onLocalSpeechUnavailable,
                                         onLocalSpeechNotice,
-                                        getSpeechEngine,
                                         speechState
                                     }) {
     const ttsPlaybackQueueRef = useRef([])
@@ -94,7 +93,6 @@ export function useTtsPlaybackQueue({
         if (nextItem.speechText) {
             ttsPlayingRef.current = true
             ttsCancelSpeechRef.current = speakLocally(nextItem.speechText, {
-                engine: getSpeechEngine?.(),
                 onNotice: onLocalSpeechNotice,
                 onEnd: () => {
                     ttsCancelSpeechRef.current = null
@@ -103,7 +101,7 @@ export function useTtsPlaybackQueue({
                 onUnavailable: () => {
                     // The text is on screen, so the session goes on without the voice.
                     ttsCancelSpeechRef.current = null
-                    onDeviceVoiceUnavailable?.()
+                    onLocalSpeechUnavailable?.()
                     completeItem()
                 }
             })
@@ -141,9 +139,8 @@ export function useTtsPlaybackQueue({
             finishPlayback({failed: true})
         })
     }, [
-        getSpeechEngine,
-        onDeviceVoiceUnavailable,
         onLocalSpeechNotice,
+        onLocalSpeechUnavailable,
         onQuestionPlaybackCompleted,
         onTtsFailure,
         resetPendingAudio,
@@ -153,14 +150,14 @@ export function useTtsPlaybackQueue({
 
     const enqueueTtsAudio = useCallback((data) => {
         const audioBase64 = data?.audio || ''
-        // tts.text events carry text for the device voice; tts.audio events also carry text, as a caption.
-        const speechText = data?.deviceVoice ? (data?.text || '').trim() : ''
+        // tts.text events carry text read on this device; tts.audio events also carry text, as a caption.
+        const speechText = data?.localSpeech ? (data?.text || '').trim() : ''
         if (!audioBase64 && !speechText) {
             return
         }
         if (speechText) {
             // Synthesis can take a while; start now so it is ready when this item's turn comes.
-            prepareLocalSpeech(speechText, getSpeechEngine?.()).catch(() => {
+            prepareLocalSpeech(speechText).catch(() => {
             })
         }
         const parsedSequence = Number(data?.sequence)
@@ -204,7 +201,7 @@ export function useTtsPlaybackQueue({
             return left.order - right.order
         })
         playNextTtsAudio()
-    }, [getSpeechEngine, playNextTtsAudio])
+    }, [playNextTtsAudio])
 
     return {
         clearTtsPlayback,

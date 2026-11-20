@@ -70,6 +70,9 @@ describe('VoicePanel', () => {
         expect(screen.getByText('질문 듣기')).toBeTruthy()
         expect(screen.getByText('내 응답 다시듣기')).toBeTruthy()
         expect(screen.getByText(/API Key 없이 진행합니다/)).toBeTruthy()
+        // The question is read by the local model; the OS voice is gone.
+        expect(screen.getByText(/질문은 로컬 Kokoro로 이 기기에서 합성해 읽고/)).toBeTruthy()
+        expect(screen.queryByText(/기기 음성으로 읽고/)).toBeNull()
         fireEvent.click(screen.getByRole('checkbox', {name: '답변 후 내 응답 자동 재생'}))
         expect(onToggleAutoReplay).toHaveBeenCalledWith(false)
     })

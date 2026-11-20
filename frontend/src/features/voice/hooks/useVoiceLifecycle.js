@@ -29,8 +29,8 @@ import {
 } from './voiceSessionConstants.js'
 import {computeRms, joinByteChunks} from './voiceSessionAudio.js'
 import {loadLocalStt, transcribePcm16} from '../local/localStt.js'
-import {loadLocalTts, needsLocalTtsModel, SPEECH_ENGINE} from '../local/localSpeech.js'
-import {DEVICE_TTS_MODEL, LOCAL_STT_MODEL, LOCAL_TTS_MODEL} from '../../../shared/constants/models.js'
+import {loadLocalKoTts, loadLocalTts, neededLocalTtsModels} from '../local/localSpeech.js'
+import {LOCAL_STT_MODEL, LOCAL_TTS_MODEL} from '../../../shared/constants/models.js'
 
 const VOICE_CHUNK_UPLOAD_TIMEOUT_MS = 3000
 const REPLAY_STATE = {
@@ -138,8 +138,8 @@ export function useVoiceLifecycle({
     const deferredTtsQueueRef = useRef([])
     const sessionSttModeRef = useRef(STT_MODE.SERVER)
     const transcribingRef = useRef(false)
-    const deviceVoiceNoticeShownRef = useRef(false)
-    const sessionSpeechEngineRef = useRef(SPEECH_ENGINE.DEVICE)
+    const speechUnavailableNoticeShownRef = useRef(false)
+    const koreanUnavailableNoticeShownRef = useRef(false)
     const onConnectionErrorRef = useRef(() => {
     })
 
@@ -290,23 +290,26 @@ export function useVoiceLifecycle({
         updateSpeechState(SPEECH_STATE.READY_FOR_ANSWER)
     }, [updateSpeechState])
 
-    const handleDeviceVoiceUnavailable = useCallback(() => {
-        if (deviceVoiceNoticeShownRef.current) {
+    const handleLocalSpeechUnavailable = useCallback(() => {
+        if (speechUnavailableNoticeShownRef.current) {
             return
         }
-        deviceVoiceNoticeShownRef.current = true
-        setStatus('이 기기에서 쓸 수 있는 음성이 없어 질문을 화면으로만 보여 드립니다.')
+        speechUnavailableNoticeShownRef.current = true
+        setStatus('이 기기에서 음성을 합성하지 못해 화면으로만 보여 드립니다.')
     }, [setStatus])
 
     const handleLocalSpeechNotice = useCallback((notice) => {
-        if (notice === 'preparing') {
+        if (notice === 'korean-unavailable') {
+            if (!koreanUnavailableNoticeShownRef.current) {
+                koreanUnavailableNoticeShownRef.current = true
+                setStatus('한국어 음성 모델이 준비되지 않아 한국어 문장은 화면으로만 보여 드립니다.')
+            }
+        } else if (notice === 'preparing') {
             setStatus('음성을 준비하고 있습니다. 기기에서 합성하므로 잠시 걸릴 수 있습니다.')
         } else if (notice === 'ready') {
             setStatus('음성을 재생합니다.')
         }
     }, [setStatus])
-
-    const getSpeechEngine = useCallback(() => sessionSpeechEngineRef.current, [])
 
     const {
         clearTtsPlayback,
@@ -316,9 +319,8 @@ export function useVoiceLifecycle({
         updateSpeechState,
         onQuestionPlaybackCompleted,
         onTtsFailure: handleTtsFailure,
-        onDeviceVoiceUnavailable: handleDeviceVoiceUnavailable,
+        onLocalSpeechUnavailable: handleLocalSpeechUnavailable,
         onLocalSpeechNotice: handleLocalSpeechNotice,
-        getSpeechEngine,
         speechState: SPEECH_STATE
     })
 
@@ -1220,34 +1222,45 @@ export function useVoiceLifecycle({
         }
     }, [setStatus])
 
-    // English needs the Kokoro model when it is selected, or when the OS has no English voice.
-    const prepareLocalTts = useCallback(async (engine) => {
-        if (!(await needsLocalTtsModel(engine))) {
-            return
-        }
-        const selected = engine === SPEECH_ENGINE.KOKORO
-        setStatus(selected
-            ? '기기에서 실행할 음성 합성 모델을 준비하고 있습니다.'
-            : '이 기기에 영어 음성이 없어, 원어민 발음으로 읽어 줄 음성 합성 모델을 준비하고 있습니다.')
+    // Downloads (first use) and loads one on-device speech model, reporting which one it is. On first
+    // use the backend fetches the files before the percentage can move, so the size is said up front.
+    const loadSpeechModel = useCallback(async (load, label, size) => {
+        setStatus(`기기에서 실행할 ${label} 모델을 준비하고 있습니다. 처음 한 번은 ${size}를 내려받으므로 몇 분 걸릴 수 있습니다.`)
         let lastReported = -1
-        try {
-            await loadLocalTts(({progress}) => {
-                const percent = Math.floor(progress / 10) * 10
-                if (percent > lastReported) {
-                    lastReported = percent
-                    setStatus(`음성 합성 모델을 내려받는 중입니다. (${percent}%)`)
-                }
-            })
-        } catch (error) {
-            if (selected) {
-                throw new Error(
-                    `로컬 음성 합성 모델을 불러오지 못했습니다. 네트워크를 확인하거나 설정에서 TTS 모델을 바꿔 주세요. (${error?.message || '알 수 없는 오류'})`
-                )
+        await load(({progress}) => {
+            const percent = Math.floor(progress / 10) * 10
+            if (percent > lastReported) {
+                lastReported = percent
+                setStatus(`${label} 모델을 내려받는 중입니다. (${percent}%)`)
             }
-            // Fallback case: go on without it. Questions are still shown on screen.
-            setStatus('음성 합성 모델을 불러오지 못해 질문을 화면으로만 보여 드립니다.')
-        }
+        })
     }, [setStatus])
+
+    // English (questions) uses Kokoro. The Korean model is needed only for Korean feedback.
+    const prepareLocalTts = useCallback(async ({aiOn, feedbackLanguage}) => {
+        const needed = neededLocalTtsModels(feedbackLanguage)
+        if (needed.english) {
+            try {
+                await loadSpeechModel(loadLocalTts, '영어 음성 합성', '약 90MB')
+            } catch (error) {
+                if (aiOn) {
+                    throw new Error(
+                        `로컬 음성 합성 모델을 불러오지 못했습니다. 네트워크를 확인하거나 설정에서 TTS 모델을 바꿔 주세요. (${error?.message || '알 수 없는 오류'})`
+                    )
+                }
+                // AI off: go on without it. Questions are still shown on screen.
+                setStatus('음성 합성 모델을 불러오지 못해 질문을 화면으로만 보여 드립니다.')
+            }
+        }
+        if (needed.korean) {
+            try {
+                await loadSpeechModel(loadLocalKoTts, '한국어 음성 합성', '약 263MB')
+            } catch (_error) {
+                // The session still opens: English is read, and Korean feedback is shown on screen.
+                setStatus('한국어 음성 합성 모델을 불러오지 못해 한국어 피드백은 화면으로만 보여 드립니다.')
+            }
+        }
+    }, [loadSpeechModel, setStatus])
 
     const startSession = useCallback(async () => {
         if (sessionActiveRef.current) {
@@ -1284,7 +1297,8 @@ export function useVoiceLifecycle({
             sessionAiEnabledRef.current = aiOn
             setSessionAiEnabled(aiOn)
             setAwaitingReview(false)
-            deviceVoiceNoticeShownRef.current = false
+            speechUnavailableNoticeShownRef.current = false
+            koreanUnavailableNoticeShownRef.current = false
             transcribingRef.current = false
             sessionSttModeRef.current = !aiOn
                 ? STT_MODE.NONE
@@ -1292,11 +1306,9 @@ export function useVoiceLifecycle({
             if (sessionSttModeRef.current === STT_MODE.LOCAL) {
                 await prepareLocalStt()
             }
-            // Speech is read on this device when AI is off or a free local TTS model is selected.
-            const ttsModel = settingsRef.current.ttsModel
-            sessionSpeechEngineRef.current = ttsModel === LOCAL_TTS_MODEL ? SPEECH_ENGINE.KOKORO : SPEECH_ENGINE.DEVICE
-            if (!aiOn || ttsModel === LOCAL_TTS_MODEL || ttsModel === DEVICE_TTS_MODEL) {
-                await prepareLocalTts(sessionSpeechEngineRef.current)
+            // Speech is read on this device when AI is off or the free local TTS model is selected.
+            if (!aiOn || settingsRef.current.ttsModel === LOCAL_TTS_MODEL) {
+                await prepareLocalTts({aiOn, feedbackLanguage: aiOn ? settingsRef.current.feedbackLang : null})
             }
 
             const created = await openVoiceSession({

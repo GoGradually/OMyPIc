@@ -5,7 +5,9 @@ import {
     getModeSummary,
     getModelLabel,
     getProviderLabel,
-    MODEL_LABELS
+    LOCAL_TTS_MODEL,
+    MODEL_LABELS,
+    normalizeTtsModel
 } from './models.js'
 
 describe('models constants', () => {
@@ -48,5 +50,17 @@ describe('models constants', () => {
         expect(getFeedbackProvider('claude-sonnet-5-5')).toBe('anthropic')
         expect(getFeedbackProvider('gpt-4o')).toBe('openai')
         expect(getFeedbackProvider('')).toBe('openai')
+    })
+
+    it('TTS options do not include device-voice', () => {
+        expect(Object.keys(MODEL_LABELS)).not.toContain('device-voice')
+        expect(getModelLabel(LOCAL_TTS_MODEL)).toBe('로컬 음성 (무료, 영어 Kokoro + 한국어)')
+    })
+
+    it('normalizeTtsModel maps device-voice to local-kokoro', () => {
+        expect(normalizeTtsModel('device-voice')).toBe('local-kokoro')
+        expect(normalizeTtsModel('local-kokoro')).toBe('local-kokoro')
+        expect(normalizeTtsModel('gpt-4o-mini-tts')).toBe('gpt-4o-mini-tts')
+        expect(normalizeTtsModel('')).toBe('')
     })
 })

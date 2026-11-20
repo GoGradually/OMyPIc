@@ -1,5 +1,5 @@
 // Synthesizes English speech on this device with the Kokoro model (ONNX Runtime WebAssembly),
-// so questions are read in a native voice even when the OS has no English voice. No API is called.
+// so questions are read in a native English voice. No API is called.
 import {env} from '@huggingface/transformers'
 import {KokoroTTS} from 'kokoro-js'
 import {dropBrokenVoiceCache, redirectHuggingFaceFetch} from './backendModelHost.js'

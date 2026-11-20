@@ -10,13 +10,13 @@ import {
     verifyApiKey
 } from '../../shared/api/http.js'
 import {
-    DEVICE_TTS_MODEL,
     getFeedbackProvider,
     getModelLabel,
     getModeSummary,
     getProviderLabel,
     LOCAL_STT_MODEL,
     LOCAL_TTS_MODEL,
+    normalizeTtsModel,
     PANEL_TITLES
 } from '../../shared/constants/models.js'
 import {readPreference, writePreference} from '../../shared/utils/preferences.js'
@@ -137,7 +137,8 @@ export function useAppViewModel() {
     const [aiEnabled, setAiEnabled] = useState(() => readPreference('ai_enabled', true) !== false)
     const [autoReplayEnabled, setAutoReplayEnabled] = useState(() => readPreference('auto_replay', true) !== false)
     const [voiceSttModel, setVoiceSttModel] = useState(() => readPreference('stt_model', ''))
-    const [ttsModel, setTtsModel] = useState(() => readPreference('tts_model', ''))
+    // A saved retired id (the removed device voice) reads as its replacement and is saved back below.
+    const [ttsModel, setTtsModel] = useState(() => normalizeTtsModel(readPreference('tts_model', '')))
     const [modelMeta, setModelMeta] = useState(EMPTY_MODEL_META)
 
     const [apiKeyInput, setApiKeyInput] = useState('')
@@ -445,7 +446,7 @@ export function useAppViewModel() {
     }, [])
 
     const usesLocalStt = voiceSttModel === LOCAL_STT_MODEL
-    const usesLocalSpeech = !aiEnabled || ttsModel === DEVICE_TTS_MODEL || ttsModel === LOCAL_TTS_MODEL
+    const usesLocalSpeech = !aiEnabled || ttsModel === LOCAL_TTS_MODEL
     const needsOpenAiKey = aiEnabled
         && (!usesLocalStt || !usesLocalSpeech || feedbackProvider === OPENAI_PROVIDER)
 
@@ -495,8 +496,8 @@ export function useAppViewModel() {
     const stageAiEnabled = sessionActive ? sessionAiEnabled : aiEnabled
     const feedbackSummary = aiEnabled ? getModelLabel(feedbackModel) : '꺼짐'
 
-    // AI off still reads questions aloud: with the selected local model, or else the device voice.
-    const localSpeechModel = aiEnabled || ttsModel === LOCAL_TTS_MODEL ? ttsModel : DEVICE_TTS_MODEL
+    // AI off always reads questions aloud with the local model.
+    const localSpeechModel = aiEnabled ? ttsModel : LOCAL_TTS_MODEL
 
     const statusDetails = {
         sessionIdPrefix: sessionId.slice(0, 8),

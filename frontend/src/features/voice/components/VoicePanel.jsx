@@ -130,7 +130,7 @@ export function VoicePanel({
                             ? '세션 중에는 바꿀 수 없습니다. 다음 세션부터 적용됩니다.'
                             : aiEnabled
                                 ? `질문을 읽어 주고, 답변을 ${feedbackSummary || '선택한 모델'}로 첨삭합니다.`
-                                : 'API를 호출하지 않습니다. 질문은 기기 음성으로 읽고 답변은 녹음만 합니다. API Key 없이 진행합니다.'}
+                                : 'API를 호출하지 않습니다. 질문은 로컬 Kokoro로 이 기기에서 합성해 읽고 답변은 녹음만 합니다. API Key 없이 진행합니다.'}
                     </span>
                 </div>
                 {!aiEnabled && (

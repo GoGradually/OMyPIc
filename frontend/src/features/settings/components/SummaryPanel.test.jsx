@@ -46,6 +46,25 @@ describe('SummaryPanel', () => {
 
         expect(screen.getByText('AI 사용').nextElementSibling.textContent).toBe('꺼짐')
         expect(screen.getByText('claude-opus-5-5')).toBeTruthy()
-        expect(screen.getByText('TTS 모델').nextElementSibling.textContent).toBe('device-voice')
+        expect(screen.getByText('TTS 모델').nextElementSibling.textContent).toBe('local-kokoro')
+    })
+
+    it('shows the local voice for a saved device voice choice', () => {
+        render(
+            <SummaryPanel
+                feedbackLang="ko"
+                voice="alloy"
+                voiceSttModel="local-whisper"
+                feedbackModel="claude-opus-5-5"
+                ttsModel="device-voice"
+                enabledRulebookCount={0}
+                questionGroupCount={1}
+                onOpenSettings={vi.fn()}
+            />
+        )
+
+        expect(screen.getByText('TTS 모델').nextElementSibling.textContent).toBe('local-kokoro')
+        expect(screen.queryByText(/device-voice|기기 내장 음성/)).toBeNull()
+        expect(screen.getByText('음성 스타일').parentElement.className).toBe('is-muted')
     })
 })

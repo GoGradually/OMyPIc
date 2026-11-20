@@ -10,7 +10,7 @@ import {
     sendVoiceAudioChunk,
     stopVoiceSession
 } from '../../../shared/api/http.js'
-import {loadLocalTts, needsLocalTtsModel, prepareLocalSpeech, speakLocally} from '../local/localSpeech.js'
+import {loadLocalKoTts, loadLocalTts, neededLocalTtsModels, prepareLocalSpeech, speakLocally} from '../local/localSpeech.js'
 import {loadLocalStt, transcribePcm16} from '../local/localStt.js'
 
 vi.mock('../../../shared/api/http.js', () => ({
@@ -23,11 +23,11 @@ vi.mock('../../../shared/api/http.js', () => ({
 }))
 
 vi.mock('../local/localSpeech.js', () => ({
-    SPEECH_ENGINE: {DEVICE: 'device', KOKORO: 'kokoro'},
     speakLocally: vi.fn(),
     prepareLocalSpeech: vi.fn(),
-    needsLocalTtsModel: vi.fn(),
-    loadLocalTts: vi.fn()
+    neededLocalTtsModels: vi.fn(),
+    loadLocalTts: vi.fn(),
+    loadLocalKoTts: vi.fn()
 }))
 
 vi.mock('../local/localStt.js', () => ({
@@ -273,6 +273,24 @@ async function hearQuestionFromDeviceVoice({turnId = 1, questionId = 'q-1', sequ
     await finishDeviceVoiceQuestion()
 }
 
+function renderLocalSpeechSession({aiEnabled = true, ttsModel, feedbackLang = 'ko', onStatus = vi.fn()} = {}) {
+    return renderHook(() => useVoiceSession({
+        sessionId: 's1',
+        feedbackModel: 'gpt-4o-mini',
+        aiEnabled,
+        autoReplay: false,
+        voiceSttModel: 'gpt-4o-mini-transcribe',
+        ttsModel,
+        feedbackLang,
+        voice: 'alloy',
+        onStatus,
+        onFeedback: vi.fn(),
+        refreshWrongNotes: vi.fn(async () => {
+        }),
+        onQuestionPrompt: vi.fn()
+    }))
+}
+
 function speakAnAnswer() {
     act(() => {
         emitAudioFrame(0.1)
@@ -348,8 +366,9 @@ describe('useVoiceSession', () => {
             return vi.fn()
         })
         prepareLocalSpeech.mockResolvedValue(undefined)
-        needsLocalTtsModel.mockResolvedValue(false)
+        neededLocalTtsModels.mockImplementation((feedbackLanguage) => ({english: true, korean: feedbackLanguage === 'ko'}))
         loadLocalTts.mockResolvedValue(undefined)
+        loadLocalKoTts.mockResolvedValue(undefined)
         loadLocalStt.mockResolvedValue(undefined)
         transcribePcm16.mockResolvedValue('local transcript')
     })
@@ -1706,22 +1725,9 @@ describe('useVoiceSession', () => {
         unmount()
     })
 
-    it('keeps going with the question on screen when the device has no voice', async () => {
+    it('keeps going with the question on screen when the speech cannot be synthesized', async () => {
         const onStatus = vi.fn()
-        const {result, unmount} = renderHook(() => useVoiceSession({
-            sessionId: 's1',
-            feedbackModel: 'gpt-4o-mini',
-            aiEnabled: false,
-            autoReplay: false,
-            voiceSttModel: 'gpt-4o-mini-transcribe',
-            feedbackLang: 'ko',
-            voice: 'alloy',
-            onStatus,
-            onFeedback: vi.fn(),
-            refreshWrongNotes: vi.fn(async () => {
-            }),
-            onQuestionPrompt: vi.fn()
-        }))
+        const {result, unmount} = renderLocalSpeechSession({aiEnabled: false, ttsModel: 'gpt-4o-mini-tts', onStatus})
 
         await act(async () => {
             await result.current.startSession()
@@ -1751,94 +1757,126 @@ describe('useVoiceSession', () => {
 
         expect(result.current.sessionActive).toBe(true)
         expect(result.current.speechState).toBe('READY_FOR_ANSWER')
-        expect(onStatus).toHaveBeenCalledWith('이 기기에서 쓸 수 있는 음성이 없어 질문을 화면으로만 보여 드립니다.')
+        expect(onStatus).toHaveBeenCalledWith('이 기기에서 음성을 합성하지 못해 화면으로만 보여 드립니다.')
         unmount()
     })
 
-    it('reads with the Kokoro model and loads it before the session when it is selected', async () => {
-        needsLocalTtsModel.mockResolvedValue(true)
+    it('prepares both models at the start of a Korean-feedback session with the local voice', async () => {
         const onStatus = vi.fn()
-        const {result, unmount} = renderHook(() => useVoiceSession({
-            sessionId: 's1',
-            feedbackModel: 'gpt-4o-mini',
-            aiEnabled: true,
-            autoReplay: false,
-            voiceSttModel: 'gpt-4o-mini-transcribe',
-            ttsModel: 'local-kokoro',
-            feedbackLang: 'ko',
-            voice: 'alloy',
-            onStatus,
-            onFeedback: vi.fn(),
-            refreshWrongNotes: vi.fn(async () => {
-            }),
-            onQuestionPrompt: vi.fn()
-        }))
+        loadLocalKoTts.mockImplementation(async (onProgress) => {
+            onProgress({file: 'ko', progress: 42})
+        })
+        const {result, unmount} = renderLocalSpeechSession({ttsModel: 'local-kokoro', feedbackLang: 'ko', onStatus})
 
         await act(async () => {
             await result.current.startSession()
         })
-        expect(needsLocalTtsModel).toHaveBeenCalledWith('kokoro')
+
+        expect(neededLocalTtsModels).toHaveBeenCalledWith('ko')
         expect(loadLocalTts).toHaveBeenCalledTimes(1)
+        expect(loadLocalKoTts).toHaveBeenCalledTimes(1)
+        // The learner sees which model is downloading.
+        expect(onStatus).toHaveBeenCalledWith('기기에서 실행할 한국어 음성 합성 모델을 준비하고 있습니다. 처음 한 번은 약 263MB를 내려받으므로 몇 분 걸릴 수 있습니다.')
+        expect(onStatus).toHaveBeenCalledWith('한국어 음성 합성 모델을 내려받는 중입니다. (40%)')
+        expect(openVoiceSession).toHaveBeenCalledWith(expect.objectContaining({ttsModel: 'local-kokoro'}))
 
         await act(async () => {
             activeEventSource.emit('tts.text', {role: 'question', text: 'question-1', sequence: 1})
         })
 
-        // Synthesis starts as soon as the text arrives, and playback uses the selected engine.
-        expect(prepareLocalSpeech).toHaveBeenCalledWith('question-1', 'kokoro')
-        expect(speakLocally).toHaveBeenCalledWith('question-1', expect.objectContaining({engine: 'kokoro'}))
+        // Synthesis starts as soon as the text arrives; each sentence picks its model by language.
+        expect(prepareLocalSpeech).toHaveBeenCalledWith('question-1')
+        expect(speakLocally).toHaveBeenCalledWith('question-1', expect.not.objectContaining({engine: expect.anything()}))
         unmount()
     })
 
-    it('prepares the Kokoro model when AI is off and the device has no English voice', async () => {
-        needsLocalTtsModel.mockResolvedValue(true)
+    it('shows the English model download progress with its own label', async () => {
         const onStatus = vi.fn()
-        const {result, unmount} = renderHook(() => useVoiceSession({
-            sessionId: 's1',
-            feedbackModel: 'gpt-4o-mini',
-            aiEnabled: false,
-            autoReplay: false,
-            voiceSttModel: 'gpt-4o-mini-transcribe',
-            ttsModel: 'gpt-4o-mini-tts',
-            feedbackLang: 'ko',
-            voice: 'alloy',
-            onStatus,
-            onFeedback: vi.fn(),
-            refreshWrongNotes: vi.fn(async () => {
-            }),
-            onQuestionPrompt: vi.fn()
-        }))
+        loadLocalTts.mockImplementation(async (onProgress) => {
+            onProgress({file: 'en', progress: 75})
+        })
+        const {result, unmount} = renderLocalSpeechSession({ttsModel: 'local-kokoro', feedbackLang: 'en', onStatus})
 
         await act(async () => {
             await result.current.startSession()
         })
 
-        expect(needsLocalTtsModel).toHaveBeenCalledWith('device')
+        expect(onStatus).toHaveBeenCalledWith('기기에서 실행할 영어 음성 합성 모델을 준비하고 있습니다. 처음 한 번은 약 90MB를 내려받으므로 몇 분 걸릴 수 있습니다.')
+        expect(onStatus).toHaveBeenCalledWith('영어 음성 합성 모델을 내려받는 중입니다. (70%)')
+        unmount()
+    })
+
+    it('does not prepare the Korean model when the feedback language is English', async () => {
+        const {result, unmount} = renderLocalSpeechSession({ttsModel: 'local-kokoro', feedbackLang: 'en'})
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+
+        expect(neededLocalTtsModels).toHaveBeenCalledWith('en')
         expect(loadLocalTts).toHaveBeenCalledTimes(1)
-        expect(onStatus).toHaveBeenCalledWith('이 기기에 영어 음성이 없어, 원어민 발음으로 읽어 줄 음성 합성 모델을 준비하고 있습니다.')
+        expect(loadLocalKoTts).not.toHaveBeenCalled()
         expect(result.current.sessionActive).toBe(true)
         unmount()
     })
 
-    it('still starts the session when the fallback voice model cannot be loaded', async () => {
-        needsLocalTtsModel.mockResolvedValue(true)
-        loadLocalTts.mockRejectedValue(new Error('offline'))
+    it('prepares only Kokoro for an AI-off session', async () => {
+        const {result, unmount} = renderLocalSpeechSession({aiEnabled: false, ttsModel: 'gpt-4o-mini-tts', feedbackLang: 'ko'})
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+
+        expect(neededLocalTtsModels).toHaveBeenCalledWith(null)
+        expect(loadLocalTts).toHaveBeenCalledTimes(1)
+        expect(loadLocalKoTts).not.toHaveBeenCalled()
+        expect(result.current.sessionActive).toBe(true)
+        unmount()
+    })
+
+    it('goes on with the questions after session.ready when the Korean model cannot be prepared', async () => {
+        loadLocalKoTts.mockRejectedValue(new Error('HTTP 403'))
         const onStatus = vi.fn()
-        const {result, unmount} = renderHook(() => useVoiceSession({
-            sessionId: 's1',
-            feedbackModel: 'gpt-4o-mini',
-            aiEnabled: false,
-            autoReplay: false,
-            voiceSttModel: 'gpt-4o-mini-transcribe',
-            ttsModel: 'gpt-4o-mini-tts',
-            feedbackLang: 'ko',
-            voice: 'alloy',
-            onStatus,
-            onFeedback: vi.fn(),
-            refreshWrongNotes: vi.fn(async () => {
-            }),
-            onQuestionPrompt: vi.fn()
-        }))
+        const {result, unmount} = renderLocalSpeechSession({ttsModel: 'local-kokoro', feedbackLang: 'ko', onStatus})
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+        expect(onStatus).toHaveBeenCalledWith('한국어 음성 합성 모델을 불러오지 못해 한국어 피드백은 화면으로만 보여 드립니다.')
+        expect(result.current.sessionActive).toBe(true)
+        await act(async () => {
+            activeEventSource.emit('session.ready', {sessionId: 's1', voiceSessionId: 'voice-1'})
+        })
+        await hearQuestionFromDeviceVoice({turnId: 1, questionId: 'q-1'})
+
+        expect(spokenTexts).toEqual(['question-1', 'question-1'])
+        expect(result.current.speechState).toBe('READY_FOR_ANSWER')
+        unmount()
+    })
+
+    it('tells the learner once that Korean sentences are shown without sound', async () => {
+        const onStatus = vi.fn()
+        const {result, unmount} = renderLocalSpeechSession({ttsModel: 'local-kokoro', feedbackLang: 'en', onStatus})
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+        await act(async () => {
+            activeEventSource.emit('tts.text', {role: 'feedback', text: '좋았습니다.', sequence: 1})
+        })
+        await act(async () => {
+            speechCallbacks[0].onNotice('korean-unavailable')
+            speechCallbacks[0].onNotice('korean-unavailable')
+        })
+
+        const notices = onStatus.mock.calls.filter(([message]) => message === '한국어 음성 모델이 준비되지 않아 한국어 문장은 화면으로만 보여 드립니다.')
+        expect(notices).toHaveLength(1)
+        unmount()
+    })
+
+    it('still starts an AI-off session when Kokoro cannot be loaded', async () => {
+        loadLocalTts.mockRejectedValue(new Error('offline'))
+        const {result, unmount} = renderLocalSpeechSession({aiEnabled: false, ttsModel: 'gpt-4o-mini-tts'})
 
         await act(async () => {
             await result.current.startSession()
@@ -1849,25 +1887,10 @@ describe('useVoiceSession', () => {
         unmount()
     })
 
-    it('does not start the session when the selected Kokoro model cannot be loaded', async () => {
-        needsLocalTtsModel.mockResolvedValue(true)
+    it('does not start the session when the selected local voice cannot load Kokoro', async () => {
         loadLocalTts.mockRejectedValue(new Error('offline'))
         const onStatus = vi.fn()
-        const {result, unmount} = renderHook(() => useVoiceSession({
-            sessionId: 's1',
-            feedbackModel: 'gpt-4o-mini',
-            aiEnabled: true,
-            autoReplay: false,
-            voiceSttModel: 'gpt-4o-mini-transcribe',
-            ttsModel: 'local-kokoro',
-            feedbackLang: 'ko',
-            voice: 'alloy',
-            onStatus,
-            onFeedback: vi.fn(),
-            refreshWrongNotes: vi.fn(async () => {
-            }),
-            onQuestionPrompt: vi.fn()
-        }))
+        const {result, unmount} = renderLocalSpeechSession({ttsModel: 'local-kokoro', onStatus})
 
         await act(async () => {
             await result.current.startSession()
@@ -1880,29 +1903,15 @@ describe('useVoiceSession', () => {
     })
 
     it('does not load any voice model for hosted TTS', async () => {
-        const onStatus = vi.fn()
-        const {result, unmount} = renderHook(() => useVoiceSession({
-            sessionId: 's1',
-            feedbackModel: 'gpt-4o-mini',
-            aiEnabled: true,
-            autoReplay: false,
-            voiceSttModel: 'gpt-4o-mini-transcribe',
-            ttsModel: 'gpt-4o-mini-tts',
-            feedbackLang: 'ko',
-            voice: 'alloy',
-            onStatus,
-            onFeedback: vi.fn(),
-            refreshWrongNotes: vi.fn(async () => {
-            }),
-            onQuestionPrompt: vi.fn()
-        }))
+        const {result, unmount} = renderLocalSpeechSession({ttsModel: 'gpt-4o-mini-tts'})
 
         await act(async () => {
             await result.current.startSession()
         })
 
-        expect(needsLocalTtsModel).not.toHaveBeenCalled()
+        expect(neededLocalTtsModels).not.toHaveBeenCalled()
         expect(loadLocalTts).not.toHaveBeenCalled()
+        expect(loadLocalKoTts).not.toHaveBeenCalled()
         unmount()
     })
 

@@ -1,11 +1,11 @@
 import React, {useState} from 'react'
 import {
-    DEVICE_TTS_MODEL,
     FEEDBACK_LANGUAGE_LABELS,
     getModelLabel,
     getProviderLabel,
     LOCAL_STT_MODEL,
-    LOCAL_TTS_MODEL
+    LOCAL_TTS_MODEL,
+    normalizeTtsModel
 } from '../../../shared/constants/models.js'
 
 function ModelOptions({models}) {
@@ -83,10 +83,12 @@ export function ModelSettingsOverlay({
         : ['ko', 'en']
     const usesClaude = feedbackProvider === 'anthropic'
     const usesLocalStt = aiEnabled && voiceSttModel === LOCAL_STT_MODEL
-    const usesKokoro = ttsModel === LOCAL_TTS_MODEL
-    // AI off reads questions on this device: with Kokoro if it is selected, else the device voice.
-    const usesDeviceVoice = !usesKokoro && (!aiEnabled || ttsModel === DEVICE_TTS_MODEL)
-    const usesLocalSpeech = usesKokoro || usesDeviceVoice
+    // A preference saved with a retired TTS id shows as the model that replaced it.
+    const selectedTtsModel = normalizeTtsModel(ttsModel)
+    const ttsModelList = [...new Set(ttsModelOptions.map(normalizeTtsModel))]
+    const usesLocalModel = selectedTtsModel === LOCAL_TTS_MODEL
+    // AI off always reads questions with the local model, whatever TTS model is selected.
+    const usesLocalSpeech = usesLocalModel || !aiEnabled
 
     return (
         <div className="overlay-content settings">
@@ -109,7 +111,7 @@ export function ModelSettingsOverlay({
                         <span>
                             {aiEnabled
                                 ? '질문을 읽어 주고, 답변을 인식해 선택한 모델로 첨삭합니다.'
-                                : 'API를 호출하지 않습니다. 질문은 기기 내장 음성으로 읽어 드리고, 답변은 녹음만 합니다. API Key가 필요 없습니다.'}
+                                : 'API를 호출하지 않습니다. 질문은 이 기기에서 합성한 음성(로컬 Kokoro)으로 읽어 드리고, 답변은 녹음만 합니다. API Key가 필요 없습니다.'}
                         </span>
                     </div>
                     {!aiEnabled && (
@@ -184,21 +186,19 @@ export function ModelSettingsOverlay({
                         <label htmlFor="tts-model">TTS 모델</label>
                         <select
                             id="tts-model"
-                            value={ttsModel}
+                            value={selectedTtsModel}
                             onChange={(event) => setTtsModel(event.target.value)}
                         >
-                            <ModelOptions models={ttsModelOptions}/>
+                            <ModelOptions models={ttsModelList}/>
                         </select>
-                        {usesDeviceVoice && (
+                        {aiEnabled && usesLocalModel && (
                             <p className="tiny-meta">
-                                {aiEnabled
-                                    ? '운영체제에 설치된 음성으로 바로 읽습니다. 영어 음성이 없는 기기에서는 영어만 로컬 Kokoro로 읽습니다.'
-                                    : 'AI를 끄면 질문을 기기 내장 음성으로 읽어 드립니다. 영어 음성이 없으면 로컬 Kokoro로 읽습니다.'}
+                                영어는 Kokoro, 한국어는 한국어 음성 모델이 이 기기에서 합성합니다. 처음 한 번 영어 모델(약 90MB)을 내려받고, 피드백 언어가 한국어면 한국어 모델(약 263MB)도 내려받습니다. 문장을 준비하는 데 몇 초에서 수십 초가 걸립니다.
                             </p>
                         )}
-                        {usesKokoro && (
+                        {!aiEnabled && (
                             <p className="tiny-meta">
-                                원어민 발음의 영어 음성을 이 기기에서 합성합니다. 처음 한 번 모델(약 90MB)을 내려받고, 문장을 준비하는 데 몇 초에서 수십 초가 걸립니다.
+                                AI를 끄면 질문을 로컬 Kokoro로 이 기기에서 합성해 읽어 드립니다. 처음 한 번 모델(약 90MB)을 내려받습니다.
                             </p>
                         )}
                     </div>
@@ -248,7 +248,7 @@ export function ModelSettingsOverlay({
                 <h3 id="settings-cost">비용 안내</h3>
                 <p className="tiny-meta">기본 설정(gpt-5-nano) 기준으로 세션 1회당 약 50원이 사용됩니다.</p>
                 <p className="tiny-meta">실제 비용은 발화 길이와 선택 모델에 따라 달라질 수 있습니다.</p>
-                <p className="tiny-meta">로컬 Whisper, 로컬 Kokoro, 기기 내장 음성은 무료입니다. AI를 끄면 어떤 API도 호출하지 않습니다.</p>
+                <p className="tiny-meta">로컬 Whisper와 로컬 음성(영어 Kokoro, 한국어)은 무료입니다. AI를 끄면 어떤 API도 호출하지 않습니다.</p>
             </section>
 
             <section className="settings__group" aria-labelledby="settings-data">

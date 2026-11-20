@@ -1,32 +1,25 @@
 // Reads text aloud without calling any API.
 //
-// Each sentence is spoken in its own language by one of two free engines:
-//   - the device voice (instant, but only for languages the OS has a voice for)
-//   - the on-device Kokoro model (native English on any machine; slower, because it synthesizes
-//     on the CPU, and it needs a one-time model download)
-//
-// engine 'device': device voice; English falls back to Kokoro when the OS has no English voice.
-// engine 'kokoro': English always uses Kokoro. Korean always uses the device voice.
+// Each sentence is read in its own language by an on-device model: English by Kokoro, Korean
+// (any sentence with Hangul, quoted English included) by the Korean model. A sentence whose model
+// cannot be used is shown on screen without sound, and the rest still plays.
 
 import {pcm16ToWav} from '../../../shared/utils/audioCodec.js'
-import {detectSpeechLang, loadDeviceVoices, pickVoice, speakSentence, splitForSpeech} from './deviceVoice.js'
+import {detectSpeechLang, splitForSpeech} from './speechText.js'
 import {isLocalTtsSupported, loadLocalTts, synthesizeEnglish} from './localTts.js'
+import {getLocalKoTtsStatus, isLocalKoTtsSupported, loadLocalKoTts, synthesizeKorean} from './localKoTts.js'
 
-export const SPEECH_ENGINE = {
-    DEVICE: 'device',
-    KOKORO: 'kokoro'
-}
-
+const KOREAN = 'ko-KR'
 const CACHE_LIMIT = 60
 // sentence -> Promise<{samples, sampleRate} | null>. Questions are read twice, so the second
 // pass and any sentence prepared ahead of time play without waiting.
 const synthesisCache = new Map()
 
-function synthesizeCached(sentence) {
+function synthesizeCached(sentence, synthesize) {
     if (synthesisCache.has(sentence)) {
         return synthesisCache.get(sentence)
     }
-    const pending = synthesizeEnglish(sentence).catch(() => {
+    const pending = synthesize(sentence).catch(() => {
         synthesisCache.delete(sentence)
         return null
     })
@@ -37,32 +30,55 @@ function synthesizeCached(sentence) {
     return pending
 }
 
-async function buildPlan(text, engine) {
-    const voices = await loadDeviceVoices()
+// The Korean model is used only once it is ready. A Korean sentence that comes before that (the
+// session did not prepare the model, or it is still downloading) starts the load in the
+// background and is shown without sound rather than holding up the speech queue.
+function koreanSynthesizer() {
+    if (!isLocalKoTtsSupported()) {
+        return null
+    }
+    const status = getLocalKoTtsStatus()
+    if (status === 'ready') {
+        return synthesizeKorean
+    }
+    if (status !== 'loading') {
+        loadLocalKoTts().catch(() => {
+        })
+    }
+    return null
+}
+
+/** One step per sentence: {sentence, lang, synthesize}; synthesize is null when no model can read it. */
+function buildPlan(text) {
+    let korean
     return splitForSpeech(text).map((sentence) => {
         const lang = detectSpeechLang(sentence)
-        const voice = pickVoice(voices, lang)
-        const english = lang.startsWith('en')
-        const useModel = english && isLocalTtsSupported() && (engine === SPEECH_ENGINE.KOKORO || !voice)
-        return {sentence, voice, useModel, fallback: useModel && engine !== SPEECH_ENGINE.KOKORO}
+        if (lang === KOREAN) {
+            if (korean === undefined) {
+                korean = koreanSynthesizer()
+            }
+            return {sentence, lang, synthesize: korean}
+        }
+        return {sentence, lang, synthesize: isLocalTtsSupported() ? synthesizeEnglish : null}
     })
 }
 
-/** Whether this device needs the Kokoro model to read English with the given engine. */
-export async function needsLocalTtsModel(engine) {
-    if (!isLocalTtsSupported()) {
-        return false
+/**
+ * Which on-device models a session needs, given its feedback language (null when there is no
+ * feedback). Questions are English; only Korean feedback needs the Korean model.
+ */
+export function neededLocalTtsModels(feedbackLanguage) {
+    return {
+        english: isLocalTtsSupported(),
+        korean: feedbackLanguage === 'ko' && isLocalKoTtsSupported()
     }
-    if (engine === SPEECH_ENGINE.KOKORO) {
-        return true
-    }
-    return !pickVoice(await loadDeviceVoices(), 'en-US')
 }
 
 /** Starts synthesizing ahead of time so the speech is ready when its turn comes. */
-export async function prepareLocalSpeech(text, engine) {
-    const plan = await buildPlan(text, engine)
-    plan.filter((step) => step.useModel).forEach((step) => synthesizeCached(step.sentence))
+export async function prepareLocalSpeech(text) {
+    buildPlan(text)
+        .filter((step) => step.synthesize)
+        .forEach((step) => synthesizeCached(step.sentence, step.synthesize))
 }
 
 function floatToWavBytes(samples, sampleRate) {
@@ -105,44 +121,38 @@ function playSamples(audio) {
 }
 
 /**
- * Speaks the text and calls onEnd when at least part of it was heard, or onUnavailable when
- * nothing could be spoken on this device. onNotice reports 'no-english-voice' (falling back to
- * the model), 'preparing' (waiting for synthesis) and 'ready' (synthesis done, playback starts).
- * Returns a function that cancels silently.
+ * Speaks the text and calls onEnd when it is done, or onUnavailable when nothing that should have
+ * been heard could be played. onNotice reports 'preparing' (waiting for synthesis), 'ready'
+ * (synthesis done, playback starts) and 'korean-unavailable' (Korean sentences shown without
+ * sound because the Korean model is not ready). Returns a function that stops it silently.
  */
-export function speakLocally(text, {engine = SPEECH_ENGINE.DEVICE, onEnd, onUnavailable, onNotice} = {}) {
+export function speakLocally(text, {onEnd, onUnavailable, onNotice} = {}) {
     let cancelled = false
     let active = null
 
     const run = async () => {
-        const plan = await buildPlan(text, engine)
-        if (cancelled) {
-            return
+        const plan = buildPlan(text)
+        if (plan.some((step) => step.lang === KOREAN && !step.synthesize)) {
+            onNotice?.('korean-unavailable')
         }
-        if (plan.some((step) => step.fallback)) {
-            onNotice?.('no-english-voice')
-        }
-        // The whole text is synthesized before it starts, so a question plays without pauses
-        // between its sentences.
-        const modelSteps = plan.filter((step) => step.useModel)
+        // The whole text is synthesized before it starts, so it plays without pauses between its
+        // sentences and always in sentence order, whichever model finishes first.
+        const modelSteps = plan.filter((step) => step.synthesize)
         if (modelSteps.length > 0) {
             onNotice?.('preparing')
-            for (const step of modelSteps) {
-                step.audio = await synthesizeCached(step.sentence)
-                if (cancelled) {
-                    return
-                }
+            const audios = await Promise.all(modelSteps.map((step) => synthesizeCached(step.sentence, step.synthesize)))
+            if (cancelled) {
+                return
             }
+            modelSteps.forEach((step, index) => {
+                step.audio = audios[index]
+            })
             onNotice?.('ready')
         }
 
         let spoken = 0
         for (const step of plan) {
-            if (step.useModel) {
-                active = step.audio ? playSamples(step.audio) : null
-            } else {
-                active = step.voice ? speakSentence(step.sentence, step.voice) : null
-            }
+            active = step.audio ? playSamples(step.audio) : null
             if (active && await active.done) {
                 spoken += 1
             }
@@ -151,7 +161,10 @@ export function speakLocally(text, {engine = SPEECH_ENGINE.DEVICE, onEnd, onUnav
             }
         }
         active = null
-        if (plan.length > 0 && spoken === 0) {
+        // A Korean sentence waiting for its model is expected to be silent; anything else that
+        // stayed silent means this device could not play the speech.
+        const expected = plan.filter((step) => step.synthesize || step.lang !== KOREAN)
+        if (expected.length > 0 && spoken === 0) {
             onUnavailable?.()
         } else {
             onEnd?.()
@@ -170,4 +183,4 @@ export function speakLocally(text, {engine = SPEECH_ENGINE.DEVICE, onEnd, onUnav
     }
 }
 
-export {loadLocalTts}
+export {loadLocalKoTts, loadLocalTts}
