@@ -2,7 +2,10 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import {
     cancelLocalSpeech,
+    isLocalSpeechBusy,
+    localSpeechCacheSize,
     neededLocalTtsModels,
+    releaseLocalSpeechModels,
     prepareLocalSpeech,
     speakLocally,
     watchLocalSpeechModels
@@ -10,15 +13,19 @@ import {
 import {
     cancelQueuedEnglishSynthesis,
     getLocalTtsStatus,
+    isLocalTtsBusy,
     isLocalTtsSupported,
     loadLocalTts,
+    releaseLocalTts,
     synthesizeEnglish
 } from './localTts.js'
 import {
     cancelQueuedKoreanSynthesis,
     getLocalKoTtsStatus,
+    isLocalKoTtsBusy,
     isLocalKoTtsSupported,
     loadLocalKoTts,
+    releaseLocalKoTts,
     synthesizeKorean
 } from './localKoTts.js'
 
@@ -30,6 +37,8 @@ vi.mock('./localTts.js', () => ({
     loadLocalTts: vi.fn(),
     synthesizeEnglish: vi.fn(),
     cancelQueuedEnglishSynthesis: vi.fn(),
+    releaseLocalTts: vi.fn(),
+    isLocalTtsBusy: vi.fn(),
     watchLocalTtsStatus: vi.fn((listener) => {
         modelWatchers.english = listener
         return () => {
@@ -48,6 +57,8 @@ vi.mock('./localKoTts.js', () => ({
     loadLocalKoTts: vi.fn(),
     synthesizeKorean: vi.fn(),
     cancelQueuedKoreanSynthesis: vi.fn(),
+    releaseLocalKoTts: vi.fn(),
+    isLocalKoTtsBusy: vi.fn(),
     watchLocalKoTtsStatus: vi.fn((listener) => {
         modelWatchers.korean = listener
         return () => {
@@ -726,6 +737,37 @@ describe('local speech', () => {
         await flush()
 
         expect(synthesizeEnglish.mock.calls.filter(([sentence]) => sentence === pending).length).toBe(1)
+    })
+
+    it('releases only the voices asked for, with their cached audio, and synthesizes again afterwards', async () => {
+        releaseLocalTts.mockReturnValue(true)
+        releaseLocalKoTts.mockReturnValue(true)
+        const englishSentence = english('Released later')
+        const koreanSentence = korean('나중에 내려놓습니다')
+        await prepareLocalSpeech(`${englishSentence} ${koreanSentence}`)
+        await flush()
+        const before = localSpeechCacheSize().entries
+
+        expect(releaseLocalSpeechModels({korean: true})).toEqual({english: false, korean: true})
+        expect(releaseLocalKoTts).toHaveBeenCalledTimes(1)
+        expect(releaseLocalTts).not.toHaveBeenCalled()
+        expect(localSpeechCacheSize().entries).toBe(before - 1)
+
+        await prepareLocalSpeech(`${englishSentence} ${koreanSentence}`)
+        await flush()
+        expect(synthesizeEnglish).toHaveBeenCalledTimes(1)
+        expect(synthesizeKorean).toHaveBeenCalledTimes(2)
+
+        expect(releaseLocalSpeechModels({english: true, korean: true})).toEqual({english: true, korean: true})
+        expect(localSpeechCacheSize()).toEqual({entries: 0, bytes: 0})
+    })
+
+    it('is busy while either voice is', () => {
+        isLocalTtsBusy.mockReturnValue(false)
+        isLocalKoTtsBusy.mockReturnValue(true)
+        expect(isLocalSpeechBusy()).toBe(true)
+        isLocalKoTtsBusy.mockReturnValue(false)
+        expect(isLocalSpeechBusy()).toBe(false)
     })
 
     it('reports preparing and ready around synthesis', async () => {

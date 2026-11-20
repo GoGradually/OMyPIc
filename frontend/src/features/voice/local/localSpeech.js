@@ -9,16 +9,20 @@ import {detectSpeechLang, splitForSpeech} from './speechText.js'
 import {
     cancelQueuedEnglishSynthesis,
     getLocalTtsStatus,
+    isLocalTtsBusy,
     isLocalTtsSupported,
     loadLocalTts,
+    releaseLocalTts,
     synthesizeEnglish,
     watchLocalTtsStatus
 } from './localTts.js'
 import {
     cancelQueuedKoreanSynthesis,
     getLocalKoTtsStatus,
+    isLocalKoTtsBusy,
     isLocalKoTtsSupported,
     loadLocalKoTts,
+    releaseLocalKoTts,
     synthesizeKorean,
     watchLocalKoTtsStatus
 } from './localKoTts.js'
@@ -176,6 +180,35 @@ export function cancelLocalSpeech() {
     }
     cancelQueuedEnglishSynthesis()
     cancelQueuedKoreanSynthesis()
+}
+
+/**
+ * Terminates the worker of each voice asked for (english, korean) and frees its model, unless the
+ * voice is loading or synthesizing; the next sentence in that language loads it again. The cached
+ * audio of a released voice is dropped with it. Returns {english, korean}: which were released.
+ */
+export function releaseLocalSpeechModels({english = false, korean = false} = {}) {
+    const released = {
+        english: english ? releaseLocalTts() : false,
+        korean: korean ? releaseLocalKoTts() : false
+    }
+    for (const [sentence, entry] of synthesisCache) {
+        const lang = detectSpeechLang(sentence)
+        if (entry.settled && ((english && lang === ENGLISH) || (korean && lang === KOREAN))) {
+            dropFromCache(sentence)
+        }
+    }
+    return released
+}
+
+/** True while either voice loads or synthesizes. */
+export function isLocalSpeechBusy() {
+    return isLocalTtsBusy() || isLocalKoTtsBusy()
+}
+
+/** How much synthesized audio is cached, for measurements: {entries, bytes}. */
+export function localSpeechCacheSize() {
+    return {entries: synthesisCache.size, bytes: cachedBytes}
 }
 
 function floatToWavBytes(samples, sampleRate) {

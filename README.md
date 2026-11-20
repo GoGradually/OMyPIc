@@ -342,6 +342,10 @@ Claude API에는 음성 인식/합성 기능이 없습니다. 그래서 STT/TTS�
   - CPU에서 합성하므로 문장을 준비하는 데 시간이 걸립니다. 문장이 도착하는 즉시 모든 문장의 합성을 시작하고, 앞 문장부터 준비되는 대로 순서대로 재생합니다(긴 피드백도 첫 문장이 합성되면 바로 들립니다). 같은 문장은 다시 합성하지 않습니다(질문 두 번째 재생은 즉시). 세션을 끝내면 아직 시작하지 않은 합성은 버립니다.
   - 영어 모델 빌드 시 환경 변수: `VITE_OMYPIC_LOCAL_TTS_MODEL`(기본값 `onnx-community/Kokoro-82M-v1.0-ONNX`), `VITE_OMYPIC_LOCAL_TTS_VOICE`(기본값 `af_heart`), `VITE_OMYPIC_LOCAL_TTS_HOST`(기본값: 앱의 Backend `/api/local-models/` 경로), `VITE_OMYPIC_LOCAL_TTS_PATH_TEMPLATE`.
   - 한국어 모델 빌드 시 환경 변수: `VITE_OMYPIC_LOCAL_KO_TTS_MODEL`(기본값 `onnx-community/Supertonic-TTS-2-ONNX`), `VITE_OMYPIC_LOCAL_KO_TTS_VOICE`(기본값 `F2`), `VITE_OMYPIC_LOCAL_KO_TTS_HOST`(기본값: 앱의 Backend `/api/local-models/` 경로), `VITE_OMYPIC_LOCAL_KO_TTS_PATH_TEMPLATE`.
+- 기기 음성 모델의 메모리(Whisper, Kokoro, Supertonic 2)
+  - 불러온 모델은 각각 수백 MB의 메모리를 씁니다. 세션을 시작할 때 그 세션이 쓰지 않는 모델(예: 한국어 피드백이 아닌 세션의 한국어 모델)은 내려놓고, 세션 없이 3분이 지나면 모두 내려놓습니다. 다음 세션은 `<데이터 폴더>/local-models`의 파일에서 몇 초 안에 다시 불러옵니다. 세션 중이거나 음성을 재생하는 동안에는 내려놓지 않습니다.
+  - 기다리는 시간은 빌드 시 환경 변수 `VITE_OMYPIC_LOCAL_SPEECH_IDLE_RELEASE_SECONDS`(기본값 `180`)로 바꿀 수 있습니다.
+  - 합성이나 인식 중인 모델이 오래(합성 120초, 인식 120초에 음성 1초당 4초를 더한 시간) 아무 응답이 없으면 그 모델을 끝내고, 그 문장은 소리 없이 화면에 보여 주거나 답변을 다시 하도록 안내한 뒤 세션을 계속합니다. 다음 문장에서 모델을 다시 불러옵니다.
 
 ### AI ON/OFF
 

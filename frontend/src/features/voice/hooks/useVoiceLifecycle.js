@@ -28,18 +28,26 @@ import {
     VOICE_RECONNECT_MAX_DELAY_MS
 } from './voiceSessionConstants.js'
 import {computeRms, joinByteChunks} from './voiceSessionAudio.js'
-import {loadLocalStt, transcribePcm16} from '../local/localStt.js'
+import {isLocalSttBusy, loadLocalStt, releaseLocalStt, transcribePcm16} from '../local/localStt.js'
 import {
     getLocalTtsStatus,
+    isLocalSpeechBusy,
     loadLocalKoTts,
     loadLocalTts,
     neededLocalTtsModels,
+    releaseLocalSpeechModels,
     watchLocalSpeechModels
 } from '../local/localSpeech.js'
 import {speechModelNote} from '../utils/speechModelNote.js'
 import {LOCAL_STT_MODEL, LOCAL_TTS_MODEL} from '../../../shared/constants/models.js'
 
 const VOICE_CHUNK_UPLOAD_TIMEOUT_MS = 3000
+// The on-device speech models (several hundred MB each in memory) are released after this long
+// without a session; the next session loads them again from the backend's disk cache in seconds.
+export const SPEECH_MODEL_IDLE_RELEASE_MS = (() => {
+    const seconds = Number(import.meta.env?.VITE_OMYPIC_LOCAL_SPEECH_IDLE_RELEASE_SECONDS)
+    return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 3 * 60 * 1000
+})()
 const REPLAY_STATE = {
     IDLE: 'IDLE',
     PLAYING: 'PLAYING'
@@ -1364,6 +1372,14 @@ export function useVoiceLifecycle({
             sessionSttModeRef.current = !aiOn
                 ? STT_MODE.NONE
                 : (settingsRef.current.voiceSttModel === LOCAL_STT_MODEL ? STT_MODE.LOCAL : STT_MODE.SERVER)
+            // A model this session does not use is released before the ones it uses are loaded.
+            releaseLocalSpeechModels({
+                english: !localSpeech,
+                korean: !(localSpeech && feedbackLanguage === 'ko')
+            })
+            if (sessionSttModeRef.current !== STT_MODE.LOCAL) {
+                releaseLocalStt()
+            }
             if (sessionSttModeRef.current === STT_MODE.LOCAL) {
                 await prepareLocalStt(report)
                 if (abandoned()) {
@@ -1595,6 +1611,35 @@ export function useVoiceLifecycle({
             korean: speechModels.korean,
             ...sessionVoices
         })
+
+    // After a while without a session every speech model is released. Never during a session or a
+    // start, and never while the learner's answer is still playing back; a model that is still
+    // loading or synthesizing is tried again after another idle period.
+    useEffect(() => {
+        if (sessionPhase !== 'IDLE') {
+            return undefined
+        }
+        let timer = null
+        const releaseIdleModels = () => {
+            timer = null
+            if (sessionActiveRef.current || sessionStartingRef.current) {
+                return
+            }
+            if (replayStateRef.current !== REPLAY_STATE.PLAYING) {
+                releaseLocalStt()
+                releaseLocalSpeechModels({english: true, korean: true})
+            }
+            if (replayStateRef.current === REPLAY_STATE.PLAYING || isLocalSttBusy() || isLocalSpeechBusy()) {
+                timer = setTimeout(releaseIdleModels, SPEECH_MODEL_IDLE_RELEASE_MS)
+            }
+        }
+        timer = setTimeout(releaseIdleModels, SPEECH_MODEL_IDLE_RELEASE_MS)
+        return () => {
+            if (timer !== null) {
+                clearTimeout(timer)
+            }
+        }
+    }, [sessionPhase])
 
     const replayButtonDisabledReason = getReplayDisabledReason()
     const replayButtonDisabled = replayState !== REPLAY_STATE.PLAYING && Boolean(replayButtonDisabledReason)

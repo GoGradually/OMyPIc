@@ -15,12 +15,15 @@ import {
     getLocalTtsStatus,
     loadLocalKoTts,
     loadLocalTts,
+    isLocalSpeechBusy,
     neededLocalTtsModels,
     prepareLocalSpeech,
+    releaseLocalSpeechModels,
     speakLocally,
     watchLocalSpeechModels
 } from '../local/localSpeech.js'
-import {loadLocalStt, transcribePcm16} from '../local/localStt.js'
+import {isLocalSttBusy, loadLocalStt, releaseLocalStt, transcribePcm16} from '../local/localStt.js'
+import {SPEECH_MODEL_IDLE_RELEASE_MS} from './useVoiceLifecycle.js'
 
 vi.mock('../../../shared/api/http.js', () => ({
     openVoiceSession: vi.fn(),
@@ -40,12 +43,16 @@ vi.mock('../local/localSpeech.js', () => ({
     getLocalKoTtsStatus: vi.fn(),
     neededLocalTtsModels: vi.fn(),
     loadLocalTts: vi.fn(),
-    loadLocalKoTts: vi.fn()
+    loadLocalKoTts: vi.fn(),
+    releaseLocalSpeechModels: vi.fn(),
+    isLocalSpeechBusy: vi.fn()
 }))
 
 vi.mock('../local/localStt.js', () => ({
     loadLocalStt: vi.fn(),
-    transcribePcm16: vi.fn()
+    transcribePcm16: vi.fn(),
+    releaseLocalStt: vi.fn(),
+    isLocalSttBusy: vi.fn()
 }))
 
 let activeEventSource = null
@@ -2251,6 +2258,90 @@ describe('useVoiceSession', () => {
         unmount()
     })
 
+    it('releases the Korean model and Whisper when an AI-off session starts, and keeps Kokoro', async () => {
+        const {result, unmount} = renderLocalSpeechSession({aiEnabled: false})
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+
+        expect(releaseLocalSpeechModels).toHaveBeenCalledWith({english: false, korean: true})
+        expect(releaseLocalStt).toHaveBeenCalledTimes(1)
+        expect(result.current.sessionActive).toBe(true)
+        unmount()
+    })
+
+    it('keeps both voices for a Korean-feedback session with the local voice', async () => {
+        const {result, unmount} = renderLocalSpeechSession({ttsModel: 'local-kokoro', feedbackLang: 'ko'})
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+
+        expect(releaseLocalSpeechModels).toHaveBeenCalledWith({english: false, korean: false})
+        unmount()
+    })
+
+    it('releases every speech model after a while without a session, never while one runs', async () => {
+        vi.useFakeTimers()
+        try {
+            const {result, unmount} = renderLocalSpeechSession({aiEnabled: false})
+            await act(async () => {
+                await result.current.startSession()
+            })
+            releaseLocalSpeechModels.mockClear()
+            releaseLocalStt.mockClear()
+
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(SPEECH_MODEL_IDLE_RELEASE_MS * 3)
+            })
+            expect(releaseLocalSpeechModels).not.toHaveBeenCalled()
+            expect(releaseLocalStt).not.toHaveBeenCalled()
+
+            await act(async () => {
+                await result.current.stopSession()
+            })
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(SPEECH_MODEL_IDLE_RELEASE_MS - 1)
+            })
+            expect(releaseLocalSpeechModels).not.toHaveBeenCalled()
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(1)
+            })
+            expect(releaseLocalSpeechModels).toHaveBeenCalledWith({english: true, korean: true})
+            expect(releaseLocalStt).toHaveBeenCalledTimes(1)
+
+            // Nothing was busy, so it is not tried again.
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(SPEECH_MODEL_IDLE_RELEASE_MS * 2)
+            })
+            expect(releaseLocalSpeechModels).toHaveBeenCalledTimes(1)
+            unmount()
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('tries the idle release again while a model is still loading', async () => {
+        vi.useFakeTimers()
+        try {
+            isLocalSpeechBusy.mockReturnValueOnce(true)
+            const {unmount} = renderLocalSpeechSession({aiEnabled: false})
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(SPEECH_MODEL_IDLE_RELEASE_MS)
+            })
+            expect(releaseLocalSpeechModels).toHaveBeenCalledTimes(1)
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(SPEECH_MODEL_IDLE_RELEASE_MS)
+            })
+            expect(releaseLocalSpeechModels).toHaveBeenCalledTimes(2)
+            expect(isLocalSttBusy).toHaveBeenCalled()
+            unmount()
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
     it('does not load any voice model for hosted TTS', async () => {
         const {result, unmount} = renderLocalSpeechSession({ttsModel: 'gpt-4o-mini-tts'})
 
@@ -2494,6 +2585,51 @@ describe('useVoiceSession', () => {
         })
         expect(result.current.replayPlaying).toBe(false)
         expect(result.current.replayButtonDisabled).toBe(false)
+        unmount()
+    })
+
+    it('does not release the speech models while the last answer is still replaying', async () => {
+        const {result, unmount} = renderHook(() => useVoiceSession({
+            sessionId: 's1',
+            feedbackModel: 'gpt-4o-mini',
+            aiEnabled: false,
+            autoReplay: true,
+            voiceSttModel: 'gpt-4o-mini-transcribe',
+            feedbackLang: 'ko',
+            voice: 'alloy',
+            onStatus: vi.fn(),
+            onFeedback: vi.fn(),
+            refreshWrongNotes: vi.fn(async () => {
+            }),
+            onQuestionPrompt: vi.fn()
+        }))
+        await act(async () => {
+            await result.current.startSession()
+        })
+        await answerWithoutAi({turnId: 1, questionId: 'q-1'})
+        const replayAudio = audioInstances[audioInstances.length - 1]
+        releaseLocalSpeechModels.mockClear()
+        vi.useFakeTimers()
+        try {
+            await act(async () => {
+                activeEventSource.emit('session.stopped', {reason: 'question_exhausted'})
+            })
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(SPEECH_MODEL_IDLE_RELEASE_MS)
+            })
+            expect(result.current.replayPlaying).toBe(true)
+            expect(releaseLocalSpeechModels).not.toHaveBeenCalled()
+
+            await act(async () => {
+                replayAudio.onended()
+            })
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(SPEECH_MODEL_IDLE_RELEASE_MS)
+            })
+            expect(releaseLocalSpeechModels).toHaveBeenCalledWith({english: true, korean: true})
+        } finally {
+            vi.useRealTimers()
+        }
         unmount()
     })
 
