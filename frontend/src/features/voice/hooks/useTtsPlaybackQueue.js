@@ -16,6 +16,7 @@ export function useTtsPlaybackQueue({
                                         onTtsFailure,
                                         onLocalSpeechUnavailable,
                                         onLocalSpeechNotice,
+                                        koreanModelAllowedRef,
                                         speechState
                                     }) {
     const ttsPlaybackQueueRef = useRef([])
@@ -93,6 +94,7 @@ export function useTtsPlaybackQueue({
         if (nextItem.speechText) {
             ttsPlayingRef.current = true
             ttsCancelSpeechRef.current = speakLocally(nextItem.speechText, {
+                allowKoreanModel: koreanModelAllowedRef.current,
                 onNotice: onLocalSpeechNotice,
                 onEnd: () => {
                     ttsCancelSpeechRef.current = null
@@ -139,6 +141,7 @@ export function useTtsPlaybackQueue({
             finishPlayback({failed: true})
         })
     }, [
+        koreanModelAllowedRef,
         onLocalSpeechNotice,
         onLocalSpeechUnavailable,
         onQuestionPlaybackCompleted,
@@ -157,7 +160,7 @@ export function useTtsPlaybackQueue({
         }
         if (speechText) {
             // Synthesis can take a while; start now so it is ready when this item's turn comes.
-            prepareLocalSpeech(speechText).catch(() => {
+            prepareLocalSpeech(speechText, {allowKoreanModel: koreanModelAllowedRef.current}).catch(() => {
             })
         }
         const parsedSequence = Number(data?.sequence)
@@ -201,7 +204,7 @@ export function useTtsPlaybackQueue({
             return left.order - right.order
         })
         playNextTtsAudio()
-    }, [playNextTtsAudio])
+    }, [koreanModelAllowedRef, playNextTtsAudio])
 
     return {
         clearTtsPlayback,

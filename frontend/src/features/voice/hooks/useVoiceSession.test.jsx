@@ -1785,8 +1785,28 @@ describe('useVoiceSession', () => {
         })
 
         // Synthesis starts as soon as the text arrives; each sentence picks its model by language.
-        expect(prepareLocalSpeech).toHaveBeenCalledWith('question-1')
+        // A Korean-feedback session lets a Korean sentence fetch the Korean model.
+        expect(prepareLocalSpeech).toHaveBeenCalledWith('question-1', {allowKoreanModel: true})
         expect(speakLocally).toHaveBeenCalledWith('question-1', expect.not.objectContaining({engine: expect.anything()}))
+        expect(speakLocally).toHaveBeenCalledWith('question-1', expect.objectContaining({allowKoreanModel: true}))
+        unmount()
+    })
+
+    it.each([
+        ['English feedback', {ttsModel: 'local-kokoro', feedbackLang: 'en'}],
+        ['AI off', {aiEnabled: false, ttsModel: 'gpt-4o-mini-tts', feedbackLang: 'ko'}]
+    ])('does not let Korean sentences fetch the Korean model in a session with %s', async (_label, settings) => {
+        const {result, unmount} = renderLocalSpeechSession(settings)
+
+        await act(async () => {
+            await result.current.startSession()
+        })
+        await act(async () => {
+            activeEventSource.emit('tts.text', {role: 'feedback', text: '좋았습니다.', sequence: 1})
+        })
+
+        expect(prepareLocalSpeech).toHaveBeenCalledWith('좋았습니다.', {allowKoreanModel: false})
+        expect(speakLocally).toHaveBeenCalledWith('좋았습니다.', expect.objectContaining({allowKoreanModel: false}))
         unmount()
     })
 

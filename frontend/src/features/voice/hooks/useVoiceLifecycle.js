@@ -140,6 +140,8 @@ export function useVoiceLifecycle({
     const transcribingRef = useRef(false)
     const speechUnavailableNoticeShownRef = useRef(false)
     const koreanUnavailableNoticeShownRef = useRef(false)
+    // Whether a Korean sentence may fetch the Korean model: only in a session with Korean feedback.
+    const koreanModelAllowedRef = useRef(false)
     const onConnectionErrorRef = useRef(() => {
     })
 
@@ -321,6 +323,7 @@ export function useVoiceLifecycle({
         onTtsFailure: handleTtsFailure,
         onLocalSpeechUnavailable: handleLocalSpeechUnavailable,
         onLocalSpeechNotice: handleLocalSpeechNotice,
+        koreanModelAllowedRef,
         speechState: SPEECH_STATE
     })
 
@@ -1299,6 +1302,8 @@ export function useVoiceLifecycle({
             setAwaitingReview(false)
             speechUnavailableNoticeShownRef.current = false
             koreanUnavailableNoticeShownRef.current = false
+            const feedbackLanguage = aiOn ? settingsRef.current.feedbackLang : null
+            koreanModelAllowedRef.current = feedbackLanguage === 'ko'
             transcribingRef.current = false
             sessionSttModeRef.current = !aiOn
                 ? STT_MODE.NONE
@@ -1308,7 +1313,7 @@ export function useVoiceLifecycle({
             }
             // Speech is read on this device when AI is off or the free local TTS model is selected.
             if (!aiOn || settingsRef.current.ttsModel === LOCAL_TTS_MODEL) {
-                await prepareLocalTts({aiOn, feedbackLanguage: aiOn ? settingsRef.current.feedbackLang : null})
+                await prepareLocalTts({aiOn, feedbackLanguage})
             }
 
             const created = await openVoiceSession({

@@ -31,9 +31,10 @@ function synthesizeCached(sentence, synthesize) {
 }
 
 // The Korean model is used only once it is ready. A Korean sentence that comes before that (the
-// session did not prepare the model, or it is still downloading) starts the load in the
-// background and is shown without sound rather than holding up the speech queue.
-function koreanSynthesizer() {
+// session did not prepare the model, or it is still downloading) is shown without sound rather
+// than holding up the speech queue. Only a session with Korean feedback (allowKoreanModel) then
+// starts the load in the background; any other session never downloads the Korean model.
+function koreanSynthesizer(allowKoreanModel) {
     if (!isLocalKoTtsSupported()) {
         return null
     }
@@ -41,7 +42,7 @@ function koreanSynthesizer() {
     if (status === 'ready') {
         return synthesizeKorean
     }
-    if (status !== 'loading') {
+    if (allowKoreanModel && status !== 'loading') {
         loadLocalKoTts().catch(() => {
         })
     }
@@ -49,13 +50,13 @@ function koreanSynthesizer() {
 }
 
 /** One step per sentence: {sentence, lang, synthesize}; synthesize is null when no model can read it. */
-function buildPlan(text) {
+function buildPlan(text, allowKoreanModel) {
     let korean
     return splitForSpeech(text).map((sentence) => {
         const lang = detectSpeechLang(sentence)
         if (lang === KOREAN) {
             if (korean === undefined) {
-                korean = koreanSynthesizer()
+                korean = koreanSynthesizer(allowKoreanModel)
             }
             return {sentence, lang, synthesize: korean}
         }
@@ -74,9 +75,12 @@ export function neededLocalTtsModels(feedbackLanguage) {
     }
 }
 
-/** Starts synthesizing ahead of time so the speech is ready when its turn comes. */
-export async function prepareLocalSpeech(text) {
-    buildPlan(text)
+/**
+ * Starts synthesizing ahead of time so the speech is ready when its turn comes. allowKoreanModel
+ * is the same session option as in speakLocally.
+ */
+export async function prepareLocalSpeech(text, {allowKoreanModel = false} = {}) {
+    buildPlan(text, allowKoreanModel)
         .filter((step) => step.synthesize)
         .forEach((step) => synthesizeCached(step.sentence, step.synthesize))
 }
@@ -124,14 +128,16 @@ function playSamples(audio) {
  * Speaks the text and calls onEnd when it is done, or onUnavailable when nothing that should have
  * been heard could be played. onNotice reports 'preparing' (waiting for synthesis), 'ready'
  * (synthesis done, playback starts) and 'korean-unavailable' (Korean sentences shown without
- * sound because the Korean model is not ready). Returns a function that stops it silently.
+ * sound because the Korean model is not ready). allowKoreanModel lets a Korean sentence start the
+ * Korean model download; it is true only in a session with Korean feedback. Returns a function
+ * that stops it silently.
  */
-export function speakLocally(text, {onEnd, onUnavailable, onNotice} = {}) {
+export function speakLocally(text, {onEnd, onUnavailable, onNotice, allowKoreanModel = false} = {}) {
     let cancelled = false
     let active = null
 
     const run = async () => {
-        const plan = buildPlan(text)
+        const plan = buildPlan(text, allowKoreanModel)
         if (plan.some((step) => step.lang === KOREAN && !step.synthesize)) {
             onNotice?.('korean-unavailable')
         }

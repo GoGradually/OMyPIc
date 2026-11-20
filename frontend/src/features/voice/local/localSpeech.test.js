@@ -211,7 +211,7 @@ describe('local speech', () => {
         const onEnd = vi.fn()
         const sentence = korean('피드백 문장')
 
-        speakLocally(sentence, {onEnd})
+        speakLocally(sentence, {onEnd, allowKoreanModel: true})
         await flush()
 
         // The sentence is shown without sound instead of waiting for the download.
@@ -274,10 +274,57 @@ describe('local speech', () => {
         }
     })
 
+    it('in a session without Korean feedback, a Korean sentence is shown without sound and the Korean model is not fetched', async () => {
+        getLocalKoTtsStatus.mockReturnValue('idle')
+        const onEnd = vi.fn()
+        const onNotice = vi.fn()
+        const first = english('Tell me about your weekend')
+        const second = korean('주말 이야기를 해 주세요')
+
+        prepareLocalSpeech(`${first} ${second}`, {allowKoreanModel: false})
+        speakLocally(`${first} ${second}`, {onEnd, onNotice, allowKoreanModel: false})
+        await flush()
+
+        expect(loadLocalKoTts).not.toHaveBeenCalled()
+        expect(synthesizeKorean).not.toHaveBeenCalled()
+        expect(synthesizeEnglish).toHaveBeenCalledWith(first)
+        expect(await playAll()).toBe(1)
+        expect(onNotice).toHaveBeenCalledWith('korean-unavailable')
+        expect(onEnd).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not fetch the Korean model unless the session allows it', async () => {
+        getLocalKoTtsStatus.mockReturnValue('failed')
+
+        speakLocally(korean('옵션 없이 온 문장'), {})
+        await prepareLocalSpeech(korean('미리 준비할 문장'))
+        await flush()
+
+        expect(loadLocalKoTts).not.toHaveBeenCalled()
+    })
+
+    it('uses a Korean model that is already loaded even when the session did not ask for it', async () => {
+        const sentence = korean('이미 준비된 모델')
+
+        speakLocally(sentence, {allowKoreanModel: false})
+        await flush()
+
+        expect(synthesizeKorean).toHaveBeenCalledWith(sentence)
+        expect(audioInstances.length).toBe(1)
+    })
+
+    it('prepares Korean sentences ahead in a Korean-feedback session, starting the model load', async () => {
+        getLocalKoTtsStatus.mockReturnValue('idle')
+
+        await prepareLocalSpeech(korean('미리 준비'), {allowKoreanModel: true})
+
+        expect(loadLocalKoTts).toHaveBeenCalledTimes(1)
+    })
+
     it('does not start a second load while the Korean model is loading', async () => {
         getLocalKoTtsStatus.mockReturnValue('loading')
 
-        speakLocally(korean('준비 중인 문장'), {})
+        speakLocally(korean('준비 중인 문장'), {allowKoreanModel: true})
         await flush()
 
         expect(loadLocalKoTts).not.toHaveBeenCalled()
