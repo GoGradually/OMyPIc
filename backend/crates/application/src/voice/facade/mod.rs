@@ -37,11 +37,12 @@ use crate::voice::model::{
     VoiceAnswerCommand, VoiceAudioChunkCommand, VoiceEventSink, VoiceSessionOpenCommand,
     VoiceSessionStopCommand,
 };
-use crate::voice::usecase::{NowMillis, RecoverySnapshot, VoiceSessionDependencies};
+use crate::voice::usecase::{
+    effective_voice_idle_timeout_ms, NowMillis, RecoverySnapshot, VoiceSessionDependencies,
+};
 
 const DEFAULT_RECOVERY_RETENTION_MS: i64 = 600_000;
 const DEFAULT_STOPPED_CONTEXT_MAX: usize = 1000;
-const DEFAULT_IDLE_TIMEOUT_MS: i64 = 600_000;
 /// 이벤트 스트림 없이 오래 방치돼 서버가 멈춘 세션의 정지 이유.
 const IDLE_TIMEOUT_STOP_REASON: &str = "idle_timeout";
 const MAX_RULEBOOK_DOCUMENTS_PER_TURN: usize = 2;
@@ -235,6 +236,16 @@ impl VoiceSessionFacade {
         Ok(())
     }
 
+    pub(crate) fn kept_session_count(&self) -> usize {
+        lock(&self.contexts).len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replay_buffer_bytes(&self, voice_session_id: &str) -> Option<usize> {
+        let context = lock(&self.contexts).get(voice_session_id).cloned()?;
+        Some(context.replay_buffer_bytes())
+    }
+
     /// 클라이언트 요청으로 찾은 세션은 방금 쓰인 것으로 적는다.
     fn find_context(&self, voice_session_id: &str) -> Option<Arc<RuntimeContext>> {
         let context = lock(&self.contexts).get(voice_session_id).cloned()?;
@@ -310,6 +321,11 @@ impl VoiceSessionFacade {
         if !context.close() {
             return;
         }
+        self.finish_stop(context, forced, reason);
+    }
+
+    /// 방금 닫은 세션의 정지를 마친다.
+    fn finish_stop(&self, context: &RuntimeContext, forced: bool, reason: &str) {
         let fallback = if forced {
             "user_stop"
         } else {
@@ -327,6 +343,7 @@ impl VoiceSessionFacade {
                 "reason": stop_reason,
             }),
         );
+        context.strip_replay_audio();
     }
 
     /// 버려진 진행 중 세션을 `idle_timeout`으로 멈추고, 보관 기간이 지난 정지 세션을 지우고,
@@ -334,22 +351,24 @@ impl VoiceSessionFacade {
     /// 처리 중인 세션은 멈추지 않는다.
     pub(crate) fn purge_contexts(&self) {
         let now = (self.now_millis)();
-        let mut idle_timeout_ms = self.deps.voice_policy.voice_idle_timeout_ms();
-        if idle_timeout_ms <= 0 {
-            idle_timeout_ms = DEFAULT_IDLE_TIMEOUT_MS;
-        }
-        let abandoned: Vec<Arc<RuntimeContext>> = lock(&self.contexts)
+        let idle_timeout_ms =
+            effective_voice_idle_timeout_ms(self.deps.voice_policy.voice_idle_timeout_ms());
+        let running: Vec<Arc<RuntimeContext>> = lock(&self.contexts)
             .values()
-            .filter(|context| context.is_abandoned(now, idle_timeout_ms))
+            .filter(|context| !context.is_inactive())
             .cloned()
             .collect();
-        // 정지는 이벤트를 보내므로 세션 목록 잠금을 놓은 뒤에 한다.
-        for context in abandoned {
+        // 정지는 이벤트를 보내므로 세션 목록 잠금을 놓은 뒤에 한다. 버려졌는지 보는 일과 닫는
+        // 일은 한꺼번에 한다(그 사이 다시 붙은 클라이언트를 멈추지 않는다).
+        for context in running {
+            if !context.close_if_abandoned(now, idle_timeout_ms) {
+                continue;
+            }
             tracing::info!(
                 voice_session_id = %context.voice_session_id,
                 "Stopping voice session without an event stream after {idle_timeout_ms} ms idle"
             );
-            self.stop_internal(&context, true, IDLE_TIMEOUT_STOP_REASON);
+            self.finish_stop(&context, true, IDLE_TIMEOUT_STOP_REASON);
         }
         self.purge_stopped_contexts(now);
     }

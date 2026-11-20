@@ -7,7 +7,8 @@ mod tests;
 #[cfg(test)]
 mod validation_tests;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 
 use chrono::Utc;
 use omypic_domain::error::AppResult;
@@ -28,13 +29,35 @@ use crate::stt::usecase::SttUseCase;
 /// 이벤트 재전송 버퍼에 남기는 이벤트 수의 기본값.
 pub const DEFAULT_EVENT_REPLAY_BUFFER_LIMIT: usize = 256;
 
-/// 지금 시각(Unix epoch 밀리초). Java `LongSupplier nowMillisSupplier`.
+/// 지금 시각(밀리초). Java `LongSupplier nowMillisSupplier`. 유예 시간과 보관 기간을 재는 데만
+/// 쓴다.
 pub type NowMillis = Arc<dyn Fn() -> i64 + Send + Sync>;
 
-/// 실제 시계.
+/// 실제 시계. 처음 부른 때의 Unix epoch 밀리초에 그 뒤 흐른 단조 시간을 더한다. 벽시계를
+/// 고치거나(NTP, 사용자가 시각을 바꿈) 절전에서 깨어나도 거꾸로 가거나 건너뛰지 않으므로
+/// 세션이 너무 일찍 정리되거나 영영 남지 않는다.
 pub fn system_now_millis() -> NowMillis {
-    Arc::new(|| Utc::now().timestamp_millis())
+    static ANCHOR: OnceLock<(Instant, i64)> = OnceLock::new();
+    Arc::new(|| {
+        let (started, epoch_ms) =
+            ANCHOR.get_or_init(|| (Instant::now(), Utc::now().timestamp_millis()));
+        let elapsed = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
+        epoch_ms.saturating_add(elapsed)
+    })
 }
+
+/// `VoicePolicy::voice_idle_timeout_ms`가 0 이하이면 기본값(10분)을 쓴다. 서버의 정리 주기도
+/// 이 값으로 정한다.
+pub fn effective_voice_idle_timeout_ms(configured_ms: i64) -> i64 {
+    if configured_ms <= 0 {
+        DEFAULT_VOICE_IDLE_TIMEOUT_MS
+    } else {
+        configured_ms
+    }
+}
+
+/// 버려진 음성 세션을 멈추기까지 기다리는 기본 시간.
+pub const DEFAULT_VOICE_IDLE_TIMEOUT_MS: i64 = 600_000;
 
 /// Java 생성자의 인자들.
 #[derive(Clone)]
@@ -168,5 +191,16 @@ impl VoiceSessionUseCase {
     /// 모르는 세션이면 아무것도 하지 않는다.
     pub fn stop(&self, command: &VoiceSessionStopCommand) -> AppResult<()> {
         self.facade.stop(command)
+    }
+
+    /// 지금 메모리에 둔 음성 세션 수(진행 중과 보관 중인 정지 세션). 정리는 하지 않는다.
+    pub fn kept_session_count(&self) -> usize {
+        self.facade.kept_session_count()
+    }
+
+    /// 재전송 버퍼가 쥔 payload의 JSON 바이트 수(시험용). 모르는 세션이면 `None`.
+    #[cfg(test)]
+    pub(crate) fn replay_buffer_bytes(&self, voice_session_id: &str) -> Option<usize> {
+        self.facade.replay_buffer_bytes(voice_session_id)
     }
 }

@@ -8,8 +8,8 @@ use std::sync::Arc;
 use omypic_domain::session::ModeType;
 
 use super::tests::{
-    ai_off_command, answer, audio_chunk, java_voice_policy, open_command, unknown_session, Fixture,
-    Q1, Q2,
+    ai_off_command, answer, audio_chunk, java_voice_policy, open_command, stop_command,
+    unknown_session, Fixture, Q1, Q2,
 };
 use super::VoiceSessionUseCase;
 use crate::test_support::{DeferredExecutor, FakeVoicePolicy, ImmediateExecutor, RecordingSink};
@@ -187,4 +187,229 @@ fn sink_whose_stream_closed_without_unregistering_does_not_keep_the_session_aliv
     let snapshot = c.use_case.recover(&id, Some(0)).unwrap();
     assert!(snapshot.stopped);
     assert_eq!("idle_timeout", snapshot.stop_reason);
+}
+
+#[test]
+fn a_stream_attached_to_a_session_the_reaper_just_stopped_receives_session_stopped() {
+    let c = clocked();
+    let id = c.use_case.open(&ai_off_command("s1")).unwrap();
+    let first = attach(&c, &id);
+    c.use_case.unregister_sink(&id, &first);
+    c.advance(IDLE_MS);
+    c.use_case.reap_idle_sessions();
+
+    // The client comes back without a since id (a fresh EventSource).
+    let late = Arc::new(RecordingSink::new());
+    c.use_case.register_sink(&id, late.clone()).unwrap();
+
+    assert_eq!(vec!["session.stopped".to_string()], late.event_names());
+    assert_eq!(
+        "idle_timeout",
+        late.payloads("session.stopped")[0]["reason"]
+    );
+}
+
+/// 이 스레드에서 `needle`을 담은 로그가 처음 나올 때 그 자리에서 `hook`을 부른다.
+fn on_first_log<R>(
+    needle: &'static str,
+    hook: impl FnOnce() + Send + 'static,
+    f: impl FnOnce() -> R,
+) -> R {
+    use std::sync::Mutex;
+
+    type Hook = Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>;
+    struct HookWriter {
+        hook: Hook,
+        needle: &'static str,
+    }
+    impl std::io::Write for HookWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if String::from_utf8_lossy(bytes).contains(self.needle) {
+                let hook = self.hook.lock().unwrap().take();
+                if let Some(hook) = hook {
+                    hook();
+                }
+            }
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let hook: Hook = Arc::new(Mutex::new(Some(Box::new(hook))));
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(move || HookWriter {
+            hook: Arc::clone(&hook),
+            needle,
+        })
+        .with_ansi(false)
+        .finish();
+    tracing::subscriber::with_default(subscriber, f)
+}
+
+#[test]
+fn a_client_that_reattaches_while_the_reaper_decides_is_not_stopped_on_its_new_stream() {
+    let c = Arc::new(clocked());
+    let id = c.use_case.open(&ai_off_command("s1")).unwrap();
+    let first = attach(&c, &id);
+    c.use_case.unregister_sink(&id, &first);
+    c.advance(IDLE_MS);
+
+    // The reaper logs right after it has decided to stop the session. A client reattaching at
+    // that moment must either keep a running session or be told that it stopped.
+    let reattached = Arc::new(RecordingSink::new());
+    let was_running = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let hook = {
+        let (c, id, reattached, was_running) = (
+            Arc::clone(&c),
+            id.clone(),
+            Arc::clone(&reattached),
+            Arc::clone(&was_running),
+        );
+        move || {
+            // Every call first runs the same cleanup. Seen from that nested cleanup the client
+            // has just been active, as it would be after reconnecting a moment ago.
+            c.now.fetch_sub(IDLE_MS, Ordering::SeqCst);
+            c.use_case
+                .register_sink_since(&id, reattached, Some(0))
+                .unwrap();
+            let snapshot = c.use_case.recover(&id, None).unwrap();
+            was_running.store(snapshot.active, Ordering::SeqCst);
+        }
+    };
+    on_first_log("Stopping voice session", hook, || {
+        c.use_case.reap_idle_sessions()
+    });
+
+    let snapshot = c.use_case.recover(&id, Some(0)).unwrap();
+    if was_running.load(Ordering::SeqCst) {
+        assert!(
+            snapshot.active,
+            "the reattached session was stopped by the reaper on its new stream"
+        );
+    } else {
+        assert!(snapshot.stopped);
+        assert!(reattached
+            .event_names()
+            .contains(&"session.stopped".to_string()));
+    }
+}
+
+/// 24kHz 16비트 모노 10초(약 480KB, base64로 약 640KB). 서버 TTS가 질문 하나에 돌려주는 크기.
+fn realistic_tts_wav() -> Vec<u8> {
+    vec![0x5a; 480_044]
+}
+
+#[test]
+fn a_stopped_session_keeps_no_tts_audio_in_its_replay_buffer() {
+    let fixture =
+        Fixture::with_tts_audio(policy(), Arc::new(ImmediateExecutor), &realistic_tts_wav());
+    let c = clocked_with(fixture);
+    let id = c.use_case.open(&open_command("s1")).unwrap();
+    let sink = Arc::new(RecordingSink::new());
+    c.use_case.register_sink(&id, sink.clone()).unwrap();
+    c.use_case.append_audio(&audio_chunk(&id, 1)).unwrap();
+    let running = c.use_case.replay_buffer_bytes(&id).unwrap();
+    let audio_events = sink.payloads("tts.audio").len();
+
+    c.use_case.stop(&stop_command(&id)).unwrap();
+
+    let stopped = c.use_case.replay_buffer_bytes(&id).unwrap();
+    println!(
+        "replay buffer: running {running} bytes ({audio_events} tts.audio), stopped {stopped} bytes"
+    );
+    assert!(audio_events >= 2, "{audio_events}");
+    assert!(
+        stopped < 16 * 1024,
+        "a stopped session keeps {stopped} bytes"
+    );
+    // The skeleton stays: recovery still knows every event id.
+    let snapshot = c.use_case.recover(&id, Some(0)).unwrap();
+    assert!(!snapshot.gap_detected);
+    let replayed = Arc::new(RecordingSink::new());
+    c.use_case
+        .register_sink_since(&id, replayed.clone(), Some(0))
+        .unwrap();
+    assert_eq!(sink.event_names(), replayed.event_names());
+    assert!(replayed
+        .payloads("tts.audio")
+        .iter()
+        .all(|p| p.get("audio").is_none()));
+}
+
+#[test]
+fn a_running_session_bounds_its_replay_buffer_by_bytes_keeping_the_newest_audio() {
+    let fixture =
+        Fixture::with_tts_audio(policy(), Arc::new(ImmediateExecutor), &realistic_tts_wav());
+    let questions: Vec<super::tests::Question> = (0..12)
+        .map(|n| {
+            let leak = |text: String| -> &'static str { Box::leak(text.into_boxed_str()) };
+            (
+                leak(format!("q-{n}")),
+                leak(format!("question-{n}")),
+                leak(format!("g-{n}")),
+                leak(format!("group-{n}")),
+            )
+        })
+        .collect();
+    let c = clocked_with(fixture);
+    c._fixture
+        .session("long", Some(ModeType::Immediate), None, &questions);
+    let id = c.use_case.open(&open_command("long")).unwrap();
+    let sink = Arc::new(RecordingSink::new());
+    c.use_case.register_sink(&id, sink.clone()).unwrap();
+    for sequence in 1..=6 {
+        c.use_case
+            .append_audio(&audio_chunk(&id, sequence))
+            .unwrap();
+    }
+
+    let bytes = c.use_case.replay_buffer_bytes(&id).unwrap();
+    let sent = sink.payloads("tts.audio").len();
+    println!("running replay buffer after {sent} tts.audio events: {bytes} bytes");
+    assert!(c.use_case.recover(&id, Some(0)).unwrap().active);
+    assert!(sent >= 10, "{sent}");
+    assert!(bytes <= 5 * 1024 * 1024, "{bytes} bytes");
+    let replayed = Arc::new(RecordingSink::new());
+    c.use_case
+        .register_sink_since(&id, replayed.clone(), Some(0))
+        .unwrap();
+    let audio = replayed.payloads("tts.audio");
+    assert_eq!(sent, audio.len(), "every event id is still replayed");
+    assert!(
+        audio.last().unwrap().get("audio").is_some(),
+        "the newest audio is kept"
+    );
+    assert!(!c.use_case.recover(&id, Some(0)).unwrap().gap_detected);
+}
+
+#[test]
+fn the_system_clock_never_goes_back_and_starts_at_the_wall_clock() {
+    let clock = super::system_now_millis();
+    let wall = chrono::Utc::now().timestamp_millis();
+    let first = clock();
+    assert!((first - wall).abs() < 60_000, "first={first} wall={wall}");
+    let mut previous = first;
+    for _ in 0..10_000 {
+        let now = clock();
+        assert!(now >= previous);
+        previous = now;
+    }
+    // Another clock made later reads the same time line.
+    assert!(super::system_now_millis()() >= previous);
+}
+
+#[test]
+fn a_zero_or_negative_idle_timeout_means_the_default() {
+    use super::{effective_voice_idle_timeout_ms, DEFAULT_VOICE_IDLE_TIMEOUT_MS};
+    assert_eq!(
+        DEFAULT_VOICE_IDLE_TIMEOUT_MS,
+        effective_voice_idle_timeout_ms(0)
+    );
+    assert_eq!(
+        DEFAULT_VOICE_IDLE_TIMEOUT_MS,
+        effective_voice_idle_timeout_ms(-5)
+    );
+    assert_eq!(1_000, effective_voice_idle_timeout_ms(1_000));
 }

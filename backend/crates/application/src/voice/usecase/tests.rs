@@ -87,6 +87,15 @@ impl Fixture {
     }
 
     pub(super) fn with(policy: FakeVoicePolicy, executor: Arc<dyn AsyncExecutor>) -> Self {
+        Self::with_tts_audio(policy, executor, &[1, 2, 3, 4])
+    }
+
+    /// 서버 TTS가 돌려줄 WAV 바이트를 정한다.
+    pub(super) fn with_tts_audio(
+        policy: FakeVoicePolicy,
+        executor: Arc<dyn AsyncExecutor>,
+        tts_audio: &[u8],
+    ) -> Self {
         let feedback_failure: Arc<Mutex<Option<AppError>>> = Arc::new(Mutex::new(None));
         let feedback_panic = Arc::new(AtomicBool::new(false));
         let open_ai = Arc::new(feedback_client(
@@ -104,7 +113,7 @@ impl Fixture {
         let sessions = Arc::new(InMemorySessionStorePort::new());
         let questions = Arc::new(InMemoryQuestionGroupPort::new());
         let stt = Arc::new(ScriptedSttGateway::new(vec![Ok("answer text".to_string())]));
-        let tts = Arc::new(FakeTtsGateway::new(&[1, 2, 3, 4]));
+        let tts = Arc::new(FakeTtsGateway::new(tts_audio));
         let index = Arc::new(InMemoryRulebookIndexPort::new());
         let metrics = Arc::new(RecordingMetrics::new());
         let rulebook_use_case = Arc::new(RulebookUseCase::new(

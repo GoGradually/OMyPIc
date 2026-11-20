@@ -26,6 +26,12 @@ use crate::voice::model::VoiceEventSink;
 use crate::voice::usecase::{NowMillis, RecoveryQuestion, RecoverySnapshot};
 
 const PREFETCH_CACHE_LIMIT: usize = 2;
+/// 진행 중인 세션의 재전송 버퍼가 쥐는 payload 크기의 상한(JSON 바이트 근사). 넘으면 오래된
+/// `tts.audio`부터 오디오를 빼고(이벤트 id와 나머지 필드는 남긴다), 그래도 넘으면 오래된
+/// 이벤트부터 버린다. 클라이언트는 다시 붙을 때 이미 지난 TTS를 다시 틀지 않는다.
+const REPLAY_BUFFER_BYTES_MAX: usize = 4 * 1024 * 1024;
+const TTS_AUDIO_EVENT: &str = "tts.audio";
+const SESSION_STOPPED_EVENT: &str = "session.stopped";
 
 /// 잠금이 오염돼도(다른 스레드가 잠근 채 패닉) 상태는 단순한 값이므로 계속 쓴다.
 pub(super) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -77,6 +83,28 @@ struct VoiceEventRecord {
     event_id: i64,
     event: String,
     payload: Value,
+    /// `payload`의 JSON 크기 근사.
+    bytes: usize,
+}
+
+impl VoiceEventRecord {
+    fn has_audio(&self) -> bool {
+        self.event == TTS_AUDIO_EVENT && self.payload.get("audio").is_some()
+    }
+
+    /// 오디오를 빼고 `audioOmitted: true`를 남긴다. 줄어든 바이트 수를 돌려준다.
+    fn strip_audio(&mut self) -> usize {
+        if !self.has_audio() {
+            return 0;
+        }
+        if let Value::Object(map) = &mut self.payload {
+            map.remove("audio");
+            map.insert("audioOmitted".to_string(), Value::Bool(true));
+        }
+        let before = self.bytes;
+        self.bytes = approximate_json_bytes(&self.payload);
+        before.saturating_sub(self.bytes)
+    }
 }
 
 struct AudioState {
@@ -94,7 +122,49 @@ struct AudioState {
 struct EventState {
     sinks: Vec<Arc<dyn VoiceEventSink>>,
     replay_events: VecDeque<VoiceEventRecord>,
+    /// `replay_events`의 `bytes` 합.
+    replay_bytes: usize,
     last_event_id: i64,
+}
+
+impl EventState {
+    fn push_replay(&mut self, record: VoiceEventRecord, count_limit: usize, bytes_limit: usize) {
+        self.replay_bytes += record.bytes;
+        self.replay_events.push_back(record);
+        while self.replay_events.len() > count_limit {
+            self.pop_oldest();
+        }
+        while self.replay_bytes > bytes_limit && self.replay_events.len() > 1 {
+            let newest = self.replay_events.len() - 1;
+            let oldest_audio = self
+                .replay_events
+                .iter()
+                .take(newest)
+                .position(VoiceEventRecord::has_audio);
+            match oldest_audio {
+                Some(index) => {
+                    let saved = self.replay_events[index].strip_audio();
+                    self.replay_bytes = self.replay_bytes.saturating_sub(saved);
+                }
+                None => self.pop_oldest(),
+            }
+        }
+    }
+
+    fn pop_oldest(&mut self) {
+        if let Some(removed) = self.replay_events.pop_front() {
+            self.replay_bytes = self.replay_bytes.saturating_sub(removed.bytes);
+        }
+    }
+
+    fn strip_all_audio(&mut self) {
+        let saved: usize = self
+            .replay_events
+            .iter_mut()
+            .map(VoiceEventRecord::strip_audio)
+            .sum();
+        self.replay_bytes = self.replay_bytes.saturating_sub(saved);
+    }
 }
 
 pub(super) struct RuntimeContext {
@@ -153,6 +223,7 @@ impl RuntimeContext {
             events: Mutex::new(EventState {
                 sinks: Vec::new(),
                 replay_events: VecDeque::new(),
+                replay_bytes: 0,
                 last_event_id: 0,
             }),
             initialized: AtomicBool::new(false),
@@ -174,20 +245,24 @@ impl RuntimeContext {
     }
 
     /// 진행 중인데 이벤트 스트림이 하나도 붙어 있지 않고, 처리 중인 턴도 없이 `idle_ms` 동안
-    /// 아무 일도 없었으면 `true`. 클라이언트가 창을 닫았거나 죽어서 정지를 부르지 못한 세션이다.
-    pub(super) fn is_abandoned(&self, now_epoch_ms: i64, idle_ms: i64) -> bool {
+    /// 아무 일도 없었으면 닫고 `true`를 돌려준다(이어서 정지 처리는 부른 쪽이 한다). 클라이언트가
+    /// 창을 닫았거나 죽어서 정지를 부르지 못한 세션이다. 판단과 닫기를 이벤트 잠금 안에서 함께
+    /// 하므로, 그 사이에 다시 붙는 싱크(`add_sink`도 같은 잠금을 쓴다)는 닫히기 전에 붙어 세션을
+    /// 살리거나, 닫힌 뒤에 붙어 `session.stopped`를 받는다.
+    pub(super) fn close_if_abandoned(&self, now_epoch_ms: i64, idle_ms: i64) -> bool {
         if self.is_inactive() || self.turn_processing.load(Ordering::SeqCst) {
             return false;
         }
+        let mut events = lock(&self.events);
+        // 받는 쪽이 떠났는데 해제되지 않은 싱크(등록 중에 끊긴 SSE 요청 등)는 여기서 뺀다.
+        events.sinks.retain(|sink| !sink.is_closed());
+        if !events.sinks.is_empty()
+            || self.turn_processing.load(Ordering::SeqCst)
+            || now_epoch_ms - self.last_activity_epoch_ms.load(Ordering::SeqCst) < idle_ms
         {
-            // 받는 쪽이 떠났는데 해제되지 않은 싱크(등록 중에 끊긴 SSE 요청 등)는 여기서 뺀다.
-            let mut events = lock(&self.events);
-            events.sinks.retain(|sink| !sink.is_closed());
-            if !events.sinks.is_empty() {
-                return false;
-            }
+            return false;
         }
-        now_epoch_ms - self.last_activity_epoch_ms.load(Ordering::SeqCst) >= idle_ms
+        self.close()
     }
 
     /// 정지한 세션은 더 처리할 답이 없으므로 쌓인 오디오, 전사문, 연속 모드 턴, 프리페치를
@@ -204,13 +279,20 @@ impl RuntimeContext {
 
     /// `since_event_id`가 있으면 그 뒤의 이벤트를 먼저 다시 보낸다. 다시 보내다 실패하면 싱크를
     /// 등록하지 않는다. 같은 싱크는 한 번만 등록된다(Java `Set`).
+    ///
+    /// 이미 닫힌 세션이면 `since_event_id`가 없어도 `session.stopped`를 다시 보낸다(아직 보내기
+    /// 전이면 등록한 싱크가 곧 받는다). 그래서 정리 작업이 막 멈춘 세션에 붙은 스트림도 세션이
+    /// 끝났다는 것을 안다.
     pub(super) fn add_sink(&self, sink: Arc<dyn VoiceEventSink>, since_event_id: Option<i64>) {
         self.touch();
         let mut events = lock(&self.events);
-        if let Some(since) = since_event_id {
-            if !replay_events(&events, sink.as_ref(), since) {
-                return;
-            }
+        let replayed = match since_event_id {
+            Some(since) => replay_events(&events, sink.as_ref(), since),
+            None if self.is_inactive() => replay_stop_event(&events, sink.as_ref()),
+            None => true,
+        };
+        if !replayed {
+            return;
         }
         if !events
             .sinks
@@ -235,21 +317,39 @@ impl RuntimeContext {
         let mut events = lock(&self.events);
         events.last_event_id += 1;
         let event_id = events.last_event_id;
-        let record = VoiceEventRecord {
+        let payload = append_event_id(payload, event_id);
+        let mut record = VoiceEventRecord {
             event_id,
             event: event.to_string(),
-            payload: append_event_id(payload, event_id),
+            bytes: approximate_json_bytes(&payload),
+            payload,
         };
-        let EventState {
-            sinks,
-            replay_events,
-            ..
-        } = &mut *events;
-        sinks.retain(|sink| sink.send(&record.event, record.payload.clone()));
-        replay_events.push_back(record);
-        while replay_events.len() > self.event_replay_buffer_limit {
-            replay_events.pop_front();
+        events
+            .sinks
+            .retain(|sink| sink.send(&record.event, record.payload.clone()));
+        if self.is_inactive() {
+            // 정지한 세션의 오디오는 다시 틀 일이 없다.
+            record.strip_audio();
         }
+        events.push_replay(
+            record,
+            self.event_replay_buffer_limit,
+            REPLAY_BUFFER_BYTES_MAX,
+        );
+    }
+
+    /// 정지한 세션의 재전송 버퍼에서 오디오를 뺀다. 복구가 쓰는 이벤트 id와 나머지 필드는 남긴다.
+    pub(super) fn strip_replay_audio(&self) {
+        lock(&self.events).strip_all_audio();
+    }
+
+    #[cfg(test)]
+    pub(super) fn replay_buffer_bytes(&self) -> usize {
+        lock(&self.events)
+            .replay_events
+            .iter()
+            .map(|record| record.payload.to_string().len())
+            .sum()
     }
 
     // ---- 수명 ----
@@ -514,6 +614,36 @@ fn replay_events(events: &EventState, sink: &dyn VoiceEventSink, since_event_id:
         .iter()
         .filter(|record| record.event_id > since)
         .all(|record| sink.send(&record.event, record.payload.clone()))
+}
+
+/// 닫힌 세션에 새로 붙은 싱크에 `session.stopped`(있으면)를 다시 보낸다.
+fn replay_stop_event(events: &EventState, sink: &dyn VoiceEventSink) -> bool {
+    events
+        .replay_events
+        .iter()
+        .rev()
+        .find(|record| record.event == SESSION_STOPPED_EVENT)
+        .is_none_or(|record| sink.send(&record.event, record.payload.clone()))
+}
+
+/// JSON으로 쓸 때의 크기 근사(문자열 길이와 구분자). 재전송 버퍼의 상한에만 쓴다.
+fn approximate_json_bytes(value: &Value) -> usize {
+    match value {
+        Value::Null | Value::Bool(_) | Value::Number(_) => 8,
+        Value::String(text) => text.len() + 2,
+        Value::Array(items) => {
+            2 + items
+                .iter()
+                .map(|item| approximate_json_bytes(item) + 1)
+                .sum::<usize>()
+        }
+        Value::Object(map) => {
+            2 + map
+                .iter()
+                .map(|(key, item)| key.len() + 4 + approximate_json_bytes(item))
+                .sum::<usize>()
+        }
+    }
 }
 
 fn append_event_id(payload: Value, event_id: i64) -> Value {
