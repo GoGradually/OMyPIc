@@ -5,6 +5,7 @@ import {KokoroTTS} from 'kokoro-js'
 import {dropBrokenVoiceCache, KOKORO_VOICE_CACHE, modelPathTemplate, NO_CACHE_STORAGE, redirectHuggingFaceFetch} from './backendModelHost.js'
 import {ortWasmPaths} from './ortWasm.js'
 import {createSynthesisQueue} from './synthesisQueue.js'
+import {createDownloadProgress} from './downloadProgress.js'
 
 let ttsPromise = null
 // The worker's own Cache Storage, before configure() hides it from kokoro-js.
@@ -37,11 +38,17 @@ function configure(config) {
     env.backends.onnx.wasm.wasmPaths = ortWasmPaths(self.location.href)
 }
 
+// Per-file events become one percentage for the whole model (see downloadProgress.js).
+let overallProgress = createDownloadProgress(0)
+
 function reportProgress(event) {
-    if (event?.status !== 'progress' || !Number.isFinite(event.progress)) {
+    if (event?.status !== 'progress') {
         return
     }
-    self.postMessage({type: 'progress', file: event.file || '', progress: event.progress})
+    const progress = overallProgress(event)
+    if (progress !== null) {
+        self.postMessage({type: 'progress', file: event.file || '', progress})
+    }
 }
 
 async function forgetCachedVoices(config) {
@@ -61,6 +68,7 @@ function load(config) {
         configure(config)
         // Voice files an earlier build kept in Cache Storage are not read any more (backend) or are
         // checked, so a failed download stored as a voice is not read back every time (mirror).
+        overallProgress = createDownloadProgress(config.downloadBytes || 0)
         ttsPromise = forgetCachedVoices(config).then(() => KokoroTTS.from_pretrained(config.model, {
             dtype: 'q8',
             device: 'wasm',

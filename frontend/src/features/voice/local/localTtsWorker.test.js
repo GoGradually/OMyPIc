@@ -58,6 +58,32 @@ describe('English tts worker synthesis', () => {
         expect(await cache.match('x')).toBeUndefined()
     })
 
+    it('reports the download of the whole model, not of the small file that finishes first', async () => {
+        const {KokoroTTS} = await import('kokoro-js')
+        vi.resetModules()
+        scope = {location: {href: 'http://localhost/worker.js'}, postMessage: vi.fn(), fetch: vi.fn()}
+        vi.stubGlobal('self', scope)
+        KokoroTTS.from_pretrained.mockImplementationOnce(async (_model, options) => {
+            options.progress_callback({status: 'progress', file: 'config.json', progress: 100, loaded: 44, total: 44})
+            options.progress_callback({
+                status: 'progress',
+                file: 'onnx/model_quantized.onnx',
+                progress: 50,
+                loaded: 46_180_558,
+                total: 92_361_116
+            })
+            return {generate: (...args) => mocks.generate(...args)}
+        })
+        await import('./localTtsWorker.js')
+
+        await scope.onmessage({data: {id: 1, type: 'load', payload: {config: {...CONFIG, downloadBytes: 92_887_010}}}})
+
+        const progress = replies().filter((message) => message.type === 'progress').map((message) => message.progress)
+        expect(progress).toHaveLength(2)
+        expect(progress[0]).toBeLessThan(1)
+        expect(progress[1]).toBeCloseTo(49.7, 0)
+    })
+
     it('redirects the voice address once, however often the load is tried again', async () => {
         const {KokoroTTS} = await import('kokoro-js')
         vi.resetModules()

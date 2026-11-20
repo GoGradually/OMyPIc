@@ -7,6 +7,8 @@ const DEFAULT_VOICE = 'af_heart'
 // The commit of DEFAULT_MODEL every install loads (voice files included), so an upstream change
 // cannot change the voice silently.
 const DEFAULT_REVISION = '1939ad2a8e416c0acfeecc08a694d14ef25f2231'
+// Size of that commit's files, so the download percentage covers the whole model (0: unknown).
+const DEFAULT_DOWNLOAD_BYTES = 92_887_010
 
 function readEnv(name) {
     return (import.meta.env && import.meta.env[name]) || ''
@@ -17,9 +19,11 @@ function readEnv(name) {
 async function buildConfig() {
     const hostOverride = readEnv('VITE_OMYPIC_LOCAL_TTS_HOST')
     const model = readEnv('VITE_OMYPIC_LOCAL_TTS_MODEL') || DEFAULT_MODEL
+    const revision = readEnv('VITE_OMYPIC_LOCAL_TTS_REVISION') || (model === DEFAULT_MODEL ? DEFAULT_REVISION : 'main')
     return {
         model,
-        revision: readEnv('VITE_OMYPIC_LOCAL_TTS_REVISION') || (model === DEFAULT_MODEL ? DEFAULT_REVISION : 'main'),
+        revision,
+        downloadBytes: model === DEFAULT_MODEL && revision === DEFAULT_REVISION ? DEFAULT_DOWNLOAD_BYTES : 0,
         voice: readEnv('VITE_OMYPIC_LOCAL_TTS_VOICE') || DEFAULT_VOICE,
         modelHost: hostOverride || `${await getBackendUrl()}/api/local-models/`,
         modelPathTemplate: readEnv('VITE_OMYPIC_LOCAL_TTS_PATH_TEMPLATE'),

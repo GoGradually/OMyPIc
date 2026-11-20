@@ -3,6 +3,7 @@
 import {env, pipeline} from '@huggingface/transformers'
 import {ortWasmPaths} from './ortWasm.js'
 import {modelPathTemplate} from './backendModelHost.js'
+import {createDownloadProgress} from './downloadProgress.js'
 
 const WHISPER_SAMPLE_RATE = 16000
 let transcriberPromise = null
@@ -23,11 +24,17 @@ function configure(config) {
     env.backends.onnx.wasm.wasmPaths = ortWasmPaths(self.location.href)
 }
 
+// Per-file events become one percentage for the whole model (see downloadProgress.js).
+let overallProgress = createDownloadProgress(0)
+
 function reportProgress(event) {
-    if (event?.status !== 'progress' || !Number.isFinite(event.progress)) {
+    if (event?.status !== 'progress') {
         return
     }
-    self.postMessage({type: 'progress', file: event.file || '', progress: event.progress})
+    const progress = overallProgress(event)
+    if (progress !== null) {
+        self.postMessage({type: 'progress', file: event.file || '', progress})
+    }
 }
 
 // The ONNX export of this model also returns every attention map (the encoder's: six of
@@ -52,6 +59,7 @@ function skipAttentionOutputs(transcriber) {
 function load(config) {
     if (!transcriberPromise) {
         configure(config)
+        overallProgress = createDownloadProgress(config.downloadBytes || 0)
         transcriberPromise = pipeline('automatic-speech-recognition', config.model, {
             dtype: 'q8',
             device: 'wasm',

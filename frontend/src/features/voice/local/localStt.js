@@ -6,6 +6,9 @@ const WHISPER_SAMPLE_RATE = 16000
 const DEFAULT_MODEL = 'Xenova/whisper-base.en'
 // The commit of DEFAULT_MODEL every install loads, so an upstream change cannot change it silently.
 const DEFAULT_REVISION = '95bf40a508535962c6483ead40270b2e32267508'
+// Size of the files loaded from that commit, so the download percentage covers the whole model
+// (0: unknown).
+const DEFAULT_DOWNLOAD_BYTES = 79_041_253
 
 function readEnv(name) {
     return (import.meta.env && import.meta.env[name]) || ''
@@ -16,9 +19,11 @@ function readEnv(name) {
 async function buildConfig() {
     const hostOverride = readEnv('VITE_OMYPIC_LOCAL_STT_HOST')
     const model = readEnv('VITE_OMYPIC_LOCAL_STT_MODEL') || DEFAULT_MODEL
+    const revision = readEnv('VITE_OMYPIC_LOCAL_STT_REVISION') || (model === DEFAULT_MODEL ? DEFAULT_REVISION : 'main')
     return {
         model,
-        revision: readEnv('VITE_OMYPIC_LOCAL_STT_REVISION') || (model === DEFAULT_MODEL ? DEFAULT_REVISION : 'main'),
+        revision,
+        downloadBytes: model === DEFAULT_MODEL && revision === DEFAULT_REVISION ? DEFAULT_DOWNLOAD_BYTES : 0,
         modelHost: hostOverride || `${await getBackendUrl()}/api/local-models/`,
         modelPathTemplate: readEnv('VITE_OMYPIC_LOCAL_STT_PATH_TEMPLATE'),
         backendHosted: !hostOverride
