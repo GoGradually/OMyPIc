@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
+use tauri::ipc::{Request, Response};
 use tauri::{AppHandle, Manager, RunEvent, Runtime, State, Url, Webview};
 use tauri_plugin_dialog::{DialogExt, FilePath, MessageDialogKind};
 use tracing_subscriber::layer::SubscriberExt;
@@ -20,7 +21,6 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{fmt, EnvFilter, Layer};
 
 use crate::backend::Backend;
-use crate::backup::PickedFile;
 use crate::keys::KeyringStore;
 
 const MAIN_WINDOW: &str = "main";
@@ -52,34 +52,37 @@ async fn set_api_key(key: Option<String>, provider: Option<String>) -> Result<bo
     Ok(true)
 }
 
+/// 요청 본문(백업 바이트 그대로)을 고른 경로에 쓴다. 본문은 복사하지 않는다.
 #[tauri::command]
-async fn save_backup_file(
-    app: AppHandle,
-    default_name: Option<String>,
-    bytes: Vec<u8>,
-) -> Result<bool, String> {
+async fn save_backup_file(app: AppHandle, request: Request<'_>) -> Result<bool, String> {
+    let name = request
+        .headers()
+        .get(backup::BACKUP_NAME_HEADER)
+        .and_then(|value| value.to_str().ok());
+    let default_name = backup::default_name(backup::decode_header_name(name));
+    let bytes = backup::body_bytes(request.body())?;
     let (tx, rx) = tokio::sync::oneshot::channel();
     zip_dialog(&app)
-        .set_file_name(backup::default_name(default_name))
+        .set_file_name(default_name)
         .save_file(move |path| {
             let _ = tx.send(path);
         });
     let path = chosen_path(rx.await.ok().flatten())?;
-    tauri::async_runtime::spawn_blocking(move || backup::write_backup(path.as_deref(), &bytes))
-        .await
-        .map_err(|err| err.to_string())?
+    backup::write_backup(path.as_deref(), &bytes).await
 }
 
+/// 고른 파일의 이름과 내용을 바이트 그대로 돌려준다(`backup::read_backup`).
 #[tauri::command]
-async fn pick_backup_file(app: AppHandle) -> Result<Option<PickedFile>, String> {
+async fn pick_backup_file(app: AppHandle) -> Result<Response, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     zip_dialog(&app).pick_file(move |path| {
         let _ = tx.send(path);
     });
     let path = chosen_path(rx.await.ok().flatten())?;
-    tauri::async_runtime::spawn_blocking(move || backup::read_backup(path.as_deref()))
+    let reply = tauri::async_runtime::spawn_blocking(move || backup::read_backup(path.as_deref()))
         .await
-        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())??;
+    Ok(Response::new(reply))
 }
 
 /// zip 필터를 건, 주 창에 딸린 파일 대화상자. 플러그인이 대화상자를 주 스레드에서 띄운다.
