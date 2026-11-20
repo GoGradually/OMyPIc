@@ -259,6 +259,17 @@ describe('local Korean tts', () => {
         await expect(second).rejects.toMatchObject({cancelled: true})
     })
 
+    it('never sends a sentence whose cancel came before it was sent', async () => {
+        const {cancelQueuedKoreanSynthesis, loadLocalKoTts, synthesizeKorean} = await import('./localKoTts.js')
+        await loadLocalKoTts()
+
+        const sentence = synthesizeKorean('보내기 전에 취소한 문장입니다.')
+        cancelQueuedKoreanSynthesis()
+
+        await expect(sentence).rejects.toMatchObject({cancelled: true})
+        expect(posted.filter((message) => message.type === 'synthesize')).toHaveLength(0)
+    })
+
     it('tells watchers its state and the download progress', async () => {
         let instance
         vi.stubGlobal('Worker', class {

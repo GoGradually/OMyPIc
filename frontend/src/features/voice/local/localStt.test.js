@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
-import {pcm16ToFloat32} from './localStt.js'
+import {pcm16ToFloat32, transcriptionTimeoutMs} from './localStt.js'
 
 vi.mock('../../../shared/api/http.js', () => ({
     getBackendUrl: vi.fn(async () => 'http://localhost:4317')
@@ -79,5 +79,43 @@ describe('local stt model host', () => {
             modelPathTemplate: '{model}/main/',
             backendHosted: false
         })
+    })
+})
+
+describe('local stt transcription', () => {
+    let posted
+    let transfers
+
+    beforeEach(() => {
+        posted = []
+        transfers = []
+        vi.resetModules()
+        vi.stubGlobal('Worker', class {
+            postMessage(message, transfer) {
+                posted.push(message)
+                transfers.push(transfer || [])
+                queueMicrotask(() => this.onmessage({data: {id: message.id, ok: true, text: message.type === 'transcribe' ? 'hello' : undefined}}))
+            }
+
+            terminate() {}
+        })
+    })
+
+    afterEach(() => {
+        vi.unstubAllGlobals()
+    })
+
+    it('moves the samples to the worker instead of copying them', async () => {
+        const {transcribePcm16} = await import('./localStt.js')
+
+        await expect(transcribePcm16(pcm16([1, 2, 3, 4]), 16000)).resolves.toBe('hello')
+
+        const index = posted.findIndex((message) => message.type === 'transcribe')
+        expect(transfers[index]).toEqual([posted[index].payload.samples.buffer])
+    })
+
+    it('gives a long answer more time than a short one before the worker counts as hung', () => {
+        expect(transcriptionTimeoutMs(16000 * 5)).toBe(140000)
+        expect(transcriptionTimeoutMs(16000 * 150)).toBe(720000)
     })
 })

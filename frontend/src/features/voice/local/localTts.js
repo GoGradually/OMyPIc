@@ -1,28 +1,9 @@
 // Client for the on-device English speech synthesizer (localTtsWorker.js).
 import {getBackendUrl} from '../../../shared/api/http.js'
+import {createSpeechWorkerClient} from './speechWorkerClient.js'
 
 const DEFAULT_MODEL = 'onnx-community/Kokoro-82M-v1.0-ONNX'
 const DEFAULT_VOICE = 'af_heart'
-
-let worker = null
-let nextRequestId = 0
-let loadPromise = null
-// 'idle' (never asked), 'loading', 'ready' or 'failed' (the last load failed or the worker crashed;
-// the next call retries). Same meaning as the Korean client's status.
-let status = 'idle'
-const pending = new Map()
-const progressListeners = new Set()
-const statusListeners = new Set()
-// The download progress of the running load in percent, or null.
-let progress = null
-
-function setStatus(next) {
-    status = next
-    if (next !== 'loading') {
-        progress = null
-    }
-    statusListeners.forEach((listener) => listener({status, progress}))
-}
 
 function readEnv(name) {
     return (import.meta.env && import.meta.env[name]) || ''
@@ -41,73 +22,33 @@ async function buildConfig() {
     }
 }
 
+// A synthesis request may wait this long for the worker's next answer before the worker counts as
+// hung (a sentence takes about 3-9 s on a slow CPU; WebKit is slower).
+export const ENGLISH_REQUEST_TIMEOUT_MS = 120000
+
+const client = createSpeechWorkerClient({
+    createWorker: () => new Worker(new URL('./localTtsWorker.js', import.meta.url), {type: 'module'}),
+    buildConfig,
+    texts: {
+        unsupported: '이 환경에서는 로컬 음성 합성을 실행할 수 없습니다.',
+        crashed: '로컬 음성 합성 모듈을 시작하지 못했습니다.',
+        failed: '로컬 음성 합성에 실패했습니다.',
+        timedOut: '로컬 음성 합성이 응답하지 않아 다시 시작합니다.'
+    }
+})
+
 export function isLocalTtsSupported() {
-    return typeof Worker !== 'undefined' && typeof WebAssembly !== 'undefined'
+    return client.isSupported()
 }
 
 /** 'idle', 'loading', 'ready' or 'failed'. */
 export function getLocalTtsStatus() {
-    return status
+    return client.getStatus()
 }
 
 /** Calls listener({status, progress}) whenever the status or the download progress changes; returns a function that stops it. */
 export function watchLocalTtsStatus(listener) {
-    statusListeners.add(listener)
-    return () => statusListeners.delete(listener)
-}
-
-function handleMessage(event) {
-    const data = event.data || {}
-    if (data.type === 'progress') {
-        progressListeners.forEach((listener) => listener(data))
-        if (status === 'loading' && Number.isFinite(data.progress)) {
-            progress = data.progress
-            setStatus('loading')
-        }
-        return
-    }
-    const request = pending.get(data.id)
-    if (!request) {
-        return
-    }
-    pending.delete(data.id)
-    if (data.ok) {
-        request.resolve(data)
-    } else if (data.cancelled) {
-        request.reject(Object.assign(new Error('음성 합성을 취소했습니다.'), {cancelled: true}))
-    } else {
-        request.reject(new Error(data.message || '로컬 음성 합성에 실패했습니다.'))
-    }
-}
-
-// A crashed worker takes the loaded model with it, so English sentences are shown without sound
-// until a reload (started in the background by the next English sentence) is done.
-function failAll(message) {
-    pending.forEach((request) => request.reject(new Error(message)))
-    pending.clear()
-    loadPromise = null
-    setStatus('failed')
-    if (worker) {
-        worker.terminate?.()
-        worker = null
-    }
-}
-
-function ensureWorker() {
-    if (!worker) {
-        worker = new Worker(new URL('./localTtsWorker.js', import.meta.url), {type: 'module'})
-        worker.onmessage = handleMessage
-        worker.onerror = (event) => failAll(event?.message || '로컬 음성 합성 모듈을 시작하지 못했습니다.')
-    }
-    return worker
-}
-
-function request(type, payload) {
-    return new Promise((resolve, reject) => {
-        const id = ++nextRequestId
-        pending.set(id, {resolve, reject})
-        ensureWorker().postMessage({id, type, payload})
-    })
+    return client.watchStatus(listener)
 }
 
 /**
@@ -115,41 +56,30 @@ function request(type, payload) {
  * onProgress receives {file, progress} with progress in percent while files download.
  */
 export function loadLocalTts(onProgress) {
-    if (!isLocalTtsSupported()) {
-        setStatus('failed')
-        return Promise.reject(new Error('이 환경에서는 로컬 음성 합성을 실행할 수 없습니다.'))
-    }
-    if (onProgress) {
-        progressListeners.add(onProgress)
-    }
-    if (!loadPromise) {
-        setStatus('loading')
-        loadPromise = buildConfig().then((config) => request('load', {config})).then(() => {
-            setStatus('ready')
-        }, (error) => {
-            loadPromise = null
-            setStatus('failed')
-            throw error
-        })
-    }
-    return loadPromise.finally(() => {
-        if (onProgress) {
-            progressListeners.delete(onProgress)
-        }
-    })
+    return client.load(onProgress)
 }
 
 /** Returns {samples: Float32Array, sampleRate} for one English sentence. */
 export async function synthesizeEnglish(text) {
-    await loadLocalTts()
-    const result = await request('synthesize', {config: await buildConfig(), text})
+    const result = await client.run('synthesize', (config) => ({config, text}), {timeoutMs: ENGLISH_REQUEST_TIMEOUT_MS})
     return {samples: result.samples, sampleRate: result.sampleRate}
 }
 
 /**
- * Drops every sentence sent so far that the worker has not started synthesizing; their promises
- * reject with an error whose `cancelled` is true. Sentences sent after this call are not affected.
+ * Drops every sentence asked for so far that the worker has not started synthesizing (also one
+ * still waiting to be sent); their promises reject with an error whose `cancelled` is true.
+ * Sentences asked for after this call are not affected.
  */
 export function cancelQueuedEnglishSynthesis() {
-    worker?.postMessage({type: 'cancel', payload: {through: nextRequestId}})
+    client.cancelQueued()
+}
+
+/** Terminates the English worker and frees its model unless it is in use; returns whether it did. */
+export function releaseLocalTts() {
+    return client.release()
+}
+
+/** True while the English model loads or synthesizes. */
+export function isLocalTtsBusy() {
+    return client.isBusy()
 }

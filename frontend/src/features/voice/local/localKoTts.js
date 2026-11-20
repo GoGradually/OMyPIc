@@ -1,33 +1,13 @@
 // Client for the on-device Korean speech synthesizer (localKoTtsWorker.js). It runs in its own
 // worker, so a long first download or a failure of this model never holds up English speech.
 import {getBackendUrl} from '../../../shared/api/http.js'
+import {createSpeechWorkerClient} from './speechWorkerClient.js'
 
 const KO_TTS_MODEL = 'onnx-community/Supertonic-TTS-2-ONNX'
 // The only dtype this repository has; another one makes the library look for files that are not there.
 const KO_TTS_DTYPE = 'fp32'
 const KO_TTS_VOICE = 'F2'
 const KO_TTS_OPTIONS = {num_inference_steps: 5, speed: 1.05}
-
-let worker = null
-let nextRequestId = 0
-let loadPromise = null
-// The settings the current load was started with; every sentence is synthesized with the same ones.
-let loadedConfig = null
-// 'idle' (never asked), 'loading', 'ready' or 'failed' (the last load failed; the next call retries).
-let status = 'idle'
-const pending = new Map()
-const progressListeners = new Set()
-const statusListeners = new Set()
-// The download progress of the running load in percent, or null.
-let progress = null
-
-function setStatus(next) {
-    status = next
-    if (next !== 'loading') {
-        progress = null
-    }
-    statusListeners.forEach((listener) => listener({status, progress}))
-}
 
 function readEnv(name) {
     return (import.meta.env && import.meta.env[name]) || ''
@@ -58,73 +38,33 @@ async function buildConfig() {
     return {...config, voiceUrl: voiceUrlOf(config)}
 }
 
+// A synthesis request may wait this long for the worker's next answer before the worker counts as
+// hung (a 220-character sentence took 10 s on a slow CPU; WebKit is slower).
+export const KOREAN_REQUEST_TIMEOUT_MS = 120000
+
+const client = createSpeechWorkerClient({
+    createWorker: () => new Worker(new URL('./localKoTtsWorker.js', import.meta.url), {type: 'module'}),
+    buildConfig,
+    texts: {
+        unsupported: '이 환경에서는 한국어 음성 합성을 실행할 수 없습니다.',
+        crashed: '한국어 음성 합성 모듈을 시작하지 못했습니다.',
+        failed: '한국어 음성 합성에 실패했습니다.',
+        timedOut: '한국어 음성 합성이 응답하지 않아 다시 시작합니다.'
+    }
+})
+
 export function isLocalKoTtsSupported() {
-    return typeof Worker !== 'undefined' && typeof WebAssembly !== 'undefined'
+    return client.isSupported()
 }
 
 /** 'idle', 'loading', 'ready' or 'failed'. */
 export function getLocalKoTtsStatus() {
-    return status
+    return client.getStatus()
 }
 
 /** Calls listener({status, progress}) whenever the status or the download progress changes; returns a function that stops it. */
 export function watchLocalKoTtsStatus(listener) {
-    statusListeners.add(listener)
-    return () => statusListeners.delete(listener)
-}
-
-function handleMessage(event) {
-    const data = event.data || {}
-    if (data.type === 'progress') {
-        progressListeners.forEach((listener) => listener(data))
-        if (status === 'loading' && Number.isFinite(data.progress)) {
-            progress = data.progress
-            setStatus('loading')
-        }
-        return
-    }
-    const request = pending.get(data.id)
-    if (!request) {
-        return
-    }
-    pending.delete(data.id)
-    if (data.ok) {
-        request.resolve(data)
-    } else if (data.cancelled) {
-        request.reject(Object.assign(new Error('음성 합성을 취소했습니다.'), {cancelled: true}))
-    } else {
-        request.reject(new Error(data.message || '한국어 음성 합성에 실패했습니다.'))
-    }
-}
-
-// A crashed worker takes the loaded model with it. The status says so, so the next Korean
-// sentence is shown without sound and starts a reload in the background instead of waiting.
-function failAll(message) {
-    pending.forEach((request) => request.reject(new Error(message)))
-    pending.clear()
-    loadPromise = null
-    setStatus('failed')
-    if (worker) {
-        worker.terminate?.()
-        worker = null
-    }
-}
-
-function ensureWorker() {
-    if (!worker) {
-        worker = new Worker(new URL('./localKoTtsWorker.js', import.meta.url), {type: 'module'})
-        worker.onmessage = handleMessage
-        worker.onerror = (event) => failAll(event?.message || '한국어 음성 합성 모듈을 시작하지 못했습니다.')
-    }
-    return worker
-}
-
-function request(type, payload) {
-    return new Promise((resolve, reject) => {
-        const id = ++nextRequestId
-        pending.set(id, {resolve, reject})
-        ensureWorker().postMessage({id, type, payload})
-    })
+    return client.watchStatus(listener)
 }
 
 /**
@@ -132,47 +72,34 @@ function request(type, payload) {
  * onProgress receives {file, progress} with progress in percent while files download.
  */
 export function loadLocalKoTts(onProgress) {
-    if (!isLocalKoTtsSupported()) {
-        setStatus('failed')
-        return Promise.reject(new Error('이 환경에서는 한국어 음성 합성을 실행할 수 없습니다.'))
-    }
-    if (onProgress) {
-        progressListeners.add(onProgress)
-    }
-    if (!loadPromise) {
-        setStatus('loading')
-        loadPromise = buildConfig().then((config) => {
-            loadedConfig = config
-            return request('load', {config})
-        }).then(() => {
-            setStatus('ready')
-        }, (error) => {
-            loadPromise = null
-            setStatus('failed')
-            throw error
-        })
-    }
-    return loadPromise.finally(() => {
-        if (onProgress) {
-            progressListeners.delete(onProgress)
-        }
-    })
+    return client.load(onProgress)
 }
 
 /**
  * Returns {samples: Float32Array, sampleRate} for one Korean sentence. Send one splitForSpeech
- * chunk per call: the model silently drops input past its limit.
+ * chunk per call: the model silently drops input past its limit. Every sentence is synthesized
+ * with the settings its load was started with.
  */
 export async function synthesizeKorean(text) {
-    await loadLocalKoTts()
-    const result = await request('synthesize', {config: loadedConfig, text})
+    const result = await client.run('synthesize', (config) => ({config, text}), {timeoutMs: KOREAN_REQUEST_TIMEOUT_MS})
     return {samples: result.samples, sampleRate: result.sampleRate}
 }
 
 /**
- * Drops every sentence sent so far that the worker has not started synthesizing; their promises
- * reject with an error whose `cancelled` is true. Sentences sent after this call are not affected.
+ * Drops every sentence asked for so far that the worker has not started synthesizing (also one
+ * still waiting to be sent); their promises reject with an error whose `cancelled` is true.
+ * Sentences asked for after this call are not affected.
  */
 export function cancelQueuedKoreanSynthesis() {
-    worker?.postMessage({type: 'cancel', payload: {through: nextRequestId}})
+    client.cancelQueued()
+}
+
+/** Terminates the Korean worker and frees its model unless it is in use; returns whether it did. */
+export function releaseLocalKoTts() {
+    return client.release()
+}
+
+/** True while the Korean model loads or synthesizes. */
+export function isLocalKoTtsBusy() {
+    return client.isBusy()
 }

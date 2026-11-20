@@ -1,14 +1,9 @@
 // Client for the on-device speech recognizer (localSttWorker.js).
 import {getBackendUrl} from '../../../shared/api/http.js'
+import {createSpeechWorkerClient} from './speechWorkerClient.js'
 
 const WHISPER_SAMPLE_RATE = 16000
 const DEFAULT_MODEL = 'Xenova/whisper-base.en'
-
-let worker = null
-let nextRequestId = 0
-let loadPromise = null
-const pending = new Map()
-const progressListeners = new Set()
 
 function readEnv(name) {
     return (import.meta.env && import.meta.env[name]) || ''
@@ -26,53 +21,33 @@ async function buildConfig() {
     }
 }
 
+// A transcription may wait this long for the worker's answer before the worker counts as hung:
+// a fixed allowance plus a multiple of the audio length (answers are up to 2.5 minutes).
+const STT_TIMEOUT_BASE_MS = 120000
+const STT_TIMEOUT_PER_AUDIO_SECOND_MS = 4000
+
+export function transcriptionTimeoutMs(sampleCount) {
+    return STT_TIMEOUT_BASE_MS + Math.ceil(sampleCount / WHISPER_SAMPLE_RATE) * STT_TIMEOUT_PER_AUDIO_SECOND_MS
+}
+
+const client = createSpeechWorkerClient({
+    createWorker: () => new Worker(new URL('./localSttWorker.js', import.meta.url), {type: 'module'}),
+    buildConfig,
+    texts: {
+        unsupported: '이 환경에서는 로컬 음성 인식을 실행할 수 없습니다.',
+        crashed: '로컬 음성 인식 모듈을 시작하지 못했습니다.',
+        failed: '로컬 음성 인식에 실패했습니다.',
+        timedOut: '로컬 음성 인식이 응답하지 않아 다시 시작합니다.'
+    }
+})
+
 export function isLocalSttSupported() {
-    return typeof Worker !== 'undefined' && typeof WebAssembly !== 'undefined'
+    return client.isSupported()
 }
 
-function handleMessage(event) {
-    const data = event.data || {}
-    if (data.type === 'progress') {
-        progressListeners.forEach((listener) => listener(data))
-        return
-    }
-    const request = pending.get(data.id)
-    if (!request) {
-        return
-    }
-    pending.delete(data.id)
-    if (data.ok) {
-        request.resolve(data)
-    } else {
-        request.reject(new Error(data.message || '로컬 음성 인식에 실패했습니다.'))
-    }
-}
-
-function failAll(message) {
-    pending.forEach((request) => request.reject(new Error(message)))
-    pending.clear()
-    loadPromise = null
-    if (worker) {
-        worker.terminate()
-        worker = null
-    }
-}
-
-function ensureWorker() {
-    if (!worker) {
-        worker = new Worker(new URL('./localSttWorker.js', import.meta.url), {type: 'module'})
-        worker.onmessage = handleMessage
-        worker.onerror = (event) => failAll(event?.message || '로컬 음성 인식 모듈을 시작하지 못했습니다.')
-    }
-    return worker
-}
-
-function request(type, payload, transfer = []) {
-    return new Promise((resolve, reject) => {
-        const id = ++nextRequestId
-        pending.set(id, {resolve, reject})
-        ensureWorker().postMessage({id, type, payload}, transfer)
-    })
+/** 'idle', 'loading', 'ready' or 'failed'. */
+export function getLocalSttStatus() {
+    return client.getStatus()
 }
 
 /**
@@ -80,23 +55,17 @@ function request(type, payload, transfer = []) {
  * onProgress receives {file, progress} with progress in percent while files download.
  */
 export function loadLocalStt(onProgress) {
-    if (!isLocalSttSupported()) {
-        return Promise.reject(new Error('이 환경에서는 로컬 음성 인식을 실행할 수 없습니다.'))
-    }
-    if (onProgress) {
-        progressListeners.add(onProgress)
-    }
-    if (!loadPromise) {
-        loadPromise = buildConfig().then((config) => request('load', {config})).catch((error) => {
-            loadPromise = null
-            throw error
-        })
-    }
-    return loadPromise.finally(() => {
-        if (onProgress) {
-            progressListeners.delete(onProgress)
-        }
-    })
+    return client.load(onProgress)
+}
+
+/** Terminates the Whisper worker and frees its model unless it is in use; returns whether it did. */
+export function releaseLocalStt() {
+    return client.release()
+}
+
+/** True while the Whisper model loads or transcribes. */
+export function isLocalSttBusy() {
+    return client.isBusy()
 }
 
 export function pcm16ToFloat32(pcm16Bytes, sampleRate = WHISPER_SAMPLE_RATE) {
@@ -126,6 +95,10 @@ export async function transcribePcm16(pcm16Bytes, sampleRate) {
     if (!samples.length) {
         return ''
     }
-    const result = await request('transcribe', {config: await buildConfig(), samples}, [samples.buffer])
+    // The samples are moved to the worker, not copied.
+    const result = await client.run('transcribe', (config) => ({config, samples}), {
+        timeoutMs: transcriptionTimeoutMs(samples.length),
+        makeTransfer: (payload) => [payload.samples.buffer]
+    })
     return result.text || ''
 }

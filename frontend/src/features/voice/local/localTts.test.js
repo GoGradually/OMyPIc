@@ -101,6 +101,48 @@ describe('local tts synthesis', () => {
     })
 })
 
+describe('local tts cancel window', () => {
+    let posted
+
+    beforeEach(() => {
+        posted = []
+        vi.resetModules()
+        vi.stubGlobal('Worker', class {
+            postMessage(message) {
+                posted.push(message)
+                if (message.type === 'load') {
+                    queueMicrotask(() => this.onmessage({data: {id: message.id, ok: true}}))
+                }
+            }
+
+            terminate() {}
+        })
+    })
+
+    afterEach(() => {
+        vi.unstubAllGlobals()
+    })
+
+    it('never sends a sentence whose cancel came while it waited for the backend address', async () => {
+        const {getBackendUrl} = await import('../../../shared/api/http.js')
+        const {cancelQueuedEnglishSynthesis, loadLocalTts, synthesizeEnglish} = await import('./localTts.js')
+        await loadLocalTts()
+        let answerUrl
+        getBackendUrl.mockImplementationOnce(() => new Promise((resolve) => {
+            answerUrl = () => resolve('http://localhost:4317')
+        }))
+
+        const sentence = synthesizeEnglish('Cancelled before it was sent.')
+        cancelQueuedEnglishSynthesis()
+        answerUrl?.()
+
+        await expect(sentence).rejects.toMatchObject({cancelled: true})
+        expect(posted.filter((message) => message.type === 'synthesize')).toHaveLength(0)
+        getBackendUrl.mockReset()
+        getBackendUrl.mockImplementation(async () => 'http://localhost:4317')
+    })
+})
+
 describe('local tts status', () => {
     let respond
     let instance
