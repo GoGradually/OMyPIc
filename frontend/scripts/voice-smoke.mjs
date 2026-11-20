@@ -12,6 +12,12 @@
 //
 //   node scripts/voice-smoke.mjs --driver safari|webkitgtk [--app-url http://127.0.0.1:5173]
 //        [--out result.json] [--max-load-seconds 120] [--max-synthesis-seconds 60] [--max-rss-mb 4096]
+//        [--release-check]
+//
+// With --release-check it then releases the three models the way the app does when they are not
+// needed (the workers are terminated), records the web process memory before and after, loads and
+// runs all three again (the reload times) and releases them once more. The release must free the
+// workers; the memory figures are reported, not judged.
 //
 // Exit code 0 when every step passes within the limits, 1 otherwise (the reason is printed).
 import {spawn, execFile} from 'node:child_process'
@@ -50,11 +56,12 @@ const {values: opts} = parseArgs({
         'max-load-seconds': {type: 'string', default: '120'},
         'max-synthesis-seconds': {type: 'string', default: '60'},
         'max-rss-mb': {type: 'string', default: '4096'},
-        'browser-binary': {type: 'string', default: DEFAULT_MINIBROWSER}
+        'browser-binary': {type: 'string', default: DEFAULT_MINIBROWSER},
+        'release-check': {type: 'boolean', default: false}
     }
 })
 if (!['safari', 'webkitgtk'].includes(opts.driver)) {
-    console.error('usage: node scripts/voice-smoke.mjs --driver safari|webkitgtk [--app-url URL] [--out FILE] [--max-load-seconds N] [--max-synthesis-seconds N] [--max-rss-mb N]')
+    console.error('usage: node scripts/voice-smoke.mjs --driver safari|webkitgtk [--app-url URL] [--out FILE] [--max-load-seconds N] [--max-synthesis-seconds N] [--max-rss-mb N] [--release-check]')
     process.exit(2)
 }
 const appUrl = new URL(opts['app-url']).href
@@ -439,6 +446,15 @@ const steps = {
         return {loadSeconds, runSeconds: seconds(t), transcript, ...audioStats(english.samples, english.sampleRate)}
     }
 }
+// --release-check: what the app does with models it does not need. The worker count is the
+// clients' own view: a released client has no worker.
+steps.release = async (job) => {
+    const [tts, ko, stt] = await Promise.all([import(clients.tts), import(clients.koTts), import(clients.stt)])
+    return {kokoro: tts.releaseLocalTts(), supertonic: ko.releaseLocalKoTts(), whisper: stt.releaseLocalStt()}
+}
+steps['kokoro-reload'] = steps.kokoro
+steps['supertonic-reload'] = steps.supertonic
+steps['whisper-reload'] = steps.whisper
 agent.start = (name, arg) => run(name, (job) => steps[name](job, arg))
 window.addEventListener('error', (e) => { agent.lastError = String(e.message) })
 window.addEventListener('unhandledrejection', (e) => { agent.lastError = 'unhandled: ' + String((e.reason && e.reason.message) || e.reason) })
@@ -562,6 +578,52 @@ async function measure(name, kind, arg) {
     return step
 }
 
+async function currentRssMb() {
+    const list = opts.driver === 'safari' ? await readMacWebProcesses() : readLinuxWebProcesses()
+    return list ? Math.round(list.reduce((sum, mb) => sum + mb, 0)) : null
+}
+
+// Memory once it has settled: the lowest of a few samples over some seconds (a terminated
+// worker's memory is returned shortly after, not at once).
+async function settledRssMb(seconds = 8) {
+    let lowest = null
+    for (let i = 0; i < seconds; i++) {
+        await sleep(1000)
+        const mb = await currentRssMb()
+        if (mb !== null) lowest = lowest === null ? mb : Math.min(lowest, mb)
+    }
+    return lowest
+}
+
+async function releaseModels(label) {
+    currentStep = label
+    const released = await runJob('release', {default: 30})
+    if (!released.kokoro || !released.supertonic || !released.whisper) {
+        fail(`${label}: not every model was released (${JSON.stringify(released)})`)
+    }
+    return released
+}
+
+async function releaseCheck() {
+    const check = {loadedMb: await settledRssMb(4)}
+    result.release = check
+    log(`release check: ${check.loadedMb} MB with the three models loaded`)
+    await releaseModels('release')
+    check.afterReleaseMb = await settledRssMb()
+    log(`release check: ${check.afterReleaseMb} MB after the release`)
+    const reload = {}
+    for (const [name, kind, arg] of [['kokoro-reload', 'synthesis', ENGLISH_SENTENCE], ['supertonic-reload', 'synthesis', KOREAN_SENTENCE], ['whisper-reload', 'transcription']]) {
+        const step = await measure(name, kind, arg)
+        reload[name] = step.loadSeconds
+    }
+    check.reloadSeconds = reload
+    check.reloadedMb = await settledRssMb(4)
+    log(`release check: ${check.reloadedMb} MB after the reload`)
+    await releaseModels('release-again')
+    check.afterSecondReleaseMb = await settledRssMb()
+    log(`release check: ${check.afterSecondReleaseMb} MB after the second release`)
+}
+
 async function main() {
     try {
         await fetch(appUrl, {signal: AbortSignal.timeout(10000)})
@@ -594,6 +656,9 @@ async function main() {
     if (!words.includes(EXPECTED_WORD)) {
         whisper.ok = false
         fail(`whisper: the transcript "${whisper.transcript}" does not contain "${EXPECTED_WORD}"`)
+    }
+    if (opts['release-check']) {
+        await releaseCheck()
     }
     currentStep = 'done'
     await sampleMemory()
@@ -652,6 +717,10 @@ function report() {
     for (const r of rows) console.log(r.map((cell, i) => (i === 0 ? cell.padEnd(widths[i]) : cell.padStart(widths[i]))).join('  '))
     const whisper = result.steps.find((s) => s.name === 'whisper')
     if (whisper?.transcript !== undefined) console.log(`whisper transcript: "${whisper.transcript}"`)
+    if (result.release) {
+        const r = result.release
+        console.log(`release check: ${r.loadedMb ?? '-'} MB loaded, ${r.afterReleaseMb ?? '-'} MB after release, ${r.reloadedMb ?? '-'} MB after reload, ${r.afterSecondReleaseMb ?? '-'} MB after the second release`)
+    }
     console.log(`peak ${result.memory.process} RSS: ${result.memory.peakTotalMb} MB total, ${result.memory.peakProcessMb} MB largest process (limit ${limits.rssMb} MB, ${result.memory.samples} samples)`)
     console.log(`browser: ${result.browser.name ?? '?'} ${result.browser.version ?? ''} ${result.browser.userAgent ?? ''}`)
     console.log(result.ok ? 'VOICE SMOKE CHECK PASSED' : `VOICE SMOKE CHECK FAILED: ${result.failure}`)
@@ -674,7 +743,7 @@ const sampler = setInterval(() => {
     sampleMemory().catch(() => {})
 }, 1000)
 // Last line of defense: whatever hangs, the run ends well before any CI limit.
-const totalSeconds = WARMUP_SECONDS + 3 * (limits.loadSeconds + limits.synthesisSeconds + 20) + 120
+const totalSeconds = WARMUP_SECONDS + (opts['release-check'] ? 6 : 3) * (limits.loadSeconds + limits.synthesisSeconds + 20) + (opts['release-check'] ? 180 : 120)
 const watchdog = setTimeout(() => {
     result.failure = `the whole check exceeded ${totalSeconds} s (step "${currentStep}")`
     finish(1)
