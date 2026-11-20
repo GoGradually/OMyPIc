@@ -130,6 +130,8 @@ npm run build:desktop
 
 `version`을 비우고 수동 실행하면 릴리스 없이 설치본만 빌드해 실행 결과(Artifacts)에 남깁니다.
 
+수동 실행에서 `mac_voice_smoke`를 체크하면 macOS 러너에서 음성 점검(`frontend/scripts/voice-smoke.mjs`)을 따로 실행합니다. 앱의 WKWebView와 같은 시스템 WebKit을 쓰는 Safari에서 기기 음성 모델 세 개(Kokoro, Supertonic 2, Whisper)를 하나씩 불러와 영어/한국어 문장을 합성하고, Kokoro가 만든 영어 음성을 Whisper로 인식해 봅니다. 불러오기/합성 시간, 소리가 났는지, 웹 콘텐츠 프로세스의 최대 메모리를 확인하고, 제한(`--max-load-seconds` 기본 120, `--max-synthesis-seconds` 기본 60, `--max-rss-mb` 기본 4096)을 넘거나 단계가 실패하면 그 이유를 남기고 실패합니다. 결과 JSON과 Backend/Vite 로그는 실행 결과의 `mac-voice-smoke`에 올라갑니다. 빌드와 릴리스에는 영향을 주지 않고, 태그 푸시에서는 실행하지 않습니다. Linux에서는 Backend(`cargo run -p omypic-server`)와 `npm run dev:web`을 띄운 뒤 `cd frontend && node scripts/voice-smoke.mjs --driver webkitgtk`로 같은 점검을 돌릴 수 있습니다(WebKitGTK의 `WebKitWebDriver`와 MiniBrowser, X 디스플레이가 필요합니다. 예: `xvfb-run -a node scripts/voice-smoke.mjs --driver webkitgtk`).
+
 ## 4) 런타임 기동 순서
 
 패키지된 앱 실행 시 Tauri 메인 프로세스는 아래 순서로 동작합니다.
