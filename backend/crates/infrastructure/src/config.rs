@@ -137,9 +137,10 @@ pub const DEFAULT_ALLOWED_ORIGINS: [&str; 5] = [
 ];
 
 /// `OMYPIC_LOCAL_MODEL_REPOS`가 없을 때 받아 주는 저장소.
-pub const DEFAULT_LOCAL_MODEL_REPOS: [&str; 2] = [
+pub const DEFAULT_LOCAL_MODEL_REPOS: [&str; 3] = [
     "Xenova/whisper-base.en",
     "onnx-community/Kokoro-82M-v1.0-ONNX",
+    "onnx-community/Supertonic-TTS-2-ONNX",
 ];
 
 impl Default for AppConfig {
@@ -629,13 +630,23 @@ mod tests {
     }
 
     #[test]
+    fn default_allowed_repos_include_korean_model() {
+        let config = AppConfig::default();
+        assert!(config
+            .local_models
+            .allowed_repos
+            .contains(&"onnx-community/Supertonic-TTS-2-ONNX".to_string()));
+    }
+
+    #[test]
     fn local_model_settings_default_and_can_be_overridden() {
         let config = AppConfig::default();
         assert_eq!("https://huggingface.co", config.local_models.upstream);
         assert_eq!(
             vec![
                 "Xenova/whisper-base.en",
-                "onnx-community/Kokoro-82M-v1.0-ONNX"
+                "onnx-community/Kokoro-82M-v1.0-ONNX",
+                "onnx-community/Supertonic-TTS-2-ONNX"
             ],
             config.local_models.allowed_repos
         );

@@ -43,7 +43,10 @@ impl RuntimeSettings {
                 command.feedback_language.as_deref(),
                 &policy.voice_feedback_language(),
             ),
-            tts_model: first_non_blank(command.tts_model.as_deref(), &policy.voice_tts_model()),
+            tts_model: VoiceModelCatalog::normalize_tts_model(&first_non_blank(
+                command.tts_model.as_deref(),
+                &policy.voice_tts_model(),
+            )),
             tts_voice: first_non_blank(command.tts_voice.as_deref(), &policy.voice_tts_voice()),
         })
     }
@@ -95,5 +98,33 @@ fn first_non_blank(value: Option<&str>, fallback: &str) -> String {
     match value.filter(|value| !java_is_blank(value)) {
         Some(value) => value.to_string(),
         None => fallback.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::FakeVoicePolicy;
+
+    fn resolve_with_tts(tts_model: Option<&str>) -> RuntimeSettings {
+        let command = VoiceSessionOpenCommand {
+            tts_model: tts_model.map(str::to_string),
+            ..VoiceSessionOpenCommand::default()
+        };
+        RuntimeSettings::resolve(&command, &FakeVoicePolicy::default()).unwrap()
+    }
+
+    #[test]
+    fn device_voice_is_reported_as_local_kokoro() {
+        let settings = resolve_with_tts(Some("device-voice"));
+
+        assert_eq!("local-kokoro", settings.tts_model);
+        assert!(!settings.server_tts());
+    }
+
+    #[test]
+    fn other_tts_models_are_kept() {
+        assert_eq!("tts-1", resolve_with_tts(Some("tts-1")).tts_model);
+        assert_eq!("gpt-4o-mini-tts", resolve_with_tts(None).tts_model);
     }
 }

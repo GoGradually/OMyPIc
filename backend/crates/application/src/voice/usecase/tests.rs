@@ -814,7 +814,7 @@ fn complete_answer_is_rejected_while_ai_is_on() {
 }
 
 #[test]
-fn device_voice_sends_speech_as_text_and_never_calls_the_synthesis_api() {
+fn device_voice_request_is_treated_as_local_kokoro() {
     let f = Fixture::new();
     f.session("s-device", Some(ModeType::Immediate), None, &[Q1, Q2]);
     let use_case = f.use_case();
@@ -844,7 +844,27 @@ fn device_voice_sends_speech_as_text_and_never_calls_the_synthesis_api() {
 }
 
 #[test]
-fn local_kokoro_is_spoken_by_the_client_like_the_device_voice() {
+fn ai_off_session_opened_with_device_voice_still_works() {
+    let f = Fixture::new();
+    f.session("s-off-device", None, None, &[Q1]);
+    let use_case = f.use_case();
+    let command = VoiceSessionOpenCommand {
+        tts_model: Some("device-voice".to_string()),
+        ..ai_off_command("s-off-device")
+    };
+
+    let voice_session_id = use_case.open(&command).unwrap();
+    let sink = Arc::new(RecordingSink::new());
+    use_case
+        .register_sink(&voice_session_id, sink.clone())
+        .unwrap();
+
+    assert_eq!("question-1", sink.payloads("tts.text")[0]["text"]);
+    assert!(f.tts.calls().is_empty());
+}
+
+#[test]
+fn local_kokoro_is_spoken_by_the_client() {
     let f = Fixture::new();
     f.session("s-kokoro", None, None, &[Q1]);
     let use_case = f.use_case();

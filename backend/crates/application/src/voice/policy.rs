@@ -19,32 +19,40 @@ const STT_MODELS: [&str; 4] = [
     "whisper-1",
     VoiceModelCatalog::LOCAL_STT_MODEL,
 ];
-const TTS_MODELS: [&str; 5] = [
+const TTS_MODELS: [&str; 4] = [
     "gpt-4o-mini-tts",
     "tts-1-hd",
     "tts-1",
-    VoiceModelCatalog::DEVICE_TTS_MODEL,
     VoiceModelCatalog::LOCAL_TTS_MODEL,
 ];
+/// 0.2.x 클라이언트가 저장해 둔 기기 내장 음성. 더는 목록에 없고 `local-kokoro`로 읽는다.
+const LEGACY_DEVICE_TTS_MODEL: &str = "device-voice";
 const TTS_VOICES: [&str; 5] = ["alloy", "echo", "fable", "nova", "shimmer"];
 const FEEDBACK_LANGUAGES: [&str; 2] = ["ko", "en"];
 
 impl VoiceModelCatalog {
     /// 학습자 기기에서 도는 음성 인식(API도 비용도 없다). 클라이언트가 전사해서 글자만 보낸다.
     pub const LOCAL_STT_MODEL: &'static str = "local-whisper";
-    /// 기기에 내장된 음성 합성. 서버는 오디오 대신 읽을 글자를 보낸다.
-    pub const DEVICE_TTS_MODEL: &'static str = "device-voice";
-    /// 학습자 기기에서 도는 모델의 음성 합성. 기기 음성처럼 읽을 글자를 보낸다.
+    /// 학습자 기기에서 도는 모델의 음성 합성. 서버는 오디오 대신 읽을 글자를 보낸다.
     pub const LOCAL_TTS_MODEL: &'static str = "local-kokoro";
 
     pub fn is_local_stt(model: Option<&str>) -> bool {
         equals_ignore_case(model, Self::LOCAL_STT_MODEL)
     }
 
-    /// 클라이언트가 직접 읽는 TTS 모델(기기 음성, 기기 안 모델)이면 `true`.
+    /// 클라이언트가 직접 읽는 TTS 모델이면 `true`. 0.2.x 설정이 보내는 `device-voice`도 포함한다.
     pub fn is_client_tts(model: Option<&str>) -> bool {
-        equals_ignore_case(model, Self::DEVICE_TTS_MODEL)
+        equals_ignore_case(model, LEGACY_DEVICE_TTS_MODEL)
             || equals_ignore_case(model, Self::LOCAL_TTS_MODEL)
+    }
+
+    /// 목록에서 빠진 `device-voice`를 `local-kokoro`로 바꿔 돌려준다. 다른 값은 그대로다.
+    pub fn normalize_tts_model(model: &str) -> String {
+        if equals_ignore_case(Some(model), LEGACY_DEVICE_TTS_MODEL) {
+            Self::LOCAL_TTS_MODEL.to_string()
+        } else {
+            model.to_string()
+        }
     }
 
     pub fn supported_stt_models() -> &'static [&'static str] {
@@ -80,16 +88,33 @@ mod tests {
     }
 
     #[test]
-    fn is_client_tts_covers_device_and_local_models() {
+    fn is_client_tts_covers_legacy_device_voice_and_local_models() {
         assert!(VoiceModelCatalog::is_client_tts(Some("device-voice")));
         assert!(VoiceModelCatalog::is_client_tts(Some("LOCAL-KOKORO")));
         assert!(!VoiceModelCatalog::is_client_tts(Some("tts-1")));
     }
 
     #[test]
+    fn tts_models_do_not_list_device_voice() {
+        assert_eq!(
+            ["gpt-4o-mini-tts", "tts-1-hd", "tts-1", "local-kokoro"],
+            VoiceModelCatalog::supported_tts_models()
+        );
+    }
+
+    #[test]
+    fn normalize_tts_model_maps_only_device_voice() {
+        assert_eq!(
+            "local-kokoro",
+            VoiceModelCatalog::normalize_tts_model(" Device-Voice ")
+        );
+        assert_eq!("tts-1", VoiceModelCatalog::normalize_tts_model("tts-1"));
+    }
+
+    #[test]
     fn catalog_lists_match_java() {
         assert_eq!(4, VoiceModelCatalog::supported_stt_models().len());
-        assert_eq!(5, VoiceModelCatalog::supported_tts_models().len());
+        assert_eq!(4, VoiceModelCatalog::supported_tts_models().len());
         assert_eq!(
             ["alloy", "echo", "fable", "nova", "shimmer"],
             VoiceModelCatalog::supported_voices()

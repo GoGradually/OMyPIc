@@ -225,7 +225,7 @@ npm run build:desktop
   - 기본값: `https://huggingface.co`
   - 로컬 Whisper/Kokoro 모델 파일을 내려받는 상위 서버(`{주소}/{org}/{name}/resolve/{revision}/{file}`).
 - `OMYPIC_LOCAL_MODEL_REPOS`
-  - 기본값: `Xenova/whisper-base.en,onnx-community/Kokoro-82M-v1.0-ONNX`
+  - 기본값: `Xenova/whisper-base.en,onnx-community/Kokoro-82M-v1.0-ONNX,onnx-community/Supertonic-TTS-2-ONNX`
   - Backend가 내려받아 줄 모델 저장소(`org/name`, 쉼표로 구분, 대소문자 구분). 목록에 없는 저장소는 403입니다.
 - `RUST_LOG`
   - 로그 수준. 기본값: `info`. 데스크톱 앱은 stderr와 `logs/omypic.log`에 함께 기록합니다.

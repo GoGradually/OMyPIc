@@ -508,8 +508,13 @@ async fn models_returns_supported_models_and_configured_defaults() {
     assert_eq!("gpt-4o-transcribe", body["voiceSttModels"][0]);
     assert_eq!("gpt-4o-mini-transcribe", body["defaultVoiceSttModel"]);
     assert_eq!("local-whisper", body["voiceSttModels"][3]);
-    assert_eq!("device-voice", body["ttsModels"][3]);
-    assert_eq!("local-kokoro", body["ttsModels"][4]);
+    assert_eq!("local-kokoro", body["ttsModels"][3]);
+    assert_eq!(4, body["ttsModels"].as_array().unwrap().len());
+    assert!(!body["ttsModels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|model| model == "device-voice"));
     assert_eq!("gpt-4o-mini-tts", body["ttsModels"][0]);
     assert_eq!("gpt-4o-mini-tts", body["defaultTtsModel"]);
     assert_eq!("alloy", body["voices"][0]);
