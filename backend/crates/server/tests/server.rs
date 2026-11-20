@@ -399,6 +399,18 @@ async fn shutdown_ends_open_event_streams() {
     .await
     .unwrap();
     assert_eq!(StatusCode::OK, response.status());
+    // `session.ready` comes from a task the registration starts; read it before shutting down
+    // so that the test does not race that task.
+    let mut response = response;
+    let mut head = String::new();
+    while !head.contains("event: session.ready") {
+        let chunk = tokio::time::timeout(Duration::from_secs(10), response.chunk())
+            .await
+            .expect("no session.ready within 10 s")
+            .unwrap()
+            .expect("stream ended before session.ready");
+        head.push_str(&String::from_utf8_lossy(&chunk));
+    }
     let reader = tokio::spawn(async move { response.text().await });
 
     let started = Instant::now();
@@ -408,12 +420,12 @@ async fn shutdown_ends_open_event_streams() {
         "shutdown waited {:?}",
         started.elapsed()
     );
-    let body = tokio::time::timeout(Duration::from_secs(5), reader)
+    // The stream ends: the reader gets the rest of the body instead of waiting 30 minutes.
+    // It may end cleanly or with a closed connection; either way it ends.
+    let _rest = tokio::time::timeout(Duration::from_secs(5), reader)
         .await
-        .unwrap()
-        .unwrap()
+        .expect("the event stream stayed open after shutdown")
         .unwrap();
-    assert!(body.contains("event: session.ready"), "{body}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -434,7 +446,16 @@ async fn abandoned_voice_session_is_stopped_and_removed_without_further_requests
     let voice_session_id = opened["voiceSessionId"].as_str().unwrap().to_string();
 
     // No request at all: only the server's own sweep can stop the session and then drop it.
-    tokio::time::sleep(Duration::from_millis(4_500)).await;
+    // Counting kept sessions does not clean up, so polling it cannot do the sweep's work.
+    assert_eq!(1, server.kept_voice_sessions());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while server.kept_voice_sessions() > 0 {
+        assert!(
+            Instant::now() < deadline,
+            "the sweep did not remove the session"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 
     let (status, body) = get_json(
         &server,

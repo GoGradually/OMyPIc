@@ -3,7 +3,7 @@
 pub mod wiring;
 
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context};
@@ -13,7 +13,7 @@ use axum::http::header::CONTENT_TYPE;
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use futures_util::StreamExt;
-use omypic_application::voice::usecase::VoiceSessionUseCase;
+use omypic_application::voice::usecase::{effective_voice_idle_timeout_ms, VoiceSessionUseCase};
 use omypic_infrastructure::config::AppConfig;
 use omypic_presentation::AppState;
 use tokio::net::TcpListener;
@@ -40,6 +40,13 @@ pub struct RunningServer {
 }
 
 impl RunningServer {
+    /// 메모리에 둔 음성 세션 수. 정리를 일으키지 않으므로 시험이 주기 정리를 지켜볼 때 쓴다.
+    pub fn kept_voice_sessions(&self) -> usize {
+        self.state
+            .as_ref()
+            .map_or(0, |state| state.voice_session.kept_session_count())
+    }
+
     /// 새 연결을 받지 않고, 열린 SSE 스트림을 끝내고, 진행 중인 요청이 끝나기를
     /// (최대 `SHUTDOWN_GRACE`) 기다린 뒤 종료한다. 블로킹 작업 안에서 멈춘 요청은 기다리지
     /// 않으므로 `SHUTDOWN_GRACE + RELEASE_GRACE` 안에 돌아온다. 그런 작업의 스레드는 남으니
@@ -96,7 +103,7 @@ pub async fn start(config: AppConfig, bind: SocketAddr) -> anyhow::Result<Runnin
         end_event_streams_on_shutdown,
     ));
     tokio::spawn(sweep_voice_sessions(
-        state.voice_session.clone(),
+        Arc::downgrade(&state.voice_session),
         sweep_every,
         shutdown_rx.clone(),
     ));
@@ -142,16 +149,20 @@ async fn end_event_streams_on_shutdown(
     Response::from_parts(parts, Body::from_stream(stream))
 }
 
-/// 버려진 음성 세션을 찾는 간격: 유예 시간의 4분의 1, 1초에서 30초 사이.
+/// 버려진 음성 세션을 찾는 간격: 유예 시간의 4분의 1, 1초에서 30초 사이. 유예 시간은 세션과
+/// 같은 규칙으로 읽는다(0 이하이면 기본값).
 fn voice_sweep_interval(idle_timeout_ms: i64) -> Duration {
+    let idle_timeout_ms = effective_voice_idle_timeout_ms(idle_timeout_ms);
     let quarter = u64::try_from(idle_timeout_ms / 4).unwrap_or(0);
     Duration::from_millis(quarter.clamp(1_000, 30_000))
 }
 
 /// 요청이 없어도 버려진 음성 세션과 보관 기간이 지난 정지 세션이 정리되도록 주기적으로 부른다.
-/// 종료 신호가 오면 끝난다.
+/// 종료 신호가 오거나 유스케이스가 사라지면 끝난다. 유스케이스는 `Weak`로만 쥐고 블로킹
+/// 스레드 안에서만 잠시 붙잡으므로, 이 작업이 마지막 주인이 되어 블로킹 HTTP 클라이언트가 든
+/// 객체 그래프를 비동기 작업자에서 놓는 일이 없다.
 async fn sweep_voice_sessions(
-    voice_session: Arc<VoiceSessionUseCase>,
+    voice_session: Weak<VoiceSessionUseCase>,
     every: Duration,
     mut shutdown: watch::Receiver<bool>,
 ) {
@@ -165,8 +176,18 @@ async fn sweep_voice_sessions(
         if stopped {
             return;
         }
-        let voice_session = Arc::clone(&voice_session);
-        let _ = tokio::task::spawn_blocking(move || voice_session.reap_idle_sessions()).await;
+        let voice_session = Weak::clone(&voice_session);
+        let alive = tokio::task::spawn_blocking(move || match voice_session.upgrade() {
+            Some(voice_session) => {
+                voice_session.reap_idle_sessions();
+                true
+            }
+            None => false,
+        })
+        .await;
+        if !matches!(alive, Ok(true)) {
+            return;
+        }
     }
 }
 
@@ -178,5 +199,60 @@ async fn release_off_async_workers(state: Option<AppState>) {
             Ok(Err(err)) => tracing::error!("Releasing server resources failed: {err}"),
             Err(_) => tracing::warn!("Releasing server resources is taking long; not waiting"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sweep_interval_uses_the_same_idle_timeout_as_the_sessions() {
+        // 0 or less means the default 10 minutes for the sessions, so a 30 s sweep.
+        assert_eq!(Duration::from_secs(30), voice_sweep_interval(0));
+        assert_eq!(Duration::from_secs(30), voice_sweep_interval(-1_000));
+        assert_eq!(Duration::from_secs(30), voice_sweep_interval(600_000));
+        assert_eq!(Duration::from_secs(2), voice_sweep_interval(8_000));
+        assert_eq!(Duration::from_secs(1), voice_sweep_interval(1_000));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_sweep_does_not_keep_the_voice_sessions_alive() {
+        let dir = tempfile::tempdir().unwrap();
+        let defaults = AppConfig::default();
+        let config = AppConfig {
+            data_dir: dir.path().to_string_lossy().into_owned(),
+            rag: omypic_infrastructure::config::RagConfig {
+                provider: "hash".to_string(),
+                ..defaults.rag.clone()
+            },
+            ..defaults
+        };
+        let state = tokio::task::spawn_blocking(move || wiring::build_state(&config))
+            .await
+            .unwrap()
+            .unwrap();
+        let weak = Arc::downgrade(&state.voice_session);
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let sweep = tokio::spawn(sweep_voice_sessions(
+            Arc::downgrade(&state.voice_session),
+            Duration::from_millis(50),
+            shutdown_rx,
+        ));
+        tokio::time::sleep(Duration::from_millis(120)).await;
+
+        // The owner releases the graph on a blocking thread (as `RunningServer` does).
+        tokio::task::spawn_blocking(move || drop(state))
+            .await
+            .unwrap();
+
+        assert!(
+            weak.upgrade().is_none(),
+            "the sweep task still owns the voice session use case"
+        );
+        tokio::time::timeout(Duration::from_secs(2), sweep)
+            .await
+            .expect("the sweep ends by itself once the use case is gone")
+            .unwrap();
     }
 }
