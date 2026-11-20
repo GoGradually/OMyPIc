@@ -238,6 +238,9 @@ npm run build:desktop
   - 기본값: `600000` (10분). 멈춘 음성 세션을 복구 조회용으로 남겨 두는 시간입니다.
 - `OMYPIC_VOICE_STOPPED_CONTEXT_MAX`
   - 기본값: `1000`. 남겨 두는 멈춘 음성 세션의 최대 수입니다.
+- `SSL_CERT_FILE`, `SSL_CERT_DIR`
+  - 기본값: 미지정. Backend의 HTTPS 요청(모델 내려받기, OpenAI, Anthropic, fastText)은 운영체제의 인증서 저장소와 앱에 들어 있는 루트 인증서를 함께 믿습니다. 그래서 HTTPS를 검사하는 백신이나 회사 프록시가 운영체제에 넣은 인증서도 통합니다.
+  - 지정하면 운영체제 저장소 대신 그 파일(PEM)이나 폴더(`:`로 구분)의 인증서를 읽습니다. 앱에 들어 있는 루트 인증서는 그대로 믿습니다.
 - `RUST_LOG`
   - 로그 수준. 기본값: `info`. 데스크톱 앱은 stderr와 `logs/omypic.log`에 함께 기록합니다.
 
