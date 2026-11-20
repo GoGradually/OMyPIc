@@ -10,6 +10,7 @@ import {isLocalTtsSupported, loadLocalTts, synthesizeEnglish} from './localTts.j
 import {getLocalKoTtsStatus, isLocalKoTtsSupported, loadLocalKoTts, synthesizeKorean} from './localKoTts.js'
 
 const KOREAN = 'ko-KR'
+const ENGLISH = 'en-US'
 const CACHE_LIMIT = 60
 // sentence -> Promise<{samples, sampleRate} | null>. Questions are read twice, so the second
 // pass and any sentence prepared ahead of time play without waiting.
@@ -60,7 +61,11 @@ function buildPlan(text, allowKoreanModel) {
             }
             return {sentence, lang, synthesize: korean}
         }
-        return {sentence, lang, synthesize: isLocalTtsSupported() ? synthesizeEnglish : null}
+        if (lang === ENGLISH) {
+            return {sentence, lang, synthesize: isLocalTtsSupported() ? synthesizeEnglish : null}
+        }
+        // Only digits, symbols or a script neither voice reads: shown on screen only.
+        return {sentence, lang, synthesize: null}
     })
 }
 
@@ -167,9 +172,9 @@ export function speakLocally(text, {onEnd, onUnavailable, onNotice, allowKoreanM
             }
         }
         active = null
-        // A Korean sentence waiting for its model is expected to be silent; anything else that
-        // stayed silent means this device could not play the speech.
-        const expected = plan.filter((step) => step.synthesize || step.lang !== KOREAN)
+        // A Korean sentence waiting for its model, or a chunk no voice reads, is expected to be
+        // silent; an English sentence that stayed silent means this device could not play the speech.
+        const expected = plan.filter((step) => step.synthesize || step.lang === ENGLISH)
         if (expected.length > 0 && spoken === 0) {
             onUnavailable?.()
         } else {

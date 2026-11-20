@@ -331,6 +331,27 @@ describe('local speech', () => {
         expect(synthesizeKorean).not.toHaveBeenCalled()
     })
 
+    it('reads nothing without letters or in a script neither voice has, and does not call that a failure', async () => {
+        const onEnd = vi.fn()
+        const onUnavailable = vi.fn()
+        const sentence = english('Good job')
+
+        speakLocally(`${sentence}\n👍\n文法注意。`, {onEnd, onUnavailable})
+        await flush()
+
+        expect(synthesizeEnglish.mock.calls.map(([text]) => text)).toEqual([sentence])
+        expect(synthesizeKorean).not.toHaveBeenCalled()
+        expect(await playAll()).toBe(1)
+        expect(onEnd).toHaveBeenCalledTimes(1)
+
+        speakLocally('👍', {onEnd, onUnavailable})
+        await flush()
+
+        expect(synthesizeEnglish).toHaveBeenCalledTimes(1)
+        expect(onEnd).toHaveBeenCalledTimes(2)
+        expect(onUnavailable).not.toHaveBeenCalled()
+    })
+
     it('sentence is skipped when its synthesis rejects', async () => {
         const first = english('This one fails')
         const second = korean('이 문장은 읽습니다')
